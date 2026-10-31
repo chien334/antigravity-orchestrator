@@ -2,3 +2,11 @@ __pycache__/
 *.pyc
 *.db
 .venv/
+.agents/
+.gemini/
+tools/
+docs/specs/
+docs/plans/
+docs/reports/
+docs/reviews/
+docs/security/

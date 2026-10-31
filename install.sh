@@ -85,11 +85,19 @@ echo -e "${BOLD}[3/5] Installing Global Antigravity Skills & Workflows...${NC}"
 
 GLOBAL_CONFIG_DIR="$HOME/.gemini/config"
 GLOBAL_COMMANDS_DIR="$HOME/.gemini/commands"
-mkdir -p "$GLOBAL_CONFIG_DIR/workflows" "$GLOBAL_CONFIG_DIR/global_workflows" "$GLOBAL_CONFIG_DIR/skills/multi-agent-orchestrator" "$GLOBAL_COMMANDS_DIR"
+mkdir -p "$GLOBAL_CONFIG_DIR/workflows" "$GLOBAL_CONFIG_DIR/global_workflows" "$GLOBAL_CONFIG_DIR/skills" "$GLOBAL_COMMANDS_DIR"
 
-# Copy Skill
-cp "$SCRIPT_DIR/packages/skills/multi-agent-orchestrator/SKILL.md" "$GLOBAL_CONFIG_DIR/skills/multi-agent-orchestrator/"
-echo -e "    -> Installed Skill: $GLOBAL_CONFIG_DIR/skills/multi-agent-orchestrator/SKILL.md"
+# Copy All Agent Skills (addyosmani 1-Agent = 1-Skill package library)
+echo -e "    -> Installing 1-Agent = 1-Skill packages..."
+for skill_dir in "$SCRIPT_DIR/packages/skills/"*; do
+    if [[ -d "$skill_dir" ]]; then
+        sname=$(basename "$skill_dir")
+        mkdir -p "$GLOBAL_CONFIG_DIR/skills/$sname"
+        cp -r "$skill_dir/"* "$GLOBAL_CONFIG_DIR/skills/$sname/"
+    fi
+done
+SKILL_COUNT=$(find "$SCRIPT_DIR/packages/skills" -mindepth 1 -maxdepth 1 -type d | wc -l)
+echo -e "    -> Installed ${SKILL_COUNT} Agent Skills into: $GLOBAL_CONFIG_DIR/skills/"
 
 # Copy Workflows (Slash commands)
 for wf in "$SCRIPT_DIR/packages/workflows/"*.md; do
@@ -112,7 +120,7 @@ TARGET_DIR="${1:-.}"
 if [[ "$TARGET_DIR" != "." ]] || [[ -d ".git" ]] || [[ -d ".agents" ]]; then
     DEST_DIR="$(cd "$TARGET_DIR" && pwd)"
     echo -e "    Targeting workspace: ${BOLD}${DEST_DIR}${NC}"
-    mkdir -p "$DEST_DIR/.agents/skills/multi-agent-orchestrator" \
+    mkdir -p "$DEST_DIR/.agents/skills" \
              "$DEST_DIR/.agents/workflows" \
              "$DEST_DIR/.gemini/commands" \
              "$DEST_DIR/tools/orchestrator" \
@@ -122,12 +130,18 @@ if [[ "$TARGET_DIR" != "." ]] || [[ -d ".git" ]] || [[ -d ".agents" ]]; then
              "$DEST_DIR/docs/reviews" \
              "$DEST_DIR/docs/security"
 
-    cp "$SCRIPT_DIR/packages/skills/multi-agent-orchestrator/SKILL.md" "$DEST_DIR/.agents/skills/multi-agent-orchestrator/"
+    for skill_dir in "$SCRIPT_DIR/packages/skills/"*; do
+        if [[ -d "$skill_dir" ]]; then
+            sname=$(basename "$skill_dir")
+            mkdir -p "$DEST_DIR/.agents/skills/$sname"
+            cp -r "$skill_dir/"* "$DEST_DIR/.agents/skills/$sname/"
+        fi
+    done
     cp "$SCRIPT_DIR/packages/workflows/"*.md "$DEST_DIR/.agents/workflows/"
     cp "$SCRIPT_DIR/packages/commands/orchestrator.toml" "$DEST_DIR/.gemini/commands/"
     cp "$SCRIPT_DIR/packages/orchestrator/"*.py "$DEST_DIR/tools/orchestrator/"
     chmod +x "$DEST_DIR/tools/orchestrator/"*.py
-    echo -e "${GREEN}[✓] Workspace initialized at ${DEST_DIR}${NC}"
+    echo -e "${GREEN}[✓] Workspace initialized with ${SKILL_COUNT} skills at ${DEST_DIR}${NC}"
 else
     echo -e "    (Skipped project-local install. Run './install.sh /path/to/project' to install in a specific repo)."
 fi

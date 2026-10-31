@@ -49,10 +49,18 @@ $scriptRoot = $PSScriptRoot
 
 New-Item -ItemType Directory -Force -Path (Join-Path $globalConfig "workflows") | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $globalConfig "global_workflows") | Out-Null
-New-Item -ItemType Directory -Force -Path (Join-Path $globalConfig "skills\multi-agent-orchestrator") | Out-Null
+New-Item -ItemType Directory -Force -Path (Join-Path $globalConfig "skills") | Out-Null
 New-Item -ItemType Directory -Force -Path $globalCommands | Out-Null
 
-Copy-Item -Path "$scriptRoot\packages\skills\multi-agent-orchestrator\SKILL.md" -Destination "$globalConfig\skills\multi-agent-orchestrator\" -Force
+# Copy all skills from packages/skills
+Get-ChildItem -Directory -Path "$scriptRoot\packages\skills" | ForEach-Object {
+    $sTarget = Join-Path $globalConfig "skills\$($_.Name)"
+    New-Item -ItemType Directory -Force -Path $sTarget | Out-Null
+    Copy-Item -Path "$($_.FullName)\*" -Destination $sTarget -Recurse -Force
+}
+$skillCount = (Get-ChildItem -Directory -Path "$scriptRoot\packages\skills").Count
+Write-Host "    -> Installed $skillCount Agent Skills into: $globalConfig\skills" -ForegroundColor Green
+
 Get-ChildItem -Path "$scriptRoot\packages\workflows\*.md" | ForEach-Object {
     Copy-Item -Path $_.FullName -Destination "$globalConfig\workflows\" -Force
     Copy-Item -Path $_.FullName -Destination "$globalConfig\global_workflows\" -Force
@@ -65,7 +73,7 @@ if ($TargetDir -ne "") {
     Write-Host ""
     Write-Host "[4/5] Installing into workspace: $TargetDir" -ForegroundColor Yellow
     $dest = Resolve-Path $TargetDir
-    New-Item -ItemType Directory -Force -Path "$dest\.agents\skills\multi-agent-orchestrator" | Out-Null
+    New-Item -ItemType Directory -Force -Path "$dest\.agents\skills" | Out-Null
     New-Item -ItemType Directory -Force -Path "$dest\.agents\workflows" | Out-Null
     New-Item -ItemType Directory -Force -Path "$dest\.gemini\commands" | Out-Null
     New-Item -ItemType Directory -Force -Path "$dest\tools\orchestrator" | Out-Null
@@ -75,11 +83,15 @@ if ($TargetDir -ne "") {
     New-Item -ItemType Directory -Force -Path "$dest\docs\reviews" | Out-Null
     New-Item -ItemType Directory -Force -Path "$dest\docs\security" | Out-Null
 
-    Copy-Item -Path "$scriptRoot\packages\skills\multi-agent-orchestrator\SKILL.md" -Destination "$dest\.agents\skills\multi-agent-orchestrator\" -Force
+    Get-ChildItem -Directory -Path "$scriptRoot\packages\skills" | ForEach-Object {
+        $wsTarget = Join-Path $dest ".agents\skills\$($_.Name)"
+        New-Item -ItemType Directory -Force -Path $wsTarget | Out-Null
+        Copy-Item -Path "$($_.FullName)\*" -Destination $wsTarget -Recurse -Force
+    }
     Copy-Item -Path "$scriptRoot\packages\workflows\*.md" -Destination "$dest\.agents\workflows\" -Force
     Copy-Item -Path "$scriptRoot\packages\commands\orchestrator.toml" -Destination "$dest\.gemini\commands\" -Force
     Copy-Item -Path "$scriptRoot\packages\orchestrator\*.py" -Destination "$dest\tools\orchestrator\" -Force
-    Write-Host "[OK] Workspace initialized at $dest" -ForegroundColor Green
+    Write-Host "[OK] Workspace initialized at $dest with $skillCount skills" -ForegroundColor Green
 }
 
 # 5. Run Verification Suite

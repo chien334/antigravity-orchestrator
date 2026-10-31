@@ -34,9 +34,27 @@ antigravity-orchestrator-setup/
 │   │   ├── server.py              # Server Dashboard SSE + SQLite DB + Token Telemetry
 │   │   ├── client.py              # CLI & Python library gửi telemetry
 │   │   └── requirements.txt       # Zero dependency (sử dụng thư viện chuẩn Python)
-│   ├── skills/
-│   │   └── multi-agent-orchestrator/
-│   │       └── SKILL.md           # Định nghĩa skill điều phối 1-Agent = 1-Skill
+│   ├── skills/                    # Thư viện 20 Gói Agent Skills (Chuẩn 1-Agent = 1-Skill của addyosmani)
+│   │   ├── multi-agent-orchestrator/   # Skill trung tâm điều phối và theo dõi telemetry
+│   │   ├── spec-driven-development/    # spec-engineer: Đặc tả, user stories, acceptance criteria
+│   │   ├── planning-and-task-breakdown/# task-planner: Phân rã kiến trúc, DAG, parallel groups
+│   │   ├── api-and-interface-design/   # task-planner: Thiết kế contract, schemas, boundary types
+│   │   ├── frontend-ui-engineering/    # builder: Xây dựng UI frontend production-grade
+│   │   ├── frontend-design/            # builder: Thiết kế thẩm mỹ, typography, layout
+│   │   ├── incremental-implementation/ # builder: Thực thi code từng bước, minimal blast radius
+│   │   ├── test-driven-development/    # test-engineer: TDD, unit test, mock, assertion gates
+│   │   ├── code-review-and-quality/    # code-reviewer: Review 5 trục chất lượng & clean code
+│   │   ├── code-simplification/        # code-simplifier: Tối giản code, dọn nợ kỹ thuật
+│   │   ├── security-and-hardening/     # security-auditor: Quét OWASP, auth/authz, secret leaks
+│   │   ├── performance-optimization/   # performance-auditor: Tối ưu Core Web Vitals, N+1 query
+│   │   ├── debugging-and-error-recovery/# debugger: Cách ly nguyên nhân gốc rễ, phục hồi lỗi
+│   │   ├── documentation-and-adrs/     # Tài liệu hóa kiến trúc và quyết định kỹ thuật
+│   │   ├── git-workflow-and-versioning/# Quản lý nhánh, commit semantic, PR review
+│   │   ├── ci-cd-and-automation/       # Pipeline CI/CD, tự động hóa quality gates
+│   │   ├── shipping-and-launch/        # Danh mục kiểm tra tiền phát hành (Pre-launch checks)
+│   │   ├── source-driven-development/  # Lập trình dựa trên tài liệu nguồn chính thống
+│   │   ├── doubt-driven-development/   # Thẩm định phản biện các quyết định quan trọng
+│   │   └── observability-and-instrumentation/ # Giám sát, logging, metrics sản xuất
 │   ├── workflows/                 # Danh sách slash commands tích hợp trong Antigravity
 │   │   ├── orchestrator.md        # /orchestrator (Khởi tạo phiên điều phối)
 │   │   ├── workflow-pipeline.md   # /workflow-pipeline (Chạy liên hoàn xuyên suốt)
