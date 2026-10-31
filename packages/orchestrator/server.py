@@ -80,24 +80,26 @@ class StateStore:
         self.db_path = db_path or DEFAULT_DB_PATH
         self._lock = threading.Lock()
         self.subscribers = set()  # set of queue.Queue
+        self._processed_steps = {}  # conv_id -> last processed step
         self._init_db()
         self._start_token_auditor()
 
     def _start_token_auditor(self):
-        """Background daemon: automatically audits and synchronizes tokens from Antigravity transcripts every 3 seconds."""
+        """Background daemon: automatically audits tokens and streams live agent activities from transcripts."""
         def _audit_loop():
             brain_dir = os.path.expanduser("~/.gemini/antigravity/brain")
             while True:
-                time.sleep(3)
+                time.sleep(2.5)
                 if not os.path.isdir(brain_dir):
                     continue
                 try:
                     updates = []
+                    new_logs = []
                     with self._lock:
                         conn = self._get_connection()
                         try:
                             cur = conn.cursor()
-                            cur.execute("SELECT task_id, conv_id, input_tokens, output_tokens, cache_tokens, total_tokens FROM tasks")
+                            cur.execute("SELECT task_id, agent_type, status, conv_id, input_tokens, output_tokens, cache_tokens, total_tokens FROM tasks")
                             rows = cur.fetchall()
                             for r in rows:
                                 c_id = r["conv_id"]
@@ -107,6 +109,9 @@ class StateStore:
                                 if not os.path.isfile(t_path):
                                     continue
                                 in_t, out_t, cache_t = 0, 0, 0
+                                last_step = self._processed_steps.get(c_id, -1)
+                                max_step_in_file = last_step
+                                
                                 with open(t_path, "r", encoding="utf-8") as f:
                                     for line in f:
                                         try:
@@ -114,8 +119,43 @@ class StateStore:
                                             in_t += d.get("input_tokens", 0)
                                             out_t += d.get("output_tokens", 0)
                                             cache_t += d.get("cache_read_tokens", 0)
+                                            
+                                            s_idx = d.get("step_index", 0)
+                                            if s_idx > max_step_in_file:
+                                                max_step_in_file = s_idx
+                                            
+                                            # If this step is new and task is active, generate live activity logs
+                                            if s_idx > last_step and r["status"] == "running":
+                                                # 1. Tool calls
+                                                for tc in d.get("tool_calls", []):
+                                                    t_name = tc.get("name", "tool")
+                                                    t_args = tc.get("args", {})
+                                                    t_summary = ""
+                                                    if t_name == "run_command":
+                                                        t_summary = t_args.get("toolSummary") or t_args.get("CommandLine", "")[:120]
+                                                    elif t_name in ("read_file", "view_file", "edit_file", "write_file"):
+                                                        t_summary = t_args.get("Path") or t_args.get("AbsolutePath", "")
+                                                    elif t_name == "call_mcp_tool":
+                                                        t_summary = f"{t_args.get('ServerName')}.{t_args.get('ToolName')}"
+                                                    else:
+                                                        t_summary = str(t_args)[:100]
+                                                    clean_sum = str(t_summary).replace('"', '')
+                                                    new_logs.append((r["task_id"], r["agent_type"], "info", f"[Step {s_idx}] 🔧 {t_name}: {clean_sum}"))
+                                                
+                                                # 2. Thinking
+                                                th = d.get("thinking")
+                                                if th:
+                                                    th_line = th.strip().splitlines()[0][:140].replace('"', '')
+                                                    new_logs.append((r["task_id"], r["agent_type"], "thought", f"[Step {s_idx}] 💭 {th_line}"))
+                                                
+                                                # 3. Errors
+                                                if d.get("status") == "ERROR" and d.get("error"):
+                                                    err_snippet = str(d.get("error", ""))[:140].replace('"', '')
+                                                    new_logs.append((r["task_id"], r["agent_type"], "error", f"[Step {s_idx}] ❌ {err_snippet}"))
                                         except Exception:
                                             pass
+                                
+                                self._processed_steps[c_id] = max_step_in_file
                                 tot = in_t + out_t + cache_t
                                 if tot > r["total_tokens"]:
                                     updates.append((in_t, out_t, cache_t, tot, r["task_id"]))
@@ -137,8 +177,13 @@ class StateStore:
                         finally:
                             conn.close()
 
+                    # Broadcast token metrics update
                     if updates:
                         self.broadcast("state_sync", {"metrics": metrics})
+                    
+                    # Append and broadcast new live activity logs
+                    for t_id, a_type, lvl, msg in new_logs:
+                        self.append_log(t_id, a_type, lvl, msg)
                 except Exception:
                     pass
 
@@ -440,6 +485,109 @@ class StateStore:
         # Notify subscribers
         self.broadcast("log_event", log_entry)
         return log_entry
+
+    def get_task_transcript(self, task_id):
+        """Retrieve and parse the live activity stream from a subagent transcript."""
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cur = conn.cursor()
+                cur.execute("SELECT * FROM tasks WHERE task_id = ?", (task_id,))
+                row = cur.fetchone()
+                if not row:
+                    return {"status": "error", "error": f"Task {task_id} not found"}
+                task = self._row_to_task(row)
+            finally:
+                conn.close()
+
+        c_id = task.get("conv_id")
+        activities = []
+        latest_action = "Khởi tạo tác vụ"
+        
+        brain_dir = os.path.expanduser("~/.gemini/antigravity/brain")
+        if c_id and os.path.isdir(brain_dir):
+            t_path = os.path.join(brain_dir, c_id, ".system_generated", "logs", "transcript.jsonl")
+            if os.path.isfile(t_path):
+                try:
+                    with open(t_path, "r", encoding="utf-8") as f:
+                        for line in f:
+                            try:
+                                d = json.loads(line)
+                                step = d.get("step_index", 0)
+                                t_time = d.get("created_at", "")
+                                
+                                # 1. Thinking
+                                th = d.get("thinking")
+                                if th:
+                                    th_line = th.strip().splitlines()[0][:140].replace('"', '')
+                                    activities.append({
+                                        "step": step,
+                                        "time": t_time,
+                                        "type": "thought",
+                                        "title": "Suy nghĩ & Phân tích",
+                                        "detail": th_line
+                                    })
+                                    latest_action = f"💭 {th_line}"
+
+                                # 2. Tool calls
+                                for tc in d.get("tool_calls", []):
+                                    t_name = tc.get("name", "tool")
+                                    t_args = tc.get("args", {})
+                                    t_sum = ""
+                                    if t_name == "run_command":
+                                        t_sum = t_args.get("toolSummary") or t_args.get("CommandLine", "")[:120]
+                                    elif t_name in ("read_file", "view_file", "edit_file", "write_file"):
+                                        t_sum = t_args.get("Path") or t_args.get("AbsolutePath", "")
+                                    elif t_name == "call_mcp_tool":
+                                        t_sum = f"{t_args.get('ServerName')}.{t_args.get('ToolName')}"
+                                    else:
+                                        t_sum = str(t_args)[:100]
+                                    clean_sum = str(t_sum).replace('"', '')
+                                    activities.append({
+                                        "step": step,
+                                        "time": t_time,
+                                        "type": "tool",
+                                        "title": f"Công cụ ({t_name})",
+                                        "detail": clean_sum
+                                    })
+                                    latest_action = f"🔧 {t_name}: {clean_sum}"
+
+                                # 3. Status errors
+                                if d.get("status") == "ERROR" and d.get("error"):
+                                    err_msg = str(d.get("error", ""))[:140].replace('"', '')
+                                    activities.append({
+                                        "step": step,
+                                        "time": t_time,
+                                        "type": "error",
+                                        "title": "Lỗi thực thi",
+                                        "detail": err_msg
+                                    })
+                            except Exception:
+                                pass
+                except Exception as e:
+                    activities.append({
+                        "step": 0,
+                        "time": "",
+                        "type": "error",
+                        "title": "Transcript Error",
+                        "detail": str(e)
+                    })
+
+        return {
+            "status": "ok",
+            "task_id": task["task_id"],
+            "agent_type": task["agent_type"],
+            "model": task["model"],
+            "task_status": task["status"],
+            "progress": task["progress"],
+            "scope": task["scope"],
+            "notes": task["notes"],
+            "conv_id": c_id,
+            "tokens": task["tokens"],
+            "cost": task["cost"],
+            "latest_action": latest_action,
+            "activities": activities[-100:]
+        }
 
     def get_state(self):
         with self._lock:
@@ -1408,15 +1556,23 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         `;
 
         // Action button
-        let actionBtn = `<span class="text-slate-600 text-xs">-</span>`;
+        let killBtn = '';
         if (t.status === 'running') {
-          actionBtn = `
-            <button onclick="killTask('${t.task_id}')" class="px-2.5 py-1 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border border-rose-500/30 transition text-[11px] font-bold flex items-center gap-1 mx-auto shadow-sm">
+          killBtn = `
+            <button onclick="killTask('${t.task_id}')" class="px-2 py-1 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border border-rose-500/30 transition text-[11px] font-bold flex items-center gap-1 shadow-sm" title="Dừng khẩn cấp Agent">
               <svg class="w-3 h-3 text-rose-400" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8 7a1 1 0 00-1 1v4a1 1 0 001 1h4a1 1 0 001-1V8a1 1 0 00-1-1H8z" clip-rule="evenodd" /></svg>
               <span>Kill</span>
             </button>
           `;
         }
+        const actionBtn = `
+          <div class="flex items-center justify-center space-x-1.5">
+            <button onclick="openAgentLiveModal('${t.task_id}')" class="px-2.5 py-1 rounded-lg bg-indigo-500/15 hover:bg-indigo-500/25 text-indigo-300 border border-indigo-500/30 transition text-[11px] font-semibold flex items-center gap-1 shadow-sm" title="Xem trực tiếp logs, suy nghĩ và công cụ của Agent">
+              <span>👁️ Live Logs</span>
+            </button>
+            ${killBtn}
+          </div>
+        `;
 
         return `
           <tr class="hover:bg-slate-800/30 transition">
@@ -1480,14 +1636,22 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         const cost = t.cost || { usd: 0.0, vnd: 0, saved_usd: 0.0, saved_vnd: 0 };
         const hitRate = (tok.input + tok.cache) > 0 ? ((tok.cache / (tok.input + tok.cache)) * 100).toFixed(1) : '0.0';
 
-        let actionBtn = `<span class="text-slate-600 text-xs">-</span>`;
+        let killBtn = '';
         if (t.status === 'running') {
-          actionBtn = `
-            <button onclick="killTask('${t.task_id}')" class="px-2.5 py-1 rounded bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border border-rose-500/30 font-bold text-[10px] transition">
+          killBtn = `
+            <button onclick="killTask('${t.task_id}')" class="px-2 py-1 rounded bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border border-rose-500/30 font-bold text-[10px] transition">
               Kill
             </button>
           `;
         }
+        const actionBtn = `
+          <div class="flex items-center justify-center space-x-1.5">
+            <button onclick="openAgentLiveModal('${t.task_id}')" class="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 font-semibold text-[10px] transition flex items-center gap-1" title="Xem chi tiết các bước Agent đã thực hiện">
+              <span>👁️ Logs</span>
+            </button>
+            ${killBtn}
+          </div>
+        `;
 
         return `
           <tr class="hover:bg-slate-800/30 transition">
@@ -1728,11 +1892,314 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       });
     }
 
+    // ---------------------------------------------------------------------------
+    // Agent Live Activity & Inspector Modal Logic
+    // ---------------------------------------------------------------------------
+    let activeModalTaskId = null;
+    let modalPollTimer = null;
+    let modalRawActivities = [];
+    let modalActiveFilter = 'all';
+
+    function openAgentLiveModal(taskId) {
+      activeModalTaskId = taskId;
+      modalActiveFilter = 'all';
+      const modal = document.getElementById('agent-live-modal');
+      if (!modal) return;
+      modal.classList.remove('hidden');
+      
+      const t = state.tasks[taskId] || { task_id: taskId };
+      const elTaskId = document.getElementById('modal-task-id');
+      if (elTaskId) elTaskId.textContent = t.task_id || taskId;
+      
+      const elAgentBadge = document.getElementById('modal-agent-badge');
+      if (elAgentBadge) elAgentBadge.innerHTML = getAgentBadge(t.agent_type || 'builder');
+      
+      const elModelBadge = document.getElementById('modal-model-badge');
+      if (elModelBadge) elModelBadge.innerHTML = getModelBadge(t.model || 'argon');
+      
+      const elStatusBadge = document.getElementById('modal-status-badge');
+      if (elStatusBadge) elStatusBadge.innerHTML = getStatusBadge(t.status || 'running');
+      
+      const elScope = document.getElementById('modal-scope');
+      if (elScope) elScope.textContent = t.scope || 'Chi tiết tác vụ không có mô tả bổ sung.';
+      
+      const tok = t.tokens || { input: 0, output: 0, cache: 0 };
+      const cost = t.cost || { usd: 0.0, vnd: 0 };
+      
+      const elIn = document.getElementById('modal-tok-in');
+      if (elIn) elIn.textContent = `📥 ${formatTokens(tok.input)}`;
+      const elOut = document.getElementById('modal-tok-out');
+      if (elOut) elOut.textContent = `📤 ${formatTokens(tok.output)}`;
+      const elCache = document.getElementById('modal-tok-cache');
+      if (elCache) elCache.textContent = `⚡ ${formatTokens(tok.cache)}`;
+      const elCost = document.getElementById('modal-cost-usd');
+      if (elCost) elCost.textContent = `${formatMoneyUSD(cost.usd)} (~${formatMoneyVND(cost.vnd)})`;
+      const elConv = document.getElementById('modal-conv-id');
+      if (elConv) elConv.textContent = t.conv_id ? `Conv: ${t.conv_id.substring(0, 8)}...` : 'Conv: Direct';
+
+      refreshAgentLiveModal(true);
+
+      if (modalPollTimer) clearInterval(modalPollTimer);
+      modalPollTimer = setInterval(() => {
+        const toggle = document.getElementById('modal-autorefresh-toggle');
+        if (toggle && toggle.checked) {
+          refreshAgentLiveModal(false);
+        }
+      }, 2500);
+    }
+
+    function closeAgentLiveModal() {
+      const modal = document.getElementById('agent-live-modal');
+      if (modal) modal.classList.add('hidden');
+      if (modalPollTimer) {
+        clearInterval(modalPollTimer);
+        modalPollTimer = null;
+      }
+      activeModalTaskId = null;
+    }
+
+    function toggleModalAutoRefresh() {
+      const toggle = document.getElementById('modal-autorefresh-toggle');
+      if (!toggle.checked && modalPollTimer) {
+        clearInterval(modalPollTimer);
+        modalPollTimer = null;
+      } else if (toggle.checked && !modalPollTimer && activeModalTaskId) {
+        modalPollTimer = setInterval(() => {
+          refreshAgentLiveModal(false);
+        }, 2500);
+      }
+    }
+
+    function filterModalActivities(type) {
+      modalActiveFilter = type;
+      ['all', 'tool', 'thought', 'error'].forEach(t => {
+        const btn = document.getElementById(`modal-filter-${t}`);
+        if (!btn) return;
+        if (t === type) {
+          btn.className = 'px-3 py-1 rounded-lg font-medium transition bg-indigo-600 text-white shadow-sm';
+        } else {
+          btn.className = 'px-3 py-1 rounded-lg font-medium transition text-slate-400 hover:text-slate-200 hover:bg-slate-800';
+        }
+      });
+      renderModalActivityList();
+    }
+
+    function refreshAgentLiveModal(isInitial = false) {
+      if (!activeModalTaskId) return;
+      fetch(`/api/tasks/transcript?task_id=${encodeURIComponent(activeModalTaskId)}`)
+        .then(r => r.json())
+        .then(data => {
+          if (data.status === 'error') {
+            const elAction = document.getElementById('modal-latest-action');
+            if (elAction) elAction.textContent = data.error || 'Lỗi nạp nhật ký';
+            return;
+          }
+
+          const elAction = document.getElementById('modal-latest-action');
+          if (elAction) elAction.textContent = data.latest_action || 'Không có hành động gần nhất';
+          
+          const elStatus = document.getElementById('modal-status-badge');
+          if (elStatus && data.task_status) {
+            elStatus.innerHTML = getStatusBadge(data.task_status);
+          }
+          if (data.tokens) {
+            const elIn = document.getElementById('modal-tok-in');
+            if (elIn) elIn.textContent = `📥 ${formatTokens(data.tokens.input)}`;
+            const elOut = document.getElementById('modal-tok-out');
+            if (elOut) elOut.textContent = `📤 ${formatTokens(data.tokens.output)}`;
+            const elCache = document.getElementById('modal-tok-cache');
+            if (elCache) elCache.textContent = `⚡ ${formatTokens(data.tokens.cache)}`;
+          }
+          if (data.cost) {
+            const elCost = document.getElementById('modal-cost-usd');
+            if (elCost) elCost.textContent = `${formatMoneyUSD(data.cost.usd)} (~${formatMoneyVND(data.cost.vnd)})`;
+          }
+
+          modalRawActivities = data.activities || [];
+          
+          const total = modalRawActivities.length;
+          const tools = modalRawActivities.filter(a => a.type === 'tool').length;
+          const thoughts = modalRawActivities.filter(a => a.type === 'thought').length;
+          const errors = modalRawActivities.filter(a => a.type === 'error').length;
+
+          const elAll = document.getElementById('count-all');
+          if (elAll) elAll.textContent = total;
+          const elTool = document.getElementById('count-tool');
+          if (elTool) elTool.textContent = tools;
+          const elThought = document.getElementById('count-thought');
+          if (elThought) elThought.textContent = thoughts;
+          const elErr = document.getElementById('count-error');
+          if (elErr) elErr.textContent = errors;
+          
+          const elFoot = document.getElementById('modal-footer-stats');
+          if (elFoot) elFoot.textContent = `${total} hoạt động được ghi nhận (${tools} lệnh/công cụ, ${thoughts} bước suy nghĩ)`;
+
+          renderModalActivityList(isInitial);
+        })
+        .catch(err => {
+          console.error('Failed to refresh modal transcript:', err);
+        });
+    }
+
+    function renderModalActivityList(forceScrollBottom = false) {
+      const container = document.getElementById('modal-activities-container');
+      if (!container) return;
+
+      let filtered = modalRawActivities;
+      if (modalActiveFilter !== 'all') {
+        filtered = modalRawActivities.filter(a => a.type === modalActiveFilter);
+      }
+
+      if (filtered.length === 0) {
+        container.innerHTML = `
+          <div class="py-12 text-center text-slate-500">
+            <div class="text-sm">Chưa có hoạt động phù hợp bộ lọc</div>
+            <div class="text-xs text-slate-600 mt-1">Khi subagent thực thi lệnh hoặc phân tích, dữ liệu sẽ hiển thị tại đây theo thời gian thực.</div>
+          </div>
+        `;
+        return;
+      }
+
+      const autoscroll = document.getElementById('modal-autoscroll-toggle')?.checked;
+      const isAtBottom = (container.scrollHeight - container.scrollTop <= container.clientHeight + 60);
+
+      container.innerHTML = filtered.map(act => {
+        let typeBadge = '';
+        let borderClass = 'border-slate-800 bg-slate-900/60';
+        let icon = '⚡';
+
+        if (act.type === 'tool') {
+          typeBadge = '<span class="px-2 py-0.5 rounded text-[10px] font-mono bg-cyan-500/10 text-cyan-300 border border-cyan-500/20">Công cụ</span>';
+          borderClass = 'border-cyan-900/30 bg-slate-900/80 hover:border-cyan-700/50';
+          icon = '🛠️';
+        } else if (act.type === 'thought') {
+          typeBadge = '<span class="px-2 py-0.5 rounded text-[10px] font-mono bg-purple-500/10 text-purple-300 border border-purple-500/20">Suy nghĩ</span>';
+          borderClass = 'border-purple-900/30 bg-slate-900/80 hover:border-purple-700/50';
+          icon = '💭';
+        } else if (act.type === 'error') {
+          typeBadge = '<span class="px-2 py-0.5 rounded text-[10px] font-mono bg-rose-500/10 text-rose-300 border border-rose-500/20">Lỗi</span>';
+          borderClass = 'border-rose-900/40 bg-rose-950/10 hover:border-rose-700/50';
+          icon = '❌';
+        }
+
+        return `
+          <div class="p-3 rounded-xl border ${borderClass} transition flex flex-col space-y-1.5 shadow-sm">
+            <div class="flex items-center justify-between">
+              <div class="flex items-center space-x-2">
+                <span>${icon}</span>
+                <span class="font-bold text-slate-200">${escapeHtml(act.title || 'Hoạt động')}</span>
+                ${typeBadge}
+                <span class="font-mono text-[10px] text-slate-500">Step #${act.step}</span>
+              </div>
+              <span class="font-mono text-[10px] text-slate-500">${formatTime(act.time)}</span>
+            </div>
+            <div class="font-mono text-[11px] text-slate-300 bg-slate-950/70 p-2 rounded-lg border border-slate-800/80 whitespace-pre-wrap break-all select-all">${escapeHtml(act.detail || '')}</div>
+          </div>
+        `;
+      }).join('');
+
+      if (forceScrollBottom || (autoscroll && isAtBottom)) {
+        setTimeout(() => {
+          container.scrollTop = container.scrollHeight;
+        }, 20);
+      }
+    }
+
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') closeAgentLiveModal();
+    });
+
     window.addEventListener('DOMContentLoaded', () => {
       initPipeline();
       connectSSE();
     });
   </script>
+
+  <!-- Agent Live Activity & Inspector Modal -->
+  <div id="agent-live-modal" class="fixed inset-0 z-50 hidden flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md">
+    <div class="relative w-full max-w-4xl max-h-[90vh] bg-slate-900 border border-slate-700/80 rounded-2xl shadow-2xl flex flex-col overflow-hidden">
+      
+      <!-- Modal Header -->
+      <div class="px-6 py-4 border-b border-slate-800 bg-slate-950/60 flex items-center justify-between">
+        <div class="flex items-center space-x-3">
+          <div class="h-3 w-3 rounded-full bg-emerald-500 animate-pulse"></div>
+          <div>
+            <div class="flex items-center space-x-2">
+              <span id="modal-task-id" class="font-mono font-bold text-base text-white">TASK-...</span>
+              <span id="modal-agent-badge"></span>
+              <span id="modal-model-badge"></span>
+              <span id="modal-status-badge"></span>
+            </div>
+            <div id="modal-scope" class="text-xs text-slate-400 mt-0.5 truncate max-w-xl">-</div>
+          </div>
+        </div>
+        <div class="flex items-center space-x-2">
+          <button onclick="refreshAgentLiveModal()" class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-medium flex items-center space-x-1.5 transition">
+            <svg class="w-3.5 h-3.5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
+            <span>Làm mới</span>
+          </button>
+          <button onclick="closeAgentLiveModal()" class="text-slate-400 hover:text-white p-1.5 rounded-lg hover:bg-slate-800 transition">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
+          </button>
+        </div>
+      </div>
+
+      <!-- Live Telemetry & Action Bar -->
+      <div class="px-6 py-3 bg-slate-900/90 border-b border-slate-800/80 flex flex-wrap items-center justify-between gap-3 text-xs">
+        <div class="flex items-center space-x-3 font-mono">
+          <div class="bg-slate-950 px-2.5 py-1 rounded border border-slate-800 text-slate-300 flex items-center space-x-2">
+            <span class="text-cyan-400" id="modal-tok-in">📥 0</span>
+            <span class="text-slate-600">/</span>
+            <span class="text-purple-400" id="modal-tok-out">📤 0</span>
+            <span class="text-slate-600">/</span>
+            <span class="text-emerald-400" id="modal-tok-cache">⚡ 0</span>
+          </div>
+          <div class="bg-indigo-950/40 px-2.5 py-1 rounded border border-indigo-900/50 text-indigo-300 font-bold" id="modal-cost-usd">$0.00</div>
+          <div class="text-[11px] text-slate-500 font-sans" id="modal-conv-id">Conv: -</div>
+        </div>
+
+        <div class="flex items-center space-x-4">
+          <label class="flex items-center space-x-1.5 cursor-pointer text-slate-300 text-xs select-none">
+            <input type="checkbox" id="modal-autorefresh-toggle" checked onchange="toggleModalAutoRefresh()" class="rounded border-slate-700 text-indigo-600 focus:ring-indigo-500 bg-slate-800 w-3.5 h-3.5">
+            <span>Tự động cập nhật (2.5s)</span>
+          </label>
+          <label class="flex items-center space-x-1.5 cursor-pointer text-slate-300 text-xs select-none">
+            <input type="checkbox" id="modal-autoscroll-toggle" checked class="rounded border-slate-700 text-indigo-600 focus:ring-indigo-500 bg-slate-800 w-3.5 h-3.5">
+            <span>Cuộn theo dòng mới</span>
+          </label>
+        </div>
+      </div>
+
+      <!-- Current Ongoing Action Highlight Box -->
+      <div class="px-6 py-2.5 bg-gradient-to-r from-indigo-950/30 to-purple-950/20 border-b border-indigo-900/30 flex items-center space-x-3">
+        <span class="px-2 py-0.5 rounded text-[10px] font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-500/40 uppercase tracking-wider whitespace-nowrap">Đang làm:</span>
+        <div id="modal-latest-action" class="font-mono text-xs text-indigo-200 truncate font-medium">Đang tải trạng thái hoạt động...</div>
+      </div>
+
+      <!-- Filter tabs -->
+      <div class="px-6 pt-3 pb-2 bg-slate-900 flex items-center justify-between border-b border-slate-800/60">
+        <div class="flex items-center space-x-2 text-xs">
+          <button id="modal-filter-all" onclick="filterModalActivities('all')" class="px-3 py-1 rounded-lg font-medium transition bg-indigo-600 text-white shadow-sm">Tất cả (<span id="count-all">0</span>)</button>
+          <button id="modal-filter-tool" onclick="filterModalActivities('tool')" class="px-3 py-1 rounded-lg font-medium transition text-slate-400 hover:text-slate-200 hover:bg-slate-800">🛠️ Công cụ (<span id="count-tool">0</span>)</button>
+          <button id="modal-filter-thought" onclick="filterModalActivities('thought')" class="px-3 py-1 rounded-lg font-medium transition text-slate-400 hover:text-slate-200 hover:bg-slate-800">💭 Suy nghĩ (<span id="count-thought">0</span>)</button>
+          <button id="modal-filter-error" onclick="filterModalActivities('error')" class="px-3 py-1 rounded-lg font-medium transition text-slate-400 hover:text-slate-200 hover:bg-slate-800">❌ Lỗi (<span id="count-error">0</span>)</button>
+        </div>
+        <div class="text-[11px] text-slate-500 font-mono">Real-time Subagent Execution Trace</div>
+      </div>
+
+      <!-- Scrollable Activities / Logs Container -->
+      <div id="modal-activities-container" class="flex-1 overflow-y-auto p-6 space-y-3 bg-slate-950/40 font-sans text-xs min-h-[320px] max-h-[500px]">
+        <div class="text-center py-12 text-slate-500">Đang nạp nhật ký từ subagent transcript...</div>
+      </div>
+
+      <!-- Modal Footer -->
+      <div class="px-6 py-3 border-t border-slate-800 bg-slate-950/80 flex items-center justify-between text-xs text-slate-400">
+        <div id="modal-footer-stats">0 hoạt động được ghi nhận</div>
+        <button onclick="closeAgentLiveModal()" class="px-4 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium transition">Đóng</button>
+      </div>
+
+    </div>
+  </div>
 </body>
 </html>
 """
@@ -1771,6 +2238,27 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
 
         if path == "/api/state":
             data = GLOBAL_STORE.get_state()
+            body = json.dumps(data).encode("utf-8")
+            self.send_response(HTTPStatus.OK)
+            self._set_cors_headers()
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
+        if path == "/api/tasks/transcript":
+            qs = parse_qs(parsed.query)
+            task_id = qs.get("task_id", [None])[0]
+            if not task_id:
+                self.send_response(HTTPStatus.BAD_REQUEST)
+                self._set_cors_headers()
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(b'{"error": "task_id query parameter is required"}')
+                return
+
+            data = GLOBAL_STORE.get_task_transcript(task_id)
             body = json.dumps(data).encode("utf-8")
             self.send_response(HTTPStatus.OK)
             self._set_cors_headers()
