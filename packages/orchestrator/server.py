@@ -819,18 +819,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           <div class="flex items-center space-x-2.5">
             <div class="h-2 w-2 rounded-full bg-indigo-500"></div>
             <h2 class="text-sm font-bold text-white tracking-wide">Live Tasks Status</h2>
-            <span id="task-count-badge" class="px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 text-xs font-semibold">0</span>
-            <span class="text-xs text-slate-400 font-normal hidden sm:inline">&middot; Đang thực hiện & chờ xử lý</span>
+            <span id="task-count-badge" class="px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 text-xs font-semibold">0 active</span>
+            <span class="text-xs text-slate-400 font-normal hidden sm:inline">&middot; Chỉ hiển thị các tác vụ đang thực hiện & chờ xử lý</span>
           </div>
 
           <div class="flex items-center space-x-3 text-xs">
-            <label class="flex items-center space-x-1.5 cursor-pointer text-slate-400 hover:text-slate-200 select-none">
-              <input type="checkbox" id="live-show-completed-toggle" onchange="renderTasksTable()" class="rounded bg-slate-800 border-slate-700 text-indigo-600 focus:ring-0">
-              <span>Hiện cả task đã xong</span>
-            </label>
             <button onclick="switchTab('history')" class="text-indigo-400 hover:text-indigo-300 font-medium flex items-center space-x-1">
-              <span>Xem lịch sử chi tiết</span>
-              <span>&rarr;</span>
+              <span>Xem lịch sử tác vụ &rarr;</span>
             </button>
           </div>
         </div>
@@ -1331,21 +1326,20 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     function renderTasksTable() {
       const tbody = document.getElementById('tasks-tbody');
       if (!tbody) return;
-      const showCompleted = document.getElementById('live-show-completed-toggle')?.checked || false;
       const allTasks = Object.values(state.tasks).sort((a, b) => (b.updated_at || '').localeCompare(a.updated_at || ''));
       
-      // Live Dashboard focuses only on active/in-flight tasks (pending, running, blocked)
+      // Live Dashboard STRICTLY ONLY shows active/in-flight tasks (pending, running, blocked)
+      // Completed and cancelled tasks are strictly kept in the History tab
       const activeTasks = allTasks.filter(t => t.status === 'running' || t.status === 'pending' || t.status === 'blocked');
-      const displayedTasks = showCompleted ? allTasks : activeTasks;
 
       const countBadge = document.getElementById('task-count-badge');
       if (countBadge) {
-        countBadge.textContent = displayedTasks.length;
+        countBadge.textContent = `${activeTasks.length} active`;
       }
       
-      if (displayedTasks.length === 0) {
-        if (!showCompleted && allTasks.some(t => t.status === 'completed' || t.status === 'cancelled')) {
-          const completedCount = allTasks.filter(t => t.status === 'completed').length;
+      if (activeTasks.length === 0) {
+        const completedCount = allTasks.filter(t => t.status === 'completed').length;
+        if (completedCount > 0) {
           tbody.innerHTML = `
             <tr>
               <td colspan="13" class="py-12 text-center">
@@ -1354,14 +1348,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
                     <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" /></svg>
                   </div>
                   <div class="text-sm font-bold text-slate-200">Không có tác vụ đang chạy hoặc chờ xử lý</div>
-                  <div class="text-xs text-slate-400 max-w-md">Toàn bộ ${completedCount} tác vụ trước đó đã hoàn thành thành công và được lưu trữ trong lịch sử để giao diện Live luôn gọn gàng.</div>
-                  <div class="pt-2 flex items-center space-x-3">
-                    <button onclick="switchTab('history')" class="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-semibold shadow-md shadow-indigo-600/20 transition flex items-center space-x-1.5">
-                      <span>Mở tab Lịch sử & Chi phí</span>
+                  <div class="text-xs text-slate-400 max-w-md">Toàn bộ ${completedCount} tác vụ trước đó đã hoàn thành và được lưu trữ gọn gàng trong tab Lịch sử.</div>
+                  <div class="pt-2">
+                    <button onclick="switchTab('history')" class="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-semibold shadow-md shadow-indigo-600/20 transition flex items-center space-x-1.5 mx-auto">
+                      <span>Mở tab Usage History & Cost Audit</span>
                       <span>&rarr;</span>
-                    </button>
-                    <button onclick="document.getElementById('live-show-completed-toggle').checked = true; renderTasksTable();" class="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-medium transition">
-                      Hiện task hoàn tất tại đây
                     </button>
                   </div>
                 </div>
@@ -1374,7 +1365,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         return;
       }
 
-      tbody.innerHTML = displayedTasks.map(t => {
+      tbody.innerHTML = activeTasks.map(t => {
         const pct = t.progress || 0;
         const barColor = t.status === 'completed' ? 'bg-emerald-500' : (t.status === 'blocked' || t.status === 'cancelled' ? 'bg-rose-500' : 'bg-indigo-500');
 
