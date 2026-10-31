@@ -265,6 +265,74 @@ class TestDashboardAndREST(OrchestratorTestBase):
         self.assertEqual(len(state["tasks"]), 0)
         self.assertEqual(len(state["logs"]), 0)
 
+    def test_cost_calculation_and_currency_conversion(self):
+        """Verify token cost calculation for Argon (Pro) and Flash tiers with Context Cache savings."""
+        # 1. Argon task: 1,000,000 in, 100,000 out, 2,000,000 cache
+        # Argon in = $1.25/M, out = $5.00/M, cache = $0.3125/M
+        # Cost = 1*1.25 + 0.1*5.00 + 2*0.3125 = 1.25 + 0.50 + 0.625 = $2.375
+        # Baseline = (1+2)*1.25 + 0.50 = 3.75 + 0.50 = $4.25
+        # Savings = $4.25 - $2.375 = $1.875
+        task_payload = {
+            "task_id": "TASK-COST-ARGON",
+            "agent_type": "builder",
+            "model": "gemini-4-argon",
+            "status": "completed",
+            "input_tokens": 1000000,
+            "output_tokens": 100000,
+            "cache_tokens": 2000000,
+        }
+        req = urllib.request.Request(
+            f"{BASE_URL}/api/tasks",
+            data=json.dumps(task_payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=5) as response:
+            self.assertEqual(response.status, 200)
+            data = json.loads(response.read().decode("utf-8"))
+            cost = data["task"]["cost"]
+            self.assertAlmostEqual(cost["usd"], 2.375, places=3)
+            self.assertAlmostEqual(cost["saved_usd"], 1.875, places=3)
+            self.assertEqual(cost["vnd"], round(2.375 * 25400))
+            self.assertEqual(cost["saved_vnd"], round(1.875 * 25400))
+
+        # Check aggregated metrics in state
+        req = urllib.request.Request(f"{BASE_URL}/api/state", method="GET")
+        with urllib.request.urlopen(req, timeout=5) as response:
+            state = json.loads(response.read().decode("utf-8"))
+            metrics = state["metrics"]
+            self.assertAlmostEqual(metrics["total_cost_usd"], 2.375, places=3)
+            self.assertEqual(metrics["total_cost_vnd"], round(2.375 * 25400))
+            self.assertAlmostEqual(metrics["total_saved_usd"], 1.875, places=3)
+
+    def test_kill_task_endpoint_and_client(self):
+        """POST /api/tasks/kill stops a running task and records warning log."""
+        GLOBAL_STORE.upsert_task("TASK-KILL-01", "builder", "running", progress=50)
+
+        # Call kill endpoint
+        kill_payload = {"task_id": "TASK-KILL-01", "reason": "Stopped by developer"}
+        req = urllib.request.Request(
+            f"{BASE_URL}/api/tasks/kill",
+            data=json.dumps(kill_payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=5) as response:
+            self.assertEqual(response.status, 200)
+            data = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(data.get("status"), "ok")
+            task = data.get("task")
+            self.assertEqual(task["status"], "cancelled")
+
+        # Verify state
+        state = GLOBAL_STORE.get_state()
+        t = [x for x in state["tasks"] if x["task_id"] == "TASK-KILL-01"][0]
+        self.assertEqual(t["status"], "cancelled")
+        # Verify log entry generated
+        kill_logs = [l for l in state["logs"] if "stopped/cancelled" in l["message"]]
+        self.assertGreaterEqual(len(kill_logs), 1)
+        self.assertEqual(kill_logs[0]["level"], "warn")
+
 
 class TestOrchestratorClient(OrchestratorTestBase):
     """Verify OrchestratorClient python library methods and CLI execution."""
@@ -394,7 +462,24 @@ class TestOrchestratorClient(OrchestratorTestBase):
         self.assertEqual(len(data["logs"]), 1)
         self.assertEqual(data["metrics"]["total"], 1)
 
-        # 4. CLI reset
+        # 4. CLI kill
+        cmd_kill = [
+            sys.executable,
+            cli_path,
+            "--url",
+            BASE_URL,
+            "kill",
+            "--task",
+            "TASK-CLI-01",
+            "--reason",
+            "Terminated by CLI test",
+        ]
+        result = subprocess.run(cmd_kill, capture_output=True, text=True, check=True)
+        data = json.loads(result.stdout)
+        self.assertEqual(data.get("status"), "ok")
+        self.assertEqual(data["task"]["status"], "cancelled")
+
+        # 5. CLI reset
         cmd_reset = [sys.executable, cli_path, "--url", BASE_URL, "reset"]
         result = subprocess.run(cmd_reset, capture_output=True, text=True, check=True)
         data = json.loads(result.stdout)

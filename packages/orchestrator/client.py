@@ -92,6 +92,13 @@ class OrchestratorClient:
 
         return self._post("/api/tasks", payload)
 
+    def kill_task(self, task_id: str, reason: str = None) -> dict:
+        """Kill or cancel a running task via the Orchestrator."""
+        payload = {"task_id": task_id}
+        if reason:
+            payload["reason"] = reason
+        return self._post("/api/tasks/kill", payload)
+
     def log(
         self,
         task_id: str,
@@ -227,6 +234,11 @@ def main():
         help="Log severity level",
     )
 
+    # kill
+    kill_parser = subparsers.add_parser("kill", help="Kill or cancel an active task/agent")
+    kill_parser.add_argument("--task", required=True, help="Task ID to cancel/kill")
+    kill_parser.add_argument("--reason", default="Killed by user CLI", help="Optional reason for cancellation")
+
     # state
     subparsers.add_parser("state", help="Get current orchestrator state")
 
@@ -236,7 +248,13 @@ def main():
     args = parser.parse_args()
     client = OrchestratorClient(base_url=args.url)
 
-    if args.command == "update":
+    if args.command == "kill":
+        res = client.kill_task(task_id=args.task, reason=args.reason)
+        print(json.dumps(res, indent=2))
+        if "error" in res:
+            sys.exit(1)
+
+    elif args.command == "update":
         # Auto-detect conversation ID and token metrics if not explicitly passed
         conv_id, in_tokens, out_tokens, cache_tokens = auto_detect_tokens_and_conv(
             conv_id=args.conv_id,

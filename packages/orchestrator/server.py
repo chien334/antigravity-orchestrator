@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 Real-time Orchestrator Dashboard Server
-Zero-dependency HTTP server with SSE (Server-Sent Events) and REST API.
+Zero-dependency HTTP server with SSE (Server-Sent Events), REST API,
+financial token cost computation, historical audit reporting, and agent kill controls.
 """
 
 import argparse
@@ -22,6 +23,53 @@ DEFAULT_DB_PATH = os.environ.get(
     "ORCHESTRATOR_DB",
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "orchestrator.db")
 )
+
+# ---------------------------------------------------------------------------
+# Pricing Constants & Cost Estimation
+# ---------------------------------------------------------------------------
+# Gemini Token Rates (USD per 1,000,000 tokens)
+PRICING_TABLE = {
+    "argon": {"in": 1.25, "out": 5.00, "cache": 0.3125},
+    "pro": {"in": 1.25, "out": 5.00, "cache": 0.3125},
+    "gemini-4-argon": {"in": 1.25, "out": 5.00, "cache": 0.3125},
+    "gemini-1.5-pro": {"in": 1.25, "out": 5.00, "cache": 0.3125},
+    "flash": {"in": 0.075, "out": 0.30, "cache": 0.01875},
+    "gemini-3.8-flash": {"in": 0.075, "out": 0.30, "cache": 0.01875},
+    "flash_lite": {"in": 0.0375, "out": 0.15, "cache": 0.01},
+    "default": {"in": 1.25, "out": 5.00, "cache": 0.3125},
+}
+USD_TO_VND_RATE = 25400.0
+
+
+def compute_cost(model, in_tok, out_tok, cache_tok):
+    """Calculate actual cost and cache savings in USD and VND."""
+    m = (model or "").lower()
+    rates = PRICING_TABLE["default"]
+    for k in PRICING_TABLE:
+        if k in m:
+            rates = PRICING_TABLE[k]
+            break
+
+    in_cost = (in_tok / 1_000_000.0) * rates["in"]
+    out_cost = (out_tok / 1_000_000.0) * rates["out"]
+    cache_cost = (cache_tok / 1_000_000.0) * rates["cache"]
+    actual_usd = in_cost + out_cost + cache_cost
+
+    # Standard baseline cost if cache tokens were charged at full input prompt rate
+    baseline_usd = ((in_tok + cache_tok) / 1_000_000.0) * rates["in"] + out_cost
+    saved_usd = max(0.0, baseline_usd - actual_usd)
+
+    actual_vnd = round(actual_usd * USD_TO_VND_RATE)
+    saved_vnd = round(saved_usd * USD_TO_VND_RATE)
+
+    return {
+        "usd": round(actual_usd, 4),
+        "vnd": actual_vnd,
+        "saved_usd": round(saved_usd, 4),
+        "saved_vnd": saved_vnd,
+        "rates": rates,
+    }
+
 
 # ---------------------------------------------------------------------------
 # State Store (SQLite-backed)
@@ -155,6 +203,12 @@ class StateStore:
             except Exception:
                 deps = [d.strip() for d in deps_raw.split(",") if d.strip()]
 
+        in_tok = int(row["input_tokens"])
+        out_tok = int(row["output_tokens"])
+        cache_tok = int(row["cache_tokens"])
+        total_tok = int(row["total_tokens"])
+        cost = compute_cost(row["model"], in_tok, out_tok, cache_tok)
+
         return {
             "task_id": row["task_id"],
             "agent_type": row["agent_type"],
@@ -168,11 +222,12 @@ class StateStore:
             "depends_on": deps,
             "parallel_group": row["parallel_group"] or "",
             "tokens": {
-                "input": int(row["input_tokens"]),
-                "output": int(row["output_tokens"]),
-                "cache": int(row["cache_tokens"]),
-                "total": int(row["total_tokens"]),
+                "input": in_tok,
+                "output": out_tok,
+                "cache": cache_tok,
+                "total": total_tok,
             },
+            "cost": cost,
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
         }
@@ -188,6 +243,7 @@ class StateStore:
         running = sum(1 for t in tasks if t["status"] == "running")
         completed = sum(1 for t in tasks if t["status"] == "completed")
         blocked = sum(1 for t in tasks if t["status"] in ("blocked", "failed"))
+        cancelled = sum(1 for t in tasks if t["status"] == "cancelled")
         active_agents = len(set(t["agent_type"] for t in tasks if t["status"] == "running"))
 
         # Parallel metrics
@@ -202,12 +258,19 @@ class StateStore:
         grand_total_tokens = total_input_tokens + total_output_tokens + total_cache_tokens
         cache_rate = round((total_cache_tokens / (total_input_tokens + total_cache_tokens) * 100), 1) if (total_input_tokens + total_cache_tokens) > 0 else 0.0
 
+        # Cost telemetry aggregates
+        total_cost_usd = round(sum(t.get("cost", {}).get("usd", 0.0) for t in tasks), 4)
+        total_cost_vnd = sum(t.get("cost", {}).get("vnd", 0) for t in tasks)
+        total_saved_usd = round(sum(t.get("cost", {}).get("saved_usd", 0.0) for t in tasks), 4)
+        total_saved_vnd = sum(t.get("cost", {}).get("saved_vnd", 0) for t in tasks)
+
         return {
             "total": total,
             "pending": pending,
             "running": running,
             "completed": completed,
             "blocked": blocked,
+            "cancelled": cancelled,
             "active_agents": active_agents,
             "parallel_running": parallel_running,
             "active_groups": active_groups,
@@ -216,6 +279,10 @@ class StateStore:
             "total_cache_tokens": total_cache_tokens,
             "grand_total_tokens": grand_total_tokens,
             "cache_rate": cache_rate,
+            "total_cost_usd": total_cost_usd,
+            "total_cost_vnd": total_cost_vnd,
+            "total_saved_usd": total_saved_usd,
+            "total_saved_vnd": total_saved_vnd,
         }
 
     def upsert_task(self, task_id, agent_type, status, progress=None, scope=None, notes=None, conv_id=None, model=None, complexity=None, depends_on=None, parallel_group=None, input_tokens=None, output_tokens=None, cache_tokens=None):
@@ -284,33 +351,61 @@ class StateStore:
                         created_at, now
                     ))
 
-                task = {
-                    "task_id": task_id,
-                    "agent_type": final_agent,
-                    "model": final_model,
-                    "complexity": final_complexity,
-                    "status": final_status,
-                    "progress": final_progress,
-                    "scope": final_scope,
-                    "notes": final_notes,
-                    "conv_id": final_conv_id,
-                    "depends_on": deps,
-                    "parallel_group": group,
-                    "tokens": {
-                        "input": in_tok,
-                        "output": out_tok,
-                        "cache": cache_tok,
-                        "total": total_tok,
-                    },
-                    "created_at": created_at,
-                    "updated_at": now,
-                }
+                cur.execute("SELECT * FROM tasks WHERE task_id = ?", (task_id,))
+                task_row = cur.fetchone()
+                task = self._row_to_task(task_row)
                 metrics = self._calculate_metrics_conn(conn)
             finally:
                 conn.close()
 
         # Notify subscribers
         self.broadcast("task_update", {"task": task, "metrics": metrics})
+        return task
+
+    def kill_task(self, task_id, reason=None):
+        """Cancel/kill a running task and record an audit log."""
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+                cur = conn.cursor()
+                cur.execute("SELECT * FROM tasks WHERE task_id = ?", (task_id,))
+                row = cur.fetchone()
+                if not row:
+                    return None
+                existing = self._row_to_task(row)
+                prev_status = existing["status"]
+
+                with conn:
+                    conn.execute("""
+                        UPDATE tasks SET
+                            status = 'cancelled',
+                            updated_at = ?
+                        WHERE task_id = ?
+                    """, (now, task_id))
+
+                    reason_msg = f"Task stopped/cancelled via Orchestrator UI (was {prev_status}). {reason or ''}".strip()
+                    conn.execute("""
+                        INSERT INTO logs (timestamp, task_id, agent_type, level, message)
+                        VALUES (?, ?, ?, 'warn', ?)
+                    """, (now, task_id, existing["agent_type"], reason_msg))
+
+                cur.execute("SELECT * FROM tasks WHERE task_id = ?", (task_id,))
+                updated_row = cur.fetchone()
+                task = self._row_to_task(updated_row)
+                metrics = self._calculate_metrics_conn(conn)
+            finally:
+                conn.close()
+
+        # Notify subscribers
+        self.broadcast("task_update", {"task": task, "metrics": metrics})
+        self.broadcast("log_event", {
+            "timestamp": now,
+            "task_id": task_id,
+            "agent_type": existing["agent_type"],
+            "level": "warn",
+            "message": f"Task {task_id} stopped/cancelled by user (was {prev_status}).",
+        })
         return task
 
     def append_log(self, task_id, agent_type, level, message):
@@ -499,259 +594,452 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         </button>
       </div>
     </div>
+
+    <!-- Navigation Tabs -->
+    <div class="border-t border-slate-800/80 px-4 sm:px-6 lg:px-8 bg-slate-900/40">
+      <div class="max-w-7xl mx-auto flex space-x-2 sm:space-x-4">
+        <button id="tab-btn-live" onclick="switchTab('live')" class="py-2.5 px-3 border-b-2 font-semibold text-xs sm:text-sm flex items-center space-x-2 transition border-indigo-500 text-white">
+          <svg class="w-4 h-4 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
+          <span>⚡ Live Dashboard</span>
+          <span id="tab-live-badge" class="ml-1 px-1.5 py-0.2 rounded-full text-[10px] bg-indigo-500/20 text-indigo-300 font-mono">0</span>
+        </button>
+
+        <button id="tab-btn-history" onclick="switchTab('history')" class="py-2.5 px-3 border-b-2 font-semibold text-xs sm:text-sm flex items-center space-x-2 transition border-transparent text-slate-400 hover:text-slate-200">
+          <svg class="w-4 h-4 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+          <span>📜 Usage History & Cost Audit</span>
+          <span id="tab-cost-badge" class="ml-1 px-2 py-0.5 rounded-full text-[10px] bg-emerald-500/20 text-emerald-300 font-mono font-bold">$0.00</span>
+        </button>
+
+        <button id="tab-btn-logs" onclick="switchTab('logs')" class="py-2.5 px-3 border-b-2 font-semibold text-xs sm:text-sm flex items-center space-x-2 transition border-transparent text-slate-400 hover:text-slate-200">
+          <svg class="w-4 h-4 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
+          <span>🖥️ System Logs</span>
+        </button>
+      </div>
+    </div>
   </header>
 
   <!-- Main Content -->
   <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 flex-1 w-full space-y-6">
 
-    <!-- Pipeline Stage Visualizer -->
-    <div class="bg-slate-900/50 border border-slate-800/70 rounded-2xl p-4 sm:p-5">
-      <div class="flex items-center justify-between mb-3">
-        <h2 class="text-xs font-semibold tracking-wider text-slate-400 uppercase">Delivery Pipeline Stages</h2>
-        <span id="pipeline-status-text" class="text-xs text-indigo-400 font-medium">Auto-synced</span>
+    <!-- =================================================================== -->
+    <!-- TAB 1: LIVE DASHBOARD -->
+    <!-- =================================================================== -->
+    <div id="tab-view-live" class="space-y-6">
+      <!-- Pipeline Stage Visualizer -->
+      <div class="bg-slate-900/50 border border-slate-800/70 rounded-2xl p-4 sm:p-5">
+        <div class="flex items-center justify-between mb-3">
+          <h2 class="text-xs font-semibold tracking-wider text-slate-400 uppercase">Delivery Pipeline Stages</h2>
+          <span id="pipeline-status-text" class="text-xs text-indigo-400 font-medium">Auto-synced</span>
+        </div>
+        <div class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2.5" id="pipeline-stages">
+          <!-- Rendered dynamically -->
+        </div>
       </div>
-      <div class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2.5" id="pipeline-stages">
-        <!-- Rendered dynamically -->
+
+      <!-- Parallel Concurrency Banner (Visible when multiple workers active) -->
+      <div id="parallel-concurrency-banner" class="hidden bg-gradient-to-r from-amber-500/10 via-indigo-500/10 to-purple-500/10 border border-amber-500/30 rounded-2xl p-4 flex flex-wrap items-center justify-between gap-3 shadow-lg shadow-amber-500/5">
+        <div class="flex items-center space-x-3">
+          <div class="h-3 w-3 rounded-full bg-amber-400 animate-ping"></div>
+          <div>
+            <div class="text-xs font-bold text-amber-300 flex items-center gap-1.5">
+              <span>⚡ CONCURRENT PARALLEL WORKERS ACTIVE</span>
+              <span id="parallel-worker-count" class="px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 text-[10px] font-mono border border-amber-500/30">0 Workers</span>
+            </div>
+            <p class="text-[11px] text-slate-300 mt-0.5">Tasks running in parallel with decoupled dependencies and isolated non-overlapping scopes.</p>
+          </div>
+        </div>
+        <div id="parallel-groups-badges" class="flex flex-wrap gap-1.5">
+          <!-- Rendered dynamically -->
+        </div>
+      </div>
+
+      <!-- Metric Cards Grid -->
+      <div class="grid grid-cols-2 lg:grid-cols-6 gap-3 sm:gap-4">
+        <!-- Total Tasks -->
+        <div class="bg-slate-900/60 border border-slate-800/80 rounded-2xl p-4 hover:border-slate-700 transition">
+          <div class="flex items-center justify-between text-slate-400 text-xs font-medium">
+            <span>Total Tasks</span>
+            <svg class="w-4 h-4 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" /></svg>
+          </div>
+          <div class="mt-2 flex items-baseline space-x-2">
+            <span id="metric-total" class="text-2xl sm:text-3xl font-bold text-white">0</span>
+          </div>
+        </div>
+
+        <!-- In Progress -->
+        <div class="bg-slate-900/60 border border-blue-900/30 rounded-2xl p-4 hover:border-blue-800/50 transition">
+          <div class="flex items-center justify-between text-blue-400 text-xs font-medium">
+            <span>In Progress</span>
+            <svg class="w-4 h-4 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
+          </div>
+          <div class="mt-2 flex items-baseline space-x-2">
+            <span id="metric-running" class="text-2xl sm:text-3xl font-bold text-blue-400">0</span>
+            <span class="text-xs text-blue-400/70">active</span>
+          </div>
+        </div>
+
+        <!-- Parallel Active Workers -->
+        <div class="bg-slate-900/60 border border-amber-900/30 rounded-2xl p-4 hover:border-amber-800/50 transition">
+          <div class="flex items-center justify-between text-amber-400 text-xs font-medium">
+            <span>Parallel Workers</span>
+            <svg class="w-4 h-4 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
+          </div>
+          <div class="mt-2 flex items-baseline space-x-2">
+            <span id="metric-parallel" class="text-2xl sm:text-3xl font-bold text-amber-400">0</span>
+            <span class="text-xs text-amber-400/70">concurrent</span>
+          </div>
+        </div>
+
+        <!-- Completed -->
+        <div class="bg-slate-900/60 border border-emerald-900/30 rounded-2xl p-4 hover:border-emerald-800/50 transition">
+          <div class="flex items-center justify-between text-emerald-400 text-xs font-medium">
+            <span>Completed</span>
+            <svg class="w-4 h-4 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" /></svg>
+          </div>
+          <div class="mt-2 flex items-baseline space-x-2">
+            <span id="metric-completed" class="text-2xl sm:text-3xl font-bold text-emerald-400">0</span>
+            <span class="text-xs text-emerald-400/70">done</span>
+          </div>
+        </div>
+
+        <!-- Blocked / Failed / Cancelled -->
+        <div class="bg-slate-900/60 border border-rose-900/30 rounded-2xl p-4 hover:border-rose-800/50 transition">
+          <div class="flex items-center justify-between text-rose-400 text-xs font-medium">
+            <span>Blocked / Stop</span>
+            <svg class="w-4 h-4 text-rose-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
+          </div>
+          <div class="mt-2 flex items-baseline space-x-2">
+            <span id="metric-blocked" class="text-2xl sm:text-3xl font-bold text-rose-400">0</span>
+          </div>
+        </div>
+
+        <!-- Active Agents -->
+        <div class="bg-slate-900/60 border border-purple-900/30 rounded-2xl p-4 hover:border-purple-800/50 transition">
+          <div class="flex items-center justify-between text-purple-400 text-xs font-medium">
+            <span>Active Agents</span>
+            <svg class="w-4 h-4 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" /></svg>
+          </div>
+          <div class="mt-2 flex items-baseline space-x-2">
+            <span id="metric-agents" class="text-2xl sm:text-3xl font-bold text-purple-400">0</span>
+            <span class="text-xs text-purple-400/70">working</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Token Consumption, Cost & Context Cache Telemetry -->
+      <div class="bg-slate-900/60 border border-slate-800/80 rounded-2xl p-4 sm:p-5 shadow-lg">
+        <div class="flex items-center justify-between mb-3 border-b border-slate-800/60 pb-2">
+          <div class="flex items-center space-x-2">
+            <div class="h-2 w-2 rounded-full bg-cyan-400"></div>
+            <h2 class="text-xs font-semibold tracking-wider text-slate-300 uppercase">Token Consumption, Financial Cost & Context Cache Telemetry</h2>
+          </div>
+          <div class="flex items-center space-x-2">
+            <span class="text-xs text-slate-400">Context Cache Hit Rate:</span>
+            <span id="metric-cache-rate" class="px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 text-xs font-bold border border-emerald-500/20 font-mono">0%</span>
+          </div>
+        </div>
+        <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+          <!-- Input Tokens -->
+          <div class="bg-slate-950/60 border border-slate-800/60 rounded-xl p-3">
+            <div class="text-[11px] text-slate-400 font-medium flex items-center justify-between">
+              <span>Input (Prompt)</span>
+              <span class="text-cyan-400 text-xs font-mono">📥 In</span>
+            </div>
+            <div class="mt-1 flex items-baseline space-x-1.5">
+              <span id="metric-tokens-in" class="text-lg sm:text-xl font-bold font-mono text-cyan-400">0</span>
+              <span class="text-[10px] text-slate-500">tok</span>
+            </div>
+          </div>
+
+          <!-- Output Tokens -->
+          <div class="bg-slate-950/60 border border-slate-800/60 rounded-xl p-3">
+            <div class="text-[11px] text-slate-400 font-medium flex items-center justify-between">
+              <span>Output (Generated)</span>
+              <span class="text-purple-400 text-xs font-mono">📤 Out</span>
+            </div>
+            <div class="mt-1 flex items-baseline space-x-1.5">
+              <span id="metric-tokens-out" class="text-lg sm:text-xl font-bold font-mono text-purple-400">0</span>
+              <span class="text-[10px] text-slate-500">tok</span>
+            </div>
+          </div>
+
+          <!-- Cached Tokens -->
+          <div class="bg-slate-950/60 border border-slate-800/60 rounded-xl p-3">
+            <div class="text-[11px] text-slate-400 font-medium flex items-center justify-between">
+              <span>Context Cache Read</span>
+              <span class="text-emerald-400 text-xs font-mono">⚡ Cache</span>
+            </div>
+            <div class="mt-1 flex items-baseline space-x-1.5">
+              <span id="metric-tokens-cache" class="text-lg sm:text-xl font-bold font-mono text-emerald-400">0</span>
+              <span class="text-[10px] text-slate-500">tok</span>
+            </div>
+          </div>
+
+          <!-- Grand Total Tokens -->
+          <div class="bg-slate-950/60 border border-slate-800/60 rounded-xl p-3">
+            <div class="text-[11px] text-slate-400 font-medium flex items-center justify-between">
+              <span>Total Footprint</span>
+              <span class="text-amber-400 text-xs font-mono">📊 Total</span>
+            </div>
+            <div class="mt-1 flex items-baseline space-x-1.5">
+              <span id="metric-tokens-total" class="text-lg sm:text-xl font-bold font-mono text-amber-400">0</span>
+              <span class="text-[10px] text-slate-500">tok</span>
+            </div>
+          </div>
+
+          <!-- Financial Cost -->
+          <div class="bg-gradient-to-br from-indigo-950/40 to-slate-950/80 border border-indigo-500/30 rounded-xl p-3 shadow-sm">
+            <div class="text-[11px] text-indigo-300 font-medium flex items-center justify-between">
+              <span>Estimated Cost</span>
+              <span class="text-indigo-400 text-xs font-mono">💰 Spend</span>
+            </div>
+            <div class="mt-1 flex flex-col">
+              <span id="metric-cost-usd" class="text-lg sm:text-xl font-bold font-mono text-indigo-400">$0.00</span>
+              <span id="metric-cost-vnd" class="text-[10px] text-indigo-300/80 font-mono">~ 0 ₫</span>
+            </div>
+          </div>
+
+          <!-- Cache Savings -->
+          <div class="bg-gradient-to-br from-emerald-950/40 to-slate-950/80 border border-emerald-500/30 rounded-xl p-3 shadow-sm">
+            <div class="text-[11px] text-emerald-300 font-medium flex items-center justify-between">
+              <span>Cache Savings</span>
+              <span class="text-emerald-400 text-xs font-mono">🛡️ Saved</span>
+            </div>
+            <div class="mt-1 flex flex-col">
+              <span id="metric-saved-usd" class="text-lg sm:text-xl font-bold font-mono text-emerald-400">$0.00</span>
+              <span id="metric-saved-vnd" class="text-[10px] text-emerald-300/80 font-mono">~ 0 ₫ saved</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Active Tasks Table -->
+      <div class="bg-slate-900/50 border border-slate-800/80 rounded-2xl overflow-hidden shadow-xl">
+        <div class="px-5 py-4 border-b border-slate-800/80 flex items-center justify-between bg-slate-900/30">
+          <div class="flex items-center space-x-2.5">
+            <div class="h-2 w-2 rounded-full bg-indigo-500"></div>
+            <h2 class="text-sm font-bold text-white tracking-wide">Live Tasks Status</h2>
+            <span id="task-count-badge" class="px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 text-xs font-semibold">0</span>
+          </div>
+        </div>
+
+        <div class="overflow-x-auto">
+          <table class="w-full text-left text-xs">
+            <thead class="bg-slate-900/80 text-slate-400 uppercase tracking-wider text-[11px] font-semibold border-b border-slate-800/80">
+              <tr>
+                <th scope="col" class="py-3 px-4">Task ID</th>
+                <th scope="col" class="py-3 px-4">Agent Persona</th>
+                <th scope="col" class="py-3 px-4">Model Engine</th>
+                <th scope="col" class="py-3 px-4">Complexity</th>
+                <th scope="col" class="py-3 px-4">Parallel Group</th>
+                <th scope="col" class="py-3 px-4">Conditions</th>
+                <th scope="col" class="py-3 px-4">Token Usage</th>
+                <th scope="col" class="py-3 px-4">Est. Cost</th>
+                <th scope="col" class="py-3 px-4">Scope / Focus</th>
+                <th scope="col" class="py-3 px-4">Status</th>
+                <th scope="col" class="py-3 px-4 w-32">Progress</th>
+                <th scope="col" class="py-3 px-4 text-center">Action</th>
+                <th scope="col" class="py-3 px-4 text-right">Updated</th>
+              </tr>
+            </thead>
+            <tbody id="tasks-tbody" class="divide-y divide-slate-800/50 text-slate-300">
+              <tr>
+                <td colspan="13" class="py-8 text-center text-slate-500">No tasks registered yet. Dispatch tasks using OrchestratorClient.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Real-time Console Log Stream Preview in Live View -->
+      <div class="bg-slate-900/60 border border-slate-800/80 rounded-2xl overflow-hidden shadow-xl flex flex-col h-72">
+        <div class="px-5 py-3 border-b border-slate-800/80 bg-slate-900/90 flex flex-wrap items-center justify-between gap-3">
+          <div class="flex items-center space-x-2.5">
+            <span class="flex h-2 w-2 relative">
+              <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+              <span class="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+            </span>
+            <h2 class="text-sm font-bold text-white tracking-wide">Live Agent Telemetry & Activity Stream</h2>
+          </div>
+          <button onclick="switchTab('logs')" class="text-xs text-indigo-400 hover:text-indigo-300 font-medium">Open Full Log Console &rarr;</button>
+        </div>
+        <div id="live-logs-container" class="flex-1 p-4 font-mono text-[11px] leading-relaxed overflow-y-auto space-y-1 bg-black/60">
+          <!-- Live logs rendered here -->
+        </div>
       </div>
     </div>
 
-    <!-- Parallel Concurrency Banner (Visible when multiple workers active) -->
-    <div id="parallel-concurrency-banner" class="hidden bg-gradient-to-r from-amber-500/10 via-indigo-500/10 to-purple-500/10 border border-amber-500/30 rounded-2xl p-4 flex flex-wrap items-center justify-between gap-3 shadow-lg shadow-amber-500/5">
-      <div class="flex items-center space-x-3">
-        <div class="h-3 w-3 rounded-full bg-amber-400 animate-ping"></div>
-        <div>
-          <div class="text-xs font-bold text-amber-300 flex items-center gap-1.5">
-            <span>⚡ CONCURRENT PARALLEL WORKERS ACTIVE</span>
-            <span id="parallel-worker-count" class="px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 text-[10px] font-mono border border-amber-500/30">0 Workers</span>
+    <!-- =================================================================== -->
+    <!-- TAB 2: USAGE HISTORY & COST AUDIT -->
+    <!-- =================================================================== -->
+    <div id="tab-view-history" class="hidden space-y-6">
+      <!-- Historical KPI Summary -->
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div class="bg-slate-900/60 border border-indigo-500/30 rounded-2xl p-5 shadow-lg">
+          <div class="text-xs text-indigo-300 font-semibold uppercase tracking-wider">Total Spent</div>
+          <div class="mt-2 flex items-baseline space-x-2">
+            <span id="hist-total-cost-usd" class="text-3xl font-extrabold font-mono text-white">$0.00</span>
           </div>
-          <p class="text-[11px] text-slate-300 mt-0.5">Tasks running in parallel with decoupled dependencies and isolated non-overlapping scopes.</p>
+          <div id="hist-total-cost-vnd" class="text-xs font-mono text-indigo-400 mt-1">~ 0 ₫</div>
+          <div class="text-[11px] text-slate-500 mt-2">Billed token spend across all Gemini models</div>
         </div>
-      </div>
-      <div id="parallel-groups-badges" class="flex flex-wrap gap-1.5">
-        <!-- Rendered dynamically -->
-      </div>
-    </div>
 
-    <!-- Metric Cards Grid -->
-    <div class="grid grid-cols-2 lg:grid-cols-6 gap-3 sm:gap-4">
-      <!-- Total Tasks -->
-      <div class="bg-slate-900/60 border border-slate-800/80 rounded-2xl p-4 hover:border-slate-700 transition">
-        <div class="flex items-center justify-between text-slate-400 text-xs font-medium">
-          <span>Total Tasks</span>
-          <svg class="w-4 h-4 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" /></svg>
-        </div>
-        <div class="mt-2 flex items-baseline space-x-2">
-          <span id="metric-total" class="text-2xl sm:text-3xl font-bold text-white">0</span>
-        </div>
-      </div>
-
-      <!-- In Progress -->
-      <div class="bg-slate-900/60 border border-blue-900/30 rounded-2xl p-4 hover:border-blue-800/50 transition">
-        <div class="flex items-center justify-between text-blue-400 text-xs font-medium">
-          <span>In Progress</span>
-          <svg class="w-4 h-4 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
-        </div>
-        <div class="mt-2 flex items-baseline space-x-2">
-          <span id="metric-running" class="text-2xl sm:text-3xl font-bold text-blue-400">0</span>
-          <span class="text-xs text-blue-400/70">active</span>
-        </div>
-      </div>
-
-      <!-- Parallel Active Workers -->
-      <div class="bg-slate-900/60 border border-amber-900/30 rounded-2xl p-4 hover:border-amber-800/50 transition">
-        <div class="flex items-center justify-between text-amber-400 text-xs font-medium">
-          <span>Parallel Workers</span>
-          <svg class="w-4 h-4 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
-        </div>
-        <div class="mt-2 flex items-baseline space-x-2">
-          <span id="metric-parallel" class="text-2xl sm:text-3xl font-bold text-amber-400">0</span>
-          <span class="text-xs text-amber-400/70">concurrent</span>
-        </div>
-      </div>
-
-      <!-- Completed -->
-      <div class="bg-slate-900/60 border border-emerald-900/30 rounded-2xl p-4 hover:border-emerald-800/50 transition">
-        <div class="flex items-center justify-between text-emerald-400 text-xs font-medium">
-          <span>Completed</span>
-          <svg class="w-4 h-4 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" /></svg>
-        </div>
-        <div class="mt-2 flex items-baseline space-x-2">
-          <span id="metric-completed" class="text-2xl sm:text-3xl font-bold text-emerald-400">0</span>
-          <span class="text-xs text-emerald-400/70">done</span>
-        </div>
-      </div>
-
-      <!-- Blocked / Failed -->
-      <div class="bg-slate-900/60 border border-rose-900/30 rounded-2xl p-4 hover:border-rose-800/50 transition">
-        <div class="flex items-center justify-between text-rose-400 text-xs font-medium">
-          <span>Blocked / Error</span>
-          <svg class="w-4 h-4 text-rose-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
-        </div>
-        <div class="mt-2 flex items-baseline space-x-2">
-          <span id="metric-blocked" class="text-2xl sm:text-3xl font-bold text-rose-400">0</span>
-        </div>
-      </div>
-
-      <!-- Active Agents -->
-      <div class="bg-slate-900/60 border border-purple-900/30 rounded-2xl p-4 hover:border-purple-800/50 transition">
-        <div class="flex items-center justify-between text-purple-400 text-xs font-medium">
-          <span>Active Agents</span>
-          <svg class="w-4 h-4 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" /></svg>
-        </div>
-        <div class="mt-2 flex items-baseline space-x-2">
-          <span id="metric-agents" class="text-2xl sm:text-3xl font-bold text-purple-400">0</span>
-          <span class="text-xs text-purple-400/70">working</span>
-        </div>
-      </div>
-    </div>
-
-    <!-- Token Consumption & Context Cache Telemetry -->
-    <div class="bg-slate-900/60 border border-slate-800/80 rounded-2xl p-4 sm:p-5 shadow-lg">
-      <div class="flex items-center justify-between mb-3 border-b border-slate-800/60 pb-2">
-        <div class="flex items-center space-x-2">
-          <div class="h-2 w-2 rounded-full bg-cyan-400"></div>
-          <h2 class="text-xs font-semibold tracking-wider text-slate-300 uppercase">Token Consumption & Context Cache Telemetry</h2>
-        </div>
-        <div class="flex items-center space-x-2">
-          <span class="text-xs text-slate-400">Context Cache Hit Rate:</span>
-          <span id="metric-cache-rate" class="px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 text-xs font-bold border border-emerald-500/20 font-mono">0%</span>
-        </div>
-      </div>
-      <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4">
-        <!-- Input Tokens -->
-        <div class="bg-slate-950/60 border border-slate-800/60 rounded-xl p-3">
-          <div class="text-[11px] text-slate-400 font-medium flex items-center justify-between">
-            <span>Input Tokens (Prompt)</span>
-            <span class="text-cyan-400 text-xs font-mono">📥 In</span>
+        <div class="bg-slate-900/60 border border-emerald-500/30 rounded-2xl p-5 shadow-lg">
+          <div class="text-xs text-emerald-300 font-semibold uppercase tracking-wider flex items-center justify-between">
+            <span>Cache Savings</span>
+            <span class="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 text-[10px] font-mono font-bold border border-emerald-500/30">75% Discount</span>
           </div>
-          <div class="mt-1 flex items-baseline space-x-1.5">
-            <span id="metric-tokens-in" class="text-xl sm:text-2xl font-bold font-mono text-cyan-400">0</span>
-            <span class="text-[10px] text-slate-500">tok</span>
+          <div class="mt-2 flex items-baseline space-x-2">
+            <span id="hist-total-saved-usd" class="text-3xl font-extrabold font-mono text-emerald-400">$0.00</span>
           </div>
+          <div id="hist-total-saved-vnd" class="text-xs font-mono text-emerald-300 mt-1">~ 0 ₫ saved</div>
+          <div class="text-[11px] text-slate-500 mt-2">Money saved via Gemini Context Caching</div>
         </div>
 
-        <!-- Output Tokens -->
-        <div class="bg-slate-950/60 border border-slate-800/60 rounded-xl p-3">
-          <div class="text-[11px] text-slate-400 font-medium flex items-center justify-between">
-            <span>Output Tokens (Generated)</span>
-            <span class="text-purple-400 text-xs font-mono">📤 Out</span>
+        <div class="bg-slate-900/60 border border-slate-800/80 rounded-2xl p-5 shadow-lg">
+          <div class="text-xs text-slate-400 font-semibold uppercase tracking-wider">Total Tokens Processed</div>
+          <div class="mt-2 flex items-baseline space-x-2">
+            <span id="hist-total-tokens" class="text-3xl font-extrabold font-mono text-cyan-400">0</span>
           </div>
-          <div class="mt-1 flex items-baseline space-x-1.5">
-            <span id="metric-tokens-out" class="text-xl sm:text-2xl font-bold font-mono text-purple-400">0</span>
-            <span class="text-[10px] text-slate-500">tok</span>
-          </div>
+          <div id="hist-token-breakdown" class="text-xs font-mono text-slate-400 mt-1">Prompt: 0 | Gen: 0 | Cache: 0</div>
+          <div class="text-[11px] text-slate-500 mt-2">Total context window footprints</div>
         </div>
 
-        <!-- Cached Tokens -->
-        <div class="bg-slate-950/60 border border-slate-800/60 rounded-xl p-3">
-          <div class="text-[11px] text-slate-400 font-medium flex items-center justify-between">
-            <span>Context Cache Read</span>
-            <span class="text-emerald-400 text-xs font-mono">⚡ Cache</span>
+        <div class="bg-slate-900/60 border border-slate-800/80 rounded-2xl p-5 shadow-lg">
+          <div class="text-xs text-slate-400 font-semibold uppercase tracking-wider">Execution Efficiency</div>
+          <div class="mt-2 flex items-baseline space-x-2">
+            <span id="hist-cache-rate" class="text-3xl font-extrabold font-mono text-purple-400">0.0%</span>
+            <span class="text-xs text-slate-400">cache hit</span>
           </div>
-          <div class="mt-1 flex items-baseline space-x-1.5">
-            <span id="metric-tokens-cache" class="text-xl sm:text-2xl font-bold font-mono text-emerald-400">0</span>
-            <span class="text-[10px] text-slate-500">tok</span>
-          </div>
-        </div>
-
-        <!-- Grand Total Tokens -->
-        <div class="bg-slate-950/60 border border-slate-800/60 rounded-xl p-3">
-          <div class="text-[11px] text-slate-400 font-medium flex items-center justify-between">
-            <span>Total Footprint</span>
-            <span class="text-amber-400 text-xs font-mono">📊 Total</span>
-          </div>
-          <div class="mt-1 flex items-baseline space-x-1.5">
-            <span id="metric-tokens-total" class="text-xl sm:text-2xl font-bold font-mono text-amber-400">0</span>
-            <span class="text-[10px] text-slate-500">tok</span>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Active Tasks Table -->
-    <div class="bg-slate-900/50 border border-slate-800/80 rounded-2xl overflow-hidden shadow-xl">
-      <div class="px-5 py-4 border-b border-slate-800/80 flex items-center justify-between bg-slate-900/30">
-        <div class="flex items-center space-x-2.5">
-          <div class="h-2 w-2 rounded-full bg-indigo-500"></div>
-          <h2 class="text-sm font-bold text-white tracking-wide">Live Tasks Status</h2>
-          <span id="task-count-badge" class="px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 text-xs font-semibold">0</span>
+          <div id="hist-avg-task-cost" class="text-xs font-mono text-slate-400 mt-1">Avg cost / task: $0.00</div>
+          <div class="text-[11px] text-slate-500 mt-2">Efficiency & savings ratio across pipeline</div>
         </div>
       </div>
 
-      <div class="overflow-x-auto">
-        <table class="w-full text-left text-xs">
-          <thead class="bg-slate-900/80 text-slate-400 uppercase tracking-wider text-[11px] font-semibold border-b border-slate-800/80">
-            <tr>
-              <th scope="col" class="py-3 px-4">Task ID</th>
-              <th scope="col" class="py-3 px-4">Agent Persona</th>
-              <th scope="col" class="py-3 px-4">Model Engine</th>
-              <th scope="col" class="py-3 px-4">Complexity</th>
-              <th scope="col" class="py-3 px-4">Parallel Group</th>
-              <th scope="col" class="py-3 px-4">Conditions</th>
-              <th scope="col" class="py-3 px-4">Token Usage</th>
-              <th scope="col" class="py-3 px-4">Scope / Focus</th>
-              <th scope="col" class="py-3 px-4">Status</th>
-              <th scope="col" class="py-3 px-4 w-36">Progress</th>
-              <th scope="col" class="py-3 px-4">Notes</th>
-              <th scope="col" class="py-3 px-4 text-right">Updated</th>
-            </tr>
-          </thead>
-          <tbody id="tasks-tbody" class="divide-y divide-slate-800/50 text-slate-300">
-            <tr>
-              <td colspan="12" class="py-8 text-center text-slate-500">No tasks registered yet. Use OrchestratorClient to dispatch tasks.</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-    </div>
+      <!-- Filters & Actions Toolbar -->
+      <div class="bg-slate-900/50 border border-slate-800/80 rounded-2xl p-4 flex flex-wrap items-center justify-between gap-3">
+        <div class="flex flex-wrap items-center gap-3 flex-1 min-w-[280px]">
+          <!-- Search input -->
+          <div class="relative flex-1 min-w-[200px] max-w-md">
+            <span class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-500">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
+            </span>
+            <input type="text" id="hist-filter-search" oninput="renderHistoryTable()" placeholder="Search by task ID, persona, or scope..." class="w-full pl-9 pr-3 py-1.5 bg-slate-800/80 border border-slate-700/80 rounded-xl text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-indigo-500 transition">
+          </div>
 
-    <!-- Real-time Console Log Stream -->
-    <div class="bg-slate-900/60 border border-slate-800/80 rounded-2xl overflow-hidden shadow-xl flex flex-col h-80">
-      <div class="px-5 py-3 border-b border-slate-800/80 bg-slate-900/90 flex flex-wrap items-center justify-between gap-3">
-        <div class="flex items-center space-x-2.5">
-          <span class="flex h-2 w-2 relative">
-            <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-            <span class="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-          </span>
-          <h2 class="text-sm font-bold text-white tracking-wide">Live Agent Telemetry & Log Stream</h2>
-        </div>
-
-        <div class="flex items-center space-x-3 text-xs">
-          <!-- Level Filter -->
-          <div class="flex items-center space-x-1.5">
-            <span class="text-slate-400">Level:</span>
-            <select id="log-filter-level" onchange="filterLogs()" class="bg-slate-800 border border-slate-700 rounded-lg px-2 py-1 text-slate-200 text-xs focus:outline-none focus:border-indigo-500">
-              <option value="all">ALL</option>
-              <option value="info">INFO</option>
-              <option value="warn">WARN</option>
-              <option value="error">ERROR</option>
-              <option value="thought">THOUGHT</option>
+          <!-- Filter by Status -->
+          <div class="flex items-center space-x-1.5 text-xs">
+            <span class="text-slate-400">Status:</span>
+            <select id="hist-filter-status" onchange="renderHistoryTable()" class="bg-slate-800/80 border border-slate-700/80 rounded-xl px-2.5 py-1.5 text-slate-200 text-xs focus:outline-none focus:border-indigo-500">
+              <option value="all">All Statuses</option>
+              <option value="completed">Completed</option>
+              <option value="running">Running</option>
+              <option value="cancelled">Cancelled / Killed</option>
+              <option value="blocked">Blocked / Failed</option>
+              <option value="pending">Pending</option>
             </select>
           </div>
 
-          <!-- Auto Scroll Toggle -->
-          <label class="flex items-center space-x-1.5 cursor-pointer text-slate-300 select-none">
-            <input type="checkbox" id="autoscroll-toggle" checked class="rounded bg-slate-800 border-slate-700 text-indigo-600 focus:ring-0">
-            <span>Autoscroll</span>
-          </label>
-
-          <!-- Clear Button -->
-          <button onclick="clearLogConsole()" class="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg transition text-xs">
-            Clear
-          </button>
+          <!-- Filter by Model -->
+          <div class="flex items-center space-x-1.5 text-xs">
+            <span class="text-slate-400">Model:</span>
+            <select id="hist-filter-model" onchange="renderHistoryTable()" class="bg-slate-800/80 border border-slate-700/80 rounded-xl px-2.5 py-1.5 text-slate-200 text-xs focus:outline-none focus:border-indigo-500">
+              <option value="all">All Models</option>
+              <option value="argon">Gemini 4 Argon (Pro)</option>
+              <option value="flash">Gemini 3.8 Flash</option>
+            </select>
+          </div>
         </div>
+
+        <!-- Export CSV Button -->
+        <button onclick="exportHistoryCSV()" class="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-semibold shadow-md shadow-indigo-600/20 transition flex items-center space-x-1.5">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
+          <span>Export CSV Audit Report</span>
+        </button>
       </div>
 
-      <!-- Logs Container -->
-      <div id="logs-container" class="flex-1 p-4 font-mono text-[11px] leading-relaxed overflow-y-auto space-y-1 bg-black/60">
-        <!-- Logs rendered here -->
+      <!-- Detailed History Audit Table -->
+      <div class="bg-slate-900/50 border border-slate-800/80 rounded-2xl overflow-hidden shadow-xl">
+        <div class="overflow-x-auto">
+          <table class="w-full text-left text-xs">
+            <thead class="bg-slate-900/80 text-slate-400 uppercase tracking-wider text-[11px] font-semibold border-b border-slate-800/80">
+              <tr>
+                <th scope="col" class="py-3 px-4">Task ID</th>
+                <th scope="col" class="py-3 px-4">Agent / Persona</th>
+                <th scope="col" class="py-3 px-4">Model Engine</th>
+                <th scope="col" class="py-3 px-4">Status</th>
+                <th scope="col" class="py-3 px-4">Prompt In</th>
+                <th scope="col" class="py-3 px-4">Generated Out</th>
+                <th scope="col" class="py-3 px-4">Cache Read</th>
+                <th scope="col" class="py-3 px-4">Total Tokens</th>
+                <th scope="col" class="py-3 px-4">Cache Hit %</th>
+                <th scope="col" class="py-3 px-4">Cost (USD / VND)</th>
+                <th scope="col" class="py-3 px-4">Cache Savings</th>
+                <th scope="col" class="py-3 px-4 text-center">Action</th>
+                <th scope="col" class="py-3 px-4 text-right">Timestamp</th>
+              </tr>
+            </thead>
+            <tbody id="history-tbody" class="divide-y divide-slate-800/50 text-slate-300">
+              <tr>
+                <td colspan="13" class="py-8 text-center text-slate-500">Loading audit records...</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- =================================================================== -->
+    <!-- TAB 3: SYSTEM CONSOLE LOGS -->
+    <!-- =================================================================== -->
+    <div id="tab-view-logs" class="hidden space-y-4">
+      <div class="bg-slate-900/60 border border-slate-800/80 rounded-2xl overflow-hidden shadow-xl flex flex-col h-[650px]">
+        <div class="px-5 py-3 border-b border-slate-800/80 bg-slate-900/90 flex flex-wrap items-center justify-between gap-3">
+          <div class="flex items-center space-x-2.5">
+            <span class="flex h-2 w-2 relative">
+              <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+              <span class="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+            </span>
+            <h2 class="text-sm font-bold text-white tracking-wide">Full Agent Activity & Execution Console</h2>
+          </div>
+
+          <div class="flex items-center space-x-3 text-xs">
+            <!-- Level Filter -->
+            <div class="flex items-center space-x-1.5">
+              <span class="text-slate-400">Level:</span>
+              <select id="log-filter-level" onchange="filterLogs()" class="bg-slate-800 border border-slate-700 rounded-lg px-2 py-1 text-slate-200 text-xs focus:outline-none focus:border-indigo-500">
+                <option value="all">ALL</option>
+                <option value="info">INFO</option>
+                <option value="warn">WARN</option>
+                <option value="error">ERROR</option>
+                <option value="thought">THOUGHT</option>
+              </select>
+            </div>
+
+            <!-- Auto Scroll Toggle -->
+            <label class="flex items-center space-x-1.5 cursor-pointer text-slate-300 select-none">
+              <input type="checkbox" id="autoscroll-toggle" checked class="rounded bg-slate-800 border-slate-700 text-indigo-600 focus:ring-0">
+              <span>Autoscroll</span>
+            </label>
+
+            <!-- Clear Button -->
+            <button onclick="clearLogConsole()" class="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg transition text-xs">
+              Clear
+            </button>
+          </div>
+        </div>
+
+        <!-- Logs Container -->
+        <div id="logs-container" class="flex-1 p-4 font-mono text-[11px] leading-relaxed overflow-y-auto space-y-1 bg-black/70">
+          <!-- Full Logs rendered here -->
+        </div>
       </div>
     </div>
 
   </main>
 
   <footer class="border-t border-slate-800/60 py-4 text-center text-xs text-slate-500">
-    Hospital Suite Real-Time Multi-Agent Orchestrator &middot; Zero-Dependency SSE Architecture
+    Hospital Suite Real-Time Multi-Agent Orchestrator &middot; Zero-Dependency SSE Architecture &middot; Automated Token & Cost Auditing
   </footer>
 
   <!-- Scripts -->
@@ -766,14 +1054,40 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       { id: 'ship', name: '7. Ship', role: 'DevOps / Release' }
     ];
 
+    let currentTab = 'live';
     let state = {
       tasks: {},
       logs: [],
-      metrics: { total: 0, pending: 0, running: 0, completed: 0, blocked: 0, active_agents: 0 }
+      metrics: {
+        total: 0, pending: 0, running: 0, completed: 0, blocked: 0, cancelled: 0, active_agents: 0,
+        total_input_tokens: 0, total_output_tokens: 0, total_cache_tokens: 0, grand_total_tokens: 0,
+        total_cost_usd: 0, total_cost_vnd: 0, total_saved_usd: 0, total_saved_vnd: 0, cache_rate: 0
+      }
     };
+
+    function switchTab(tab) {
+      currentTab = tab;
+      const tabs = ['live', 'history', 'logs'];
+      tabs.forEach(t => {
+        const btn = document.getElementById(`tab-btn-${t}`);
+        const view = document.getElementById(`tab-view-${t}`);
+        if (!btn || !view) return;
+        if (t === tab) {
+          btn.className = "py-2.5 px-3 border-b-2 font-semibold text-xs sm:text-sm flex items-center space-x-2 transition border-indigo-500 text-white";
+          view.classList.remove('hidden');
+        } else {
+          btn.className = "py-2.5 px-3 border-b-2 font-semibold text-xs sm:text-sm flex items-center space-x-2 transition border-transparent text-slate-400 hover:text-slate-200";
+          view.classList.add('hidden');
+        }
+      });
+      if (tab === 'history') {
+        renderHistoryTable();
+      }
+    }
 
     function initPipeline() {
       const container = document.getElementById('pipeline-stages');
+      if (!container) return;
       container.innerHTML = PIPELINE_STAGES.map(stage => `
         <div id="stage-${stage.id}" class="border border-slate-800 bg-slate-950/60 rounded-xl p-3 text-center transition">
           <div class="text-xs font-bold text-slate-300">${stage.name}</div>
@@ -829,13 +1143,26 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       return num.toLocaleString();
     }
 
+    function formatMoneyUSD(num) {
+      if (!num || num === 0) return '$0.00';
+      if (num < 0.01) return '$' + num.toFixed(4);
+      return '$' + num.toFixed(2);
+    }
+
+    function formatMoneyVND(num) {
+      if (!num || num === 0) return '0 ₫';
+      return Math.round(num).toLocaleString('vi-VN') + ' ₫';
+    }
+
     function renderMetrics(metrics) {
+      // Metric cards
       document.getElementById('metric-total').textContent = metrics.total;
       document.getElementById('metric-running').textContent = metrics.running;
       document.getElementById('metric-completed').textContent = metrics.completed;
-      document.getElementById('metric-blocked').textContent = metrics.blocked;
+      document.getElementById('metric-blocked').textContent = (metrics.blocked || 0) + (metrics.cancelled || 0);
       document.getElementById('metric-agents').textContent = metrics.active_agents;
       document.getElementById('task-count-badge').textContent = metrics.total;
+      document.getElementById('tab-live-badge').textContent = metrics.running > 0 ? `${metrics.running} active` : metrics.total;
 
       const parallelCount = metrics.parallel_running || 0;
       const parallelEl = document.getElementById('metric-parallel');
@@ -858,24 +1185,45 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         }
       }
 
-      // Token Telemetry & Context Cache Stats
+      // Token Telemetry
       const inTok = metrics.total_input_tokens || 0;
       const outTok = metrics.total_output_tokens || 0;
       const cacheTok = metrics.total_cache_tokens || 0;
       const grandTok = metrics.grand_total_tokens || 0;
       const cacheRate = metrics.cache_rate || 0.0;
 
-      const elIn = document.getElementById('metric-tokens-in');
-      const elOut = document.getElementById('metric-tokens-out');
-      const elCache = document.getElementById('metric-tokens-cache');
-      const elTotal = document.getElementById('metric-tokens-total');
-      const elRate = document.getElementById('metric-cache-rate');
+      document.getElementById('metric-tokens-in').textContent = formatTokens(inTok);
+      document.getElementById('metric-tokens-out').textContent = formatTokens(outTok);
+      document.getElementById('metric-tokens-cache').textContent = formatTokens(cacheTok);
+      document.getElementById('metric-tokens-total').textContent = formatTokens(grandTok);
+      document.getElementById('metric-cache-rate').textContent = `${cacheRate}%`;
 
-      if (elIn) elIn.textContent = formatTokens(inTok);
-      if (elOut) elOut.textContent = formatTokens(outTok);
-      if (elCache) elCache.textContent = formatTokens(cacheTok);
-      if (elTotal) elTotal.textContent = formatTokens(grandTok);
-      if (elRate) elRate.textContent = `${cacheRate}%`;
+      // Cost Telemetry
+      const costUsd = metrics.total_cost_usd || 0.0;
+      const costVnd = metrics.total_cost_vnd || 0;
+      const savedUsd = metrics.total_saved_usd || 0.0;
+      const savedVnd = metrics.total_saved_vnd || 0;
+
+      document.getElementById('metric-cost-usd').textContent = formatMoneyUSD(costUsd);
+      document.getElementById('metric-cost-vnd').textContent = `~ ${formatMoneyVND(costVnd)}`;
+      document.getElementById('metric-saved-usd').textContent = formatMoneyUSD(savedUsd);
+      document.getElementById('metric-saved-vnd').textContent = `~ ${formatMoneyVND(savedVnd)} saved`;
+      document.getElementById('tab-cost-badge').textContent = formatMoneyUSD(costUsd);
+
+      // Historical tab header cards
+      const histCostUsd = document.getElementById('hist-total-cost-usd');
+      if (histCostUsd) {
+        histCostUsd.textContent = formatMoneyUSD(costUsd);
+        document.getElementById('hist-total-cost-vnd').textContent = `~ ${formatMoneyVND(costVnd)}`;
+        document.getElementById('hist-total-saved-usd').textContent = formatMoneyUSD(savedUsd);
+        document.getElementById('hist-total-saved-vnd').textContent = `~ ${formatMoneyVND(savedVnd)} saved`;
+        document.getElementById('hist-total-tokens').textContent = formatTokens(grandTok);
+        document.getElementById('hist-token-breakdown').textContent = `In: ${formatTokens(inTok)} | Out: ${formatTokens(outTok)} | Cache: ${formatTokens(cacheTok)}`;
+        document.getElementById('hist-cache-rate').textContent = `${cacheRate}%`;
+        const completedCount = metrics.completed || 0;
+        const avgCost = completedCount > 0 ? (costUsd / completedCount) : 0.0;
+        document.getElementById('hist-avg-task-cost').textContent = `Avg cost / task: ${formatMoneyUSD(avgCost)} (~${formatMoneyVND(costVnd / (completedCount || 1))})`;
+      }
     }
 
     function getStatusBadge(status) {
@@ -884,6 +1232,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           return '<span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-500/20 text-blue-400 border border-blue-500/30 inline-flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full bg-blue-400 pulse-slow"></span>RUNNING</span>';
         case 'completed':
           return '<span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 inline-flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>DONE</span>';
+        case 'cancelled':
+          return '<span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-500/20 text-rose-300 border border-rose-500/30 inline-flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full bg-rose-400"></span>CANCELLED</span>';
         case 'blocked':
         case 'failed':
           return '<span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-500/20 text-rose-400 border border-rose-500/30 inline-flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full bg-rose-400"></span>BLOCKED</span>';
@@ -946,18 +1296,39 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       }
     }
 
+    function killTask(taskId) {
+      if (!confirm(`Are you sure you want to stop/kill agent running task ${taskId}?`)) {
+        return;
+      }
+      fetch('/api/tasks/kill', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ task_id: taskId, reason: 'Manual kill from Dashboard UI' })
+      })
+      .then(res => res.json())
+      .then(data => {
+        if (data.task) {
+          state.tasks[data.task.task_id] = data.task;
+          renderTasksTable();
+          renderHistoryTable();
+        }
+      })
+      .catch(err => alert('Failed to kill task: ' + err));
+    }
+
     function renderTasksTable() {
       const tbody = document.getElementById('tasks-tbody');
+      if (!tbody) return;
       const tasks = Object.values(state.tasks).sort((a, b) => (b.updated_at || '').localeCompare(a.updated_at || ''));
       
       if (tasks.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="12" class="py-8 text-center text-slate-500">No tasks registered yet. Use OrchestratorClient to dispatch tasks.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="13" class="py-8 text-center text-slate-500">No tasks registered yet. Dispatch tasks using OrchestratorClient.</td></tr>';
         return;
       }
 
       tbody.innerHTML = tasks.map(t => {
         const pct = t.progress || 0;
-        const barColor = t.status === 'completed' ? 'bg-emerald-500' : (t.status === 'blocked' ? 'bg-rose-500' : 'bg-indigo-500');
+        const barColor = t.status === 'completed' ? 'bg-emerald-500' : (t.status === 'blocked' || t.status === 'cancelled' ? 'bg-rose-500' : 'bg-indigo-500');
 
         // Parallel Group badge
         const groupBadge = t.parallel_group ? 
@@ -988,6 +1359,26 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           </div>
         `;
 
+        // Cost breakdown
+        const cost = t.cost || { usd: 0.0, vnd: 0, saved_usd: 0.0, saved_vnd: 0 };
+        const costBadge = `
+          <div class="font-mono text-[10px] bg-indigo-950/30 px-2 py-1 rounded border border-indigo-900/40" title="Actual Spend: ${formatMoneyUSD(cost.usd)} (~${formatMoneyVND(cost.vnd)}) | Saved: ${formatMoneyUSD(cost.saved_usd)}">
+            <div class="text-indigo-300 font-bold">${formatMoneyUSD(cost.usd)}</div>
+            <div class="text-[9px] text-slate-500">~${formatMoneyVND(cost.vnd)}</div>
+          </div>
+        `;
+
+        // Action button
+        let actionBtn = `<span class="text-slate-600 text-xs">-</span>`;
+        if (t.status === 'running') {
+          actionBtn = `
+            <button onclick="killTask('${t.task_id}')" class="px-2.5 py-1 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border border-rose-500/30 transition text-[11px] font-bold flex items-center gap-1 mx-auto shadow-sm">
+              <svg class="w-3 h-3 text-rose-400" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8 7a1 1 0 00-1 1v4a1 1 0 001 1h4a1 1 0 001-1V8a1 1 0 00-1-1H8z" clip-rule="evenodd" /></svg>
+              <span>Kill</span>
+            </button>
+          `;
+        }
+
         return `
           <tr class="hover:bg-slate-800/30 transition">
             <td class="py-3 px-4 font-mono font-bold text-white">${t.task_id}</td>
@@ -997,6 +1388,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             <td class="py-3 px-4">${groupBadge}</td>
             <td class="py-3 px-4">${depsBadge}</td>
             <td class="py-3 px-4">${tokenBadge}</td>
+            <td class="py-3 px-4">${costBadge}</td>
             <td class="py-3 px-4 text-slate-300 max-w-xs truncate" title="${t.scope || ''}">${t.scope || '-'}</td>
             <td class="py-3 px-4">${getStatusBadge(t.status)}</td>
             <td class="py-3 px-4">
@@ -1007,15 +1399,141 @@ DASHBOARD_HTML = """<!DOCTYPE html>
                 <span class="font-mono text-[10px] text-slate-400 w-8 text-right">${pct}%</span>
               </div>
             </td>
-            <td class="py-3 px-4 text-slate-400 max-w-sm truncate" title="${t.notes || ''}">${t.notes || '-'}</td>
+            <td class="py-3 px-4 text-center">${actionBtn}</td>
             <td class="py-3 px-4 text-right text-slate-500 font-mono">${formatTime(t.updated_at)}</td>
           </tr>
         `;
       }).join('');
     }
 
+    function renderHistoryTable() {
+      const tbody = document.getElementById('history-tbody');
+      if (!tbody) return;
+      const search = (document.getElementById('hist-filter-search')?.value || '').toLowerCase();
+      const statusFilter = document.getElementById('hist-filter-status')?.value || 'all';
+      const modelFilter = document.getElementById('hist-filter-model')?.value || 'all';
+
+      let tasks = Object.values(state.tasks).sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
+
+      tasks = tasks.filter(t => {
+        if (statusFilter !== 'all' && t.status !== statusFilter) return false;
+        if (modelFilter !== 'all') {
+          const m = (t.model || '').toLowerCase();
+          if (modelFilter === 'argon' && !m.includes('argon') && !m.includes('pro')) return false;
+          if (modelFilter === 'flash' && !m.includes('flash')) return false;
+        }
+        if (search) {
+          const matchId = (t.task_id || '').toLowerCase().includes(search);
+          const matchAgent = (t.agent_type || '').toLowerCase().includes(search);
+          const matchScope = (t.scope || '').toLowerCase().includes(search);
+          if (!matchId && !matchAgent && !matchScope) return false;
+        }
+        return true;
+      });
+
+      if (tasks.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="13" class="py-8 text-center text-slate-500">No matching task history records found.</td></tr>';
+        return;
+      }
+
+      tbody.innerHTML = tasks.map(t => {
+        const tok = t.tokens || { input: 0, output: 0, cache: 0, total: 0 };
+        const cost = t.cost || { usd: 0.0, vnd: 0, saved_usd: 0.0, saved_vnd: 0 };
+        const hitRate = (tok.input + tok.cache) > 0 ? ((tok.cache / (tok.input + tok.cache)) * 100).toFixed(1) : '0.0';
+
+        let actionBtn = `<span class="text-slate-600 text-xs">-</span>`;
+        if (t.status === 'running') {
+          actionBtn = `
+            <button onclick="killTask('${t.task_id}')" class="px-2.5 py-1 rounded bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border border-rose-500/30 font-bold text-[10px] transition">
+              Kill
+            </button>
+          `;
+        }
+
+        return `
+          <tr class="hover:bg-slate-800/30 transition">
+            <td class="py-3 px-4 font-mono font-bold text-white">${t.task_id}</td>
+            <td class="py-3 px-4">${getAgentBadge(t.agent_type)}</td>
+            <td class="py-3 px-4">${getModelBadge(t.model)}</td>
+            <td class="py-3 px-4">${getStatusBadge(t.status)}</td>
+            <td class="py-3 px-4 font-mono text-cyan-400">${tok.input.toLocaleString()}</td>
+            <td class="py-3 px-4 font-mono text-purple-400">${tok.output.toLocaleString()}</td>
+            <td class="py-3 px-4 font-mono text-emerald-400">${tok.cache.toLocaleString()}</td>
+            <td class="py-3 px-4 font-mono font-bold text-slate-200">${tok.total.toLocaleString()}</td>
+            <td class="py-3 px-4 font-mono text-emerald-300 font-semibold">${hitRate}%</td>
+            <td class="py-3 px-4 font-mono">
+              <span class="text-indigo-300 font-bold">${formatMoneyUSD(cost.usd)}</span>
+              <span class="text-[10px] text-slate-500 block">~${formatMoneyVND(cost.vnd)}</span>
+            </td>
+            <td class="py-3 px-4 font-mono">
+              <span class="text-emerald-400 font-semibold">+${formatMoneyUSD(cost.saved_usd)}</span>
+              <span class="text-[10px] text-emerald-500/80 block">~${formatMoneyVND(cost.saved_vnd)}</span>
+            </td>
+            <td class="py-3 px-4 text-center">${actionBtn}</td>
+            <td class="py-3 px-4 text-right text-slate-500 font-mono">${formatTime(t.updated_at || t.created_at)}</td>
+          </tr>
+        `;
+      }).join('');
+    }
+
+    function exportHistoryCSV() {
+      const tasks = Object.values(state.tasks).sort((a, b) => (a.created_at || '').localeCompare(b.created_at || ''));
+      if (tasks.length === 0) {
+        alert('No tasks to export.');
+        return;
+      }
+
+      const headers = [
+        "task_id", "agent_type", "model", "complexity", "status", "progress",
+        "input_tokens", "output_tokens", "cache_tokens", "total_tokens", "cache_hit_rate_pct",
+        "cost_usd", "cost_vnd", "saved_usd", "saved_vnd",
+        "scope", "created_at", "updated_at"
+      ];
+
+      const rows = tasks.map(t => {
+        const tok = t.tokens || { input: 0, output: 0, cache: 0, total: 0 };
+        const cost = t.cost || { usd: 0.0, vnd: 0, saved_usd: 0.0, saved_vnd: 0 };
+        const hitRate = (tok.input + tok.cache) > 0 ? ((tok.cache / (tok.input + tok.cache)) * 100).toFixed(1) : '0.0';
+
+        return [
+          t.task_id,
+          t.agent_type,
+          t.model,
+          t.complexity,
+          t.status,
+          t.progress,
+          tok.input,
+          tok.output,
+          tok.cache,
+          tok.total,
+          hitRate,
+          cost.usd,
+          cost.vnd,
+          cost.saved_usd,
+          cost.saved_vnd,
+          `"${(t.scope || '').replace(/"/g, '""')}"`,
+          t.created_at,
+          t.updated_at
+        ].join(",");
+      });
+
+      const csvContent = "data:text/csv;charset=utf-8," + [headers.join(","), ...rows].join("\n");
+      const encodedUri = encodeURI(csvContent);
+      const link = document.createElement("a");
+      const dateStr = new Date().toISOString().slice(0, 10);
+      link.setAttribute("href", encodedUri);
+      link.setAttribute("download", `orchestrator_token_cost_audit_${dateStr}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    }
+
     function appendLogElement(log) {
-      const container = document.getElementById('logs-container');
+      const containers = [
+        document.getElementById('logs-container'),
+        document.getElementById('live-logs-container')
+      ];
+
       const levelColors = {
         'info': 'text-cyan-400',
         'warn': 'text-amber-400',
@@ -1024,22 +1542,26 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       };
       const color = levelColors[log.level] || 'text-slate-300';
       const timeStr = formatTime(log.timestamp);
-      
-      const el = document.createElement('div');
-      el.className = `log-item font-mono py-0.5 border-b border-slate-900/40 hover:bg-slate-900/60 flex items-start space-x-2`;
-      el.dataset.level = log.level || 'info';
-      el.innerHTML = `
-        <span class="text-slate-600 select-none">${timeStr}</span>
-        <span class="px-1.5 rounded text-[10px] font-bold uppercase ${color} bg-slate-900 border border-slate-800">${log.level}</span>
-        <span class="text-indigo-400 font-semibold">[${log.task_id || 'SYS'}]</span>
-        <span class="text-slate-400 text-[10px]">(${log.agent_type})</span>
-        <span class="text-slate-200 flex-1 whitespace-pre-wrap break-all">${escapeHtml(log.message)}</span>
-      `;
-      container.appendChild(el);
 
-      if (document.getElementById('autoscroll-toggle').checked) {
-        container.scrollTop = container.scrollHeight;
-      }
+      containers.forEach(container => {
+        if (!container) return;
+        const el = document.createElement('div');
+        el.className = `log-item font-mono py-0.5 border-b border-slate-900/40 hover:bg-slate-900/60 flex items-start space-x-2`;
+        el.dataset.level = log.level || 'info';
+        el.innerHTML = `
+          <span class="text-slate-600 select-none">${timeStr}</span>
+          <span class="px-1.5 rounded text-[10px] font-bold uppercase ${color} bg-slate-900 border border-slate-800">${log.level}</span>
+          <span class="text-indigo-400 font-semibold">[${log.task_id || 'SYS'}]</span>
+          <span class="text-slate-400 text-[10px]">(${log.agent_type})</span>
+          <span class="text-slate-200 flex-1 whitespace-pre-wrap break-all">${escapeHtml(log.message)}</span>
+        `;
+        container.appendChild(el);
+
+        const autoScroll = document.getElementById('autoscroll-toggle');
+        if (!autoScroll || autoScroll.checked) {
+          container.scrollTop = container.scrollHeight;
+        }
+      });
     }
 
     function filterLogs() {
@@ -1055,7 +1577,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
 
     function clearLogConsole() {
-      document.getElementById('logs-container').innerHTML = '';
+      const c1 = document.getElementById('logs-container');
+      const c2 = document.getElementById('live-logs-container');
+      if (c1) c1.innerHTML = '';
+      if (c2) c2.innerHTML = '';
       state.logs = [];
     }
 
@@ -1077,8 +1602,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           state.tasks = {};
           state.logs = [];
           renderTasksTable();
+          renderHistoryTable();
           clearLogConsole();
-          renderMetrics({ total: 0, pending: 0, running: 0, completed: 0, blocked: 0, active_agents: 0 });
+          renderMetrics({ total: 0, pending: 0, running: 0, completed: 0, blocked: 0, cancelled: 0, active_agents: 0 });
           updatePipelineStages();
         });
     }
@@ -1106,10 +1632,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         state.metrics = data.metrics || state.metrics;
         renderMetrics(state.metrics);
         renderTasksTable();
+        renderHistoryTable();
         updatePipelineStages();
         
-        const container = document.getElementById('logs-container');
-        container.innerHTML = '';
+        clearLogConsole();
         (data.logs || []).forEach(l => appendLogElement(l));
       });
 
@@ -1123,7 +1649,27 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           renderMetrics(data.metrics);
         }
         renderTasksTable();
+        renderHistoryTable();
         updatePipelineStages();
+      });
+
+      evtSource.addEventListener('state_sync', (e) => {
+        const data = JSON.parse(e.data);
+        if (data.metrics) {
+          state.metrics = data.metrics;
+          renderMetrics(data.metrics);
+        }
+        // Refresh full state
+        fetch('/api/state')
+          .then(r => r.json())
+          .then(full => {
+            if (full.tasks) {
+              state.tasks = {};
+              full.tasks.forEach(t => { state.tasks[t.task_id] = t; });
+              renderTasksTable();
+              renderHistoryTable();
+            }
+          });
       });
 
       evtSource.addEventListener('log_event', (e) => {
@@ -1136,8 +1682,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         state.tasks = {};
         state.logs = [];
         renderTasksTable();
+        renderHistoryTable();
         clearLogConsole();
-        renderMetrics({ total: 0, pending: 0, running: 0, completed: 0, blocked: 0, active_agents: 0 });
+        renderMetrics({ total: 0, pending: 0, running: 0, completed: 0, blocked: 0, cancelled: 0, active_agents: 0 });
         updatePipelineStages();
       });
     }
@@ -1156,7 +1703,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 # ---------------------------------------------------------------------------
 
 class OrchestratorHandler(BaseHTTPRequestHandler):
-    # Suppress default server log lines to keep stdout clean
     def log_message(self, format, *args):
         pass
 
@@ -1203,10 +1749,8 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
             self.send_header("Connection", "keep-alive")
             self.end_headers()
 
-            # Subscribe to events
             q = GLOBAL_STORE.subscribe()
             try:
-                # Send initial state snapshot immediately
                 initial = GLOBAL_STORE.get_state()
                 init_msg = f"event: initial_state\ndata: {json.dumps(initial)}\n\n"
                 self.wfile.write(init_msg.encode("utf-8"))
@@ -1214,7 +1758,6 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
 
                 while True:
                     try:
-                        # Wait up to 15 seconds for new message, then send comment heartbeat
                         msg = q.get(timeout=15)
                         self.wfile.write(msg.encode("utf-8"))
                         self.wfile.flush()
@@ -1228,7 +1771,6 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
                 GLOBAL_STORE.unsubscribe(q)
             return
 
-        # 404 for other GET
         self.send_response(HTTPStatus.NOT_FOUND)
         self._set_cors_headers()
         self.send_header("Content-Type", "application/json")
@@ -1292,6 +1834,35 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
                 output_tokens=output_tokens,
                 cache_tokens=cache_tokens,
             )
+
+            res = json.dumps({"status": "ok", "task": task}).encode("utf-8")
+            self.send_response(HTTPStatus.OK)
+            self._set_cors_headers()
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(res)))
+            self.end_headers()
+            self.wfile.write(res)
+            return
+
+        if path == "/api/tasks/kill":
+            task_id = payload.get("task_id")
+            if not task_id:
+                self.send_response(HTTPStatus.BAD_REQUEST)
+                self._set_cors_headers()
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(b'{"error": "task_id is required"}')
+                return
+
+            reason = payload.get("reason", "Cancelled by user via UI")
+            task = GLOBAL_STORE.kill_task(task_id, reason)
+            if not task:
+                self.send_response(HTTPStatus.NOT_FOUND)
+                self._set_cors_headers()
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(b'{"error": "Task not found"}')
+                return
 
             res = json.dumps({"status": "ok", "task": task}).encode("utf-8")
             self.send_response(HTTPStatus.OK)
