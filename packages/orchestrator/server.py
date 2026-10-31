@@ -1517,7 +1517,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         ].join(",");
       });
 
-      const csvContent = "data:text/csv;charset=utf-8," + [headers.join(","), ...rows].join("\n");
+      const csvContent = "data:text/csv;charset=utf-8," + [headers.join(","), ...rows].join(String.fromCharCode(10));
       const encodedUri = encodeURI(csvContent);
       const link = document.createElement("a");
       const dateStr = new Date().toISOString().slice(0, 10);
