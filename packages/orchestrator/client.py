@@ -117,6 +117,51 @@ class OrchestratorClient:
         return self._post("/api/reset", {})
 
 
+def auto_detect_tokens_and_conv(conv_id=None, in_tok=None, out_tok=None, cache_tok=None):
+    """Auto-detect current Antigravity conversation ID and token metrics if not explicitly provided."""
+    brain_dir = os.path.expanduser("~/.gemini/antigravity/brain")
+    if not conv_id:
+        conv_id = os.environ.get("AGY_CONVERSATION_ID")
+    if not conv_id and os.path.isdir(brain_dir):
+        candidates = []
+        try:
+            for entry in os.scandir(brain_dir):
+                if entry.is_dir() and entry.name != "tempmediaStorage":
+                    t_path = os.path.join(entry.path, ".system_generated", "logs", "transcript.jsonl")
+                    if os.path.isfile(t_path):
+                        candidates.append((os.path.getmtime(t_path), entry.name, t_path))
+            if candidates:
+                candidates.sort(key=lambda x: x[0], reverse=True)
+                conv_id = candidates[0][1]
+        except Exception:
+            pass
+
+    if (in_tok is None or out_tok is None or cache_tok is None) and conv_id and os.path.isdir(brain_dir):
+        t_path = os.path.join(brain_dir, conv_id, ".system_generated", "logs", "transcript.jsonl")
+        if os.path.isfile(t_path):
+            calc_in, calc_out, calc_cache = 0, 0, 0
+            try:
+                with open(t_path, "r", encoding="utf-8") as f:
+                    for line in f:
+                        try:
+                            d = json.loads(line)
+                            calc_in += d.get("input_tokens", 0)
+                            calc_out += d.get("output_tokens", 0)
+                            calc_cache += d.get("cache_read_tokens", 0)
+                        except Exception:
+                            pass
+                if in_tok is None:
+                    in_tok = calc_in
+                if out_tok is None:
+                    out_tok = calc_out
+                if cache_tok is None:
+                    cache_tok = calc_cache
+            except Exception:
+                pass
+
+    return conv_id, in_tok, out_tok, cache_tok
+
+
 def main():
     parser = argparse.ArgumentParser(description="Multi-Agent Orchestrator CLI")
     parser.add_argument(
@@ -192,6 +237,14 @@ def main():
     client = OrchestratorClient(base_url=args.url)
 
     if args.command == "update":
+        # Auto-detect conversation ID and token metrics if not explicitly passed
+        conv_id, in_tokens, out_tokens, cache_tokens = auto_detect_tokens_and_conv(
+            conv_id=args.conv_id,
+            in_tok=args.input_tokens,
+            out_tok=args.output_tokens,
+            cache_tok=args.cache_tokens,
+        )
+
         res = client.update_task(
             task_id=args.task,
             agent_type=args.agent,
@@ -199,14 +252,14 @@ def main():
             progress=args.progress,
             scope=args.scope,
             notes=args.notes,
-            conv_id=args.conv_id,
+            conv_id=conv_id,
             model=args.model,
             complexity=args.complexity,
             depends_on=args.depends_on,
             parallel_group=args.parallel_group,
-            input_tokens=args.input_tokens,
-            output_tokens=args.output_tokens,
-            cache_tokens=args.cache_tokens,
+            input_tokens=in_tokens,
+            output_tokens=out_tokens,
+            cache_tokens=cache_tokens,
         )
         print(json.dumps(res, indent=2))
         if "error" in res:

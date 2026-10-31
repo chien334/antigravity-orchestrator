@@ -33,6 +33,69 @@ class StateStore:
         self._lock = threading.Lock()
         self.subscribers = set()  # set of queue.Queue
         self._init_db()
+        self._start_token_auditor()
+
+    def _start_token_auditor(self):
+        """Background daemon: automatically audits and synchronizes tokens from Antigravity transcripts every 3 seconds."""
+        def _audit_loop():
+            brain_dir = os.path.expanduser("~/.gemini/antigravity/brain")
+            while True:
+                time.sleep(3)
+                if not os.path.isdir(brain_dir):
+                    continue
+                try:
+                    updates = []
+                    with self._lock:
+                        conn = self._get_connection()
+                        try:
+                            cur = conn.cursor()
+                            cur.execute("SELECT task_id, conv_id, input_tokens, output_tokens, cache_tokens, total_tokens FROM tasks")
+                            rows = cur.fetchall()
+                            for r in rows:
+                                c_id = r["conv_id"]
+                                if not c_id:
+                                    continue
+                                t_path = os.path.join(brain_dir, c_id, ".system_generated", "logs", "transcript.jsonl")
+                                if not os.path.isfile(t_path):
+                                    continue
+                                in_t, out_t, cache_t = 0, 0, 0
+                                with open(t_path, "r", encoding="utf-8") as f:
+                                    for line in f:
+                                        try:
+                                            d = json.loads(line)
+                                            in_t += d.get("input_tokens", 0)
+                                            out_t += d.get("output_tokens", 0)
+                                            cache_t += d.get("cache_read_tokens", 0)
+                                        except Exception:
+                                            pass
+                                tot = in_t + out_t + cache_t
+                                if tot > r["total_tokens"]:
+                                    updates.append((in_t, out_t, cache_t, tot, r["task_id"]))
+
+                            if updates:
+                                now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+                                with conn:
+                                    for in_t, out_t, cache_t, tot, t_id in updates:
+                                        conn.execute("""
+                                            UPDATE tasks SET
+                                                input_tokens = ?,
+                                                output_tokens = ?,
+                                                cache_tokens = ?,
+                                                total_tokens = ?,
+                                                updated_at = ?
+                                            WHERE task_id = ?
+                                        """, (in_t, out_t, cache_t, tot, now, t_id))
+                                metrics = self._calculate_metrics_conn(conn)
+                        finally:
+                            conn.close()
+
+                    if updates:
+                        self.broadcast("state_sync", {"metrics": metrics})
+                except Exception:
+                    pass
+
+        t = threading.Thread(target=_audit_loop, daemon=True)
+        t.start()
 
     def _get_connection(self):
         conn = sqlite3.connect(self.db_path, check_same_thread=False)
