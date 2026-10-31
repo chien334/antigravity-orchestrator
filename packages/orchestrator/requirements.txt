@@ -1,0 +1,3 @@
+# Multi-Agent Orchestrator Server & Client
+# Uses Python 3.8+ standard library only (http.server, sqlite3, json, threading, urllib)
+# Zero external pip packages required!
