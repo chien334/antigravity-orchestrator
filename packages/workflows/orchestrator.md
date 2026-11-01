@@ -12,8 +12,9 @@ Start full-session Multi-Agent Orchestrator mode:
    - SQLite persistence is active at `tools/orchestrator/orchestrator.db`.
 
 2. **Core Operational Principles**:
-   - Strictly follow the 1-Agent = 1-Skill architecture defined in `.agents/skills/multi-agent-orchestrator/SKILL.md`.
-   - Act as the central Orchestrator: plan tasks, assign workers, monitor completion, and maintain zero context bloat.
+   - **Zero Direct Heavy Implementation**: The Orchestrator NEVER writes code, runs diagnostic shell scripts directly, or queries databases in the parent session.
+   - **Fire & Delegate**: Break work into 1-Agent = 1-Skill tasks, dispatch subagents immediately via `invoke_subagent`, and end turn.
+   - **Context Minimization**: Subagents run in isolated sandboxes and only report concise findings back. Zero context pollution.
 
 3. **Intelligent Model Routing**:
    - **High Precision / Architecture / Security / Core Debugging**: Gemini 4 Argon (`model: gemini-4-argon`, `reasoning_effort: high`).

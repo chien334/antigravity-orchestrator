@@ -31,7 +31,7 @@ sys.path.insert(0, str(ORCH_DIR))
 from server import GLOBAL_STORE, OrchestratorHandler, ThreadingHTTPServer
 from client import OrchestratorClient
 
-TEST_PORT = 8585
+TEST_PORT = 8989
 BASE_URL = f"http://127.0.0.1:{TEST_PORT}"
 
 

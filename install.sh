@@ -141,6 +141,10 @@ if [[ "$TARGET_DIR" != "." ]] || [[ -d ".git" ]] || [[ -d ".agents" ]]; then
     cp "$SCRIPT_DIR/packages/commands/orchestrator.toml" "$DEST_DIR/.gemini/commands/"
     cp "$SCRIPT_DIR/packages/orchestrator/"*.py "$DEST_DIR/tools/orchestrator/"
     chmod +x "$DEST_DIR/tools/orchestrator/"*.py
+    if [[ -f "$SCRIPT_DIR/packages/rules/GEMINI.md" ]]; then
+        cp "$SCRIPT_DIR/packages/rules/GEMINI.md" "$DEST_DIR/GEMINI.md"
+        echo -e "    -> Installed GEMINI.md multi-agent workflow rules into workspace root."
+    fi
     echo -e "${GREEN}[✓] Workspace initialized with ${SKILL_COUNT} skills at ${DEST_DIR}${NC}"
 else
     echo -e "    (Skipped project-local install. Run './install.sh /path/to/project' to install in a specific repo)."
