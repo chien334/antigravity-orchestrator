@@ -108,6 +108,30 @@ class StateStore:
                                 t_path = os.path.join(brain_dir, c_id, ".system_generated", "logs", "transcript.jsonl")
                                 if not os.path.isfile(t_path):
                                     continue
+
+                                # Auto-detect if c_id is parent orchestrator dispatching a child subagent
+                                target_child = None
+                                try:
+                                    with open(t_path, "r", encoding="utf-8") as f_check:
+                                        for line in f_check:
+                                            try:
+                                                d_chk = json.loads(line)
+                                                for tc in d_chk.get("tool_calls", []):
+                                                    if tc.get("name") == "send_message":
+                                                        recip = tc.get("args", {}).get("Recipient")
+                                                        if recip:
+                                                            target_child = recip.strip().strip('"').strip("'")
+                                            except Exception:
+                                                pass
+                                    if target_child and target_child != c_id:
+                                        child_t_path = os.path.join(brain_dir, target_child, ".system_generated", "logs", "transcript.jsonl")
+                                        if os.path.isfile(child_t_path):
+                                            c_id = target_child
+                                            t_path = child_t_path
+                                            conn.execute("UPDATE tasks SET conv_id = ? WHERE task_id = ?", (target_child, r["task_id"]))
+                                except Exception:
+                                    pass
+
                                 in_t, out_t, cache_t = 0, 0, 0
                                 last_step = self._processed_steps.get(c_id, -1)
                                 max_step_in_file = last_step
@@ -547,6 +571,35 @@ class StateStore:
         if c_id and os.path.isdir(brain_dir):
             t_path = os.path.join(brain_dir, c_id, ".system_generated", "logs", "transcript.jsonl")
             if os.path.isfile(t_path):
+                # Auto-detect if c_id was parent orchestrator that sent a message to child subagent
+                try:
+                    target_child = None
+                    with open(t_path, "r", encoding="utf-8") as f_check:
+                        for line in f_check:
+                            try:
+                                d_chk = json.loads(line)
+                                for tc in d_chk.get("tool_calls", []):
+                                    if tc.get("name") == "send_message":
+                                        recip = tc.get("args", {}).get("Recipient")
+                                        if recip:
+                                            target_child = recip.strip().strip('"').strip("'")
+                            except Exception:
+                                pass
+                    if target_child and target_child != c_id:
+                        child_t_path = os.path.join(brain_dir, target_child, ".system_generated", "logs", "transcript.jsonl")
+                        if os.path.isfile(child_t_path):
+                            c_id = target_child
+                            t_path = child_t_path
+                            with self._lock:
+                                conn_up = self._get_connection()
+                                try:
+                                    with conn_up:
+                                        conn_up.execute("UPDATE tasks SET conv_id = ? WHERE task_id = ?", (target_child, task_id))
+                                finally:
+                                    conn_up.close()
+                except Exception:
+                    pass
+
                 try:
                     with open(t_path, "r", encoding="utf-8") as f:
                         for line in f:
