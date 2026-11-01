@@ -181,9 +181,9 @@ class StateStore:
                     if updates:
                         self.broadcast("state_sync", {"metrics": metrics})
                     
-                    # Append and broadcast new live activity logs
-                    for t_id, a_type, lvl, msg in new_logs:
-                        self.append_log(t_id, a_type, lvl, msg)
+                    # Append and broadcast new live activity logs in batch
+                    if new_logs:
+                        self.append_logs_batch(new_logs)
                 except Exception:
                     pass
 
@@ -469,7 +469,7 @@ class StateStore:
                     """, (now, t_id, a_type, lvl, msg))
                     conn.execute("""
                         DELETE FROM logs WHERE id NOT IN (
-                            SELECT id FROM logs ORDER BY id DESC LIMIT 1000
+                            SELECT id FROM logs ORDER BY id DESC LIMIT 5000
                         )
                     """)
                 log_entry = {
@@ -485,6 +485,45 @@ class StateStore:
         # Notify subscribers
         self.broadcast("log_event", log_entry)
         return log_entry
+
+    def append_logs_batch(self, entries):
+        """Append multiple log entries in a single transaction with ring-buffer broadcasting."""
+        if not entries:
+            return []
+        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        log_entries = []
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                with conn:
+                    for t_id, a_type, lvl, msg in entries:
+                        t_id = t_id or "GENERAL"
+                        a_type = a_type or "system"
+                        lvl = (lvl or "info").lower()
+                        msg = str(msg)
+                        conn.execute("""
+                            INSERT INTO logs (timestamp, task_id, agent_type, level, message)
+                            VALUES (?, ?, ?, ?, ?)
+                        """, (now, t_id, a_type, lvl, msg))
+                        log_entries.append({
+                            "timestamp": now,
+                            "task_id": t_id,
+                            "agent_type": a_type,
+                            "level": lvl,
+                            "message": msg,
+                        })
+                    conn.execute("""
+                        DELETE FROM logs WHERE id NOT IN (
+                            SELECT id FROM logs ORDER BY id DESC LIMIT 5000
+                        )
+                    """)
+            finally:
+                conn.close()
+
+        # Notify subscribers
+        for entry in log_entries:
+            self.broadcast("log_event", entry)
+        return log_entries
 
     def get_task_transcript(self, task_id):
         """Retrieve and parse the live activity stream from a subagent transcript."""
@@ -586,7 +625,7 @@ class StateStore:
             "tokens": task["tokens"],
             "cost": task["cost"],
             "latest_action": latest_action,
-            "activities": activities[-100:]
+            "activities": activities[-1000:]
         }
 
     def get_state(self):
@@ -625,7 +664,7 @@ class StateStore:
         return {"status": "ok", "metrics": metrics}
 
     def subscribe(self):
-        q = queue.Queue(maxsize=100)
+        q = queue.Queue(maxsize=5000)
         with self._lock:
             self.subscribers.add(q)
         return q
@@ -637,14 +676,17 @@ class StateStore:
     def broadcast(self, event_type, payload):
         data = f"event: {event_type}\ndata: {json.dumps(payload)}\n\n"
         with self._lock:
-            dead = []
-            for q in self.subscribers:
+            for q in list(self.subscribers):
                 try:
                     q.put_nowait(data)
                 except queue.Full:
-                    dead.append(q)
-            for q in dead:
-                self.subscribers.discard(q)
+                    # Ring-buffer policy: discard oldest unread message, push newest event.
+                    # NEVER kill or drop the subscriber connection on high log volume!
+                    try:
+                        q.get_nowait()
+                        q.put_nowait(data)
+                    except Exception:
+                        pass
 
 
 GLOBAL_STORE = StateStore()
@@ -1748,6 +1790,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
       containers.forEach(container => {
         if (!container) return;
+        while (container.children.length > 2000) {
+          container.removeChild(container.firstChild);
+        }
         const el = document.createElement('div');
         el.className = `log-item font-mono py-0.5 border-b border-slate-900/40 hover:bg-slate-900/60 flex items-start space-x-2`;
         el.dataset.level = log.level || 'info';
@@ -1890,6 +1935,27 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         renderMetrics({ total: 0, pending: 0, running: 0, completed: 0, blocked: 0, cancelled: 0, active_agents: 0 });
         updatePipelineStages();
       });
+
+      // Robust fallback state polling: ensures tasks, progress and metrics stay fresh
+      // even if extreme log storms or proxy buffers momentarily delay SSE delivery.
+      setInterval(() => {
+        fetch('/api/state')
+          .then(r => r.json())
+          .then(full => {
+            if (full && full.tasks) {
+              state.tasks = {};
+              full.tasks.forEach(t => { state.tasks[t.task_id] = t; });
+              if (full.metrics) {
+                state.metrics = full.metrics;
+                renderMetrics(state.metrics);
+              }
+              renderTasksTable();
+              renderHistoryTable();
+              updatePipelineStages();
+            }
+          })
+          .catch(() => {});
+      }, 4000);
     }
 
     // ---------------------------------------------------------------------------
