@@ -25,50 +25,60 @@ DEFAULT_DB_PATH = os.environ.get(
 )
 
 # ---------------------------------------------------------------------------
-# Pricing Constants & Cost Estimation
+# Pricing Constants, Models & Router Imports (Backward Compatible Exports)
 # ---------------------------------------------------------------------------
-# Gemini Token Rates (USD per 1,000,000 tokens)
-PRICING_TABLE = {
-    "argon": {"in": 1.25, "out": 5.00, "cache": 0.3125},
-    "pro": {"in": 1.25, "out": 5.00, "cache": 0.3125},
-    "gemini-4-argon": {"in": 1.25, "out": 5.00, "cache": 0.3125},
-    "gemini-1.5-pro": {"in": 1.25, "out": 5.00, "cache": 0.3125},
-    "flash": {"in": 0.075, "out": 0.30, "cache": 0.01875},
-    "gemini-3.8-flash": {"in": 0.075, "out": 0.30, "cache": 0.01875},
-    "flash_lite": {"in": 0.0375, "out": 0.15, "cache": 0.01},
-    "default": {"in": 1.25, "out": 5.00, "cache": 0.3125},
-}
-USD_TO_VND_RATE = 25400.0
-
-
-def compute_cost(model, in_tok, out_tok, cache_tok):
-    """Calculate actual cost and cache savings in USD and VND."""
-    m = (model or "").lower()
-    rates = PRICING_TABLE["default"]
-    for k in PRICING_TABLE:
-        if k in m:
-            rates = PRICING_TABLE[k]
-            break
-
-    in_cost = (in_tok / 1_000_000.0) * rates["in"]
-    out_cost = (out_tok / 1_000_000.0) * rates["out"]
-    cache_cost = (cache_tok / 1_000_000.0) * rates["cache"]
-    actual_usd = in_cost + out_cost + cache_cost
-
-    # Standard baseline cost if cache tokens were charged at full input prompt rate
-    baseline_usd = ((in_tok + cache_tok) / 1_000_000.0) * rates["in"] + out_cost
-    saved_usd = max(0.0, baseline_usd - actual_usd)
-
-    actual_vnd = round(actual_usd * USD_TO_VND_RATE)
-    saved_vnd = round(saved_usd * USD_TO_VND_RATE)
-
-    return {
-        "usd": round(actual_usd, 4),
-        "vnd": actual_vnd,
-        "saved_usd": round(saved_usd, 4),
-        "saved_vnd": saved_vnd,
-        "rates": rates,
-    }
+try:
+    from models import (
+        MODEL_REGISTRY,
+        PRICING_TABLE,
+        USD_TO_VND_RATE,
+        VALID_REASONING_EFFORTS,
+        compute_cost,
+        normalize_model_name,
+        resolve_model_id,
+    )
+    from router import (
+        recommend_model,
+        evaluate_dag_ready,
+        evaluate_ready_tasks,
+        compute_model_analytics,
+        generate_audit_report,
+    )
+except ImportError:
+    try:
+        from packages.orchestrator.models import (
+            MODEL_REGISTRY,
+            PRICING_TABLE,
+            USD_TO_VND_RATE,
+            VALID_REASONING_EFFORTS,
+            compute_cost,
+            normalize_model_name,
+            resolve_model_id,
+        )
+        from packages.orchestrator.router import (
+            recommend_model,
+            evaluate_dag_ready,
+            evaluate_ready_tasks,
+            compute_model_analytics,
+            generate_audit_report,
+        )
+    except ImportError:
+        from .models import (
+            MODEL_REGISTRY,
+            PRICING_TABLE,
+            USD_TO_VND_RATE,
+            VALID_REASONING_EFFORTS,
+            compute_cost,
+            normalize_model_name,
+            resolve_model_id,
+        )
+        from .router import (
+            recommend_model,
+            evaluate_dag_ready,
+            evaluate_ready_tasks,
+            compute_model_analytics,
+            generate_audit_report,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -221,6 +231,16 @@ class StateStore:
         conn.execute("PRAGMA synchronous=NORMAL;")
         return conn
 
+    @staticmethod
+    def _migrate_db(conn):
+        """Automatically adds missing columns to existing tables without data loss."""
+        cur = conn.cursor()
+        cur.execute("PRAGMA table_info(tasks)")
+        columns = [row["name"] for row in cur.fetchall()]
+        if "reasoning_effort" not in columns:
+            conn.execute("ALTER TABLE tasks ADD COLUMN reasoning_effort TEXT DEFAULT NULL")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_model ON tasks(model)")
+
     def _init_db(self):
         with self._lock:
             conn = self._get_connection()
@@ -239,6 +259,7 @@ class StateStore:
                             conv_id TEXT,
                             depends_on TEXT,
                             parallel_group TEXT,
+                            reasoning_effort TEXT DEFAULT NULL,
                             input_tokens INTEGER NOT NULL DEFAULT 0,
                             output_tokens INTEGER NOT NULL DEFAULT 0,
                             cache_tokens INTEGER NOT NULL DEFAULT 0,
@@ -259,7 +280,9 @@ class StateStore:
                     """)
                     conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status)")
                     conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_group ON tasks(parallel_group)")
+                    conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_model ON tasks(model)")
                     conn.execute("CREATE INDEX IF NOT EXISTS idx_logs_id ON logs(id DESC)")
+                    self._migrate_db(conn)
             finally:
                 conn.close()
 
@@ -277,6 +300,7 @@ class StateStore:
         cache_tok = int(row["cache_tokens"])
         total_tok = int(row["total_tokens"])
         cost = compute_cost(row["model"], in_tok, out_tok, cache_tok)
+        reasoning_effort = row["reasoning_effort"] if "reasoning_effort" in row.keys() else None
 
         return {
             "task_id": row["task_id"],
@@ -290,6 +314,7 @@ class StateStore:
             "conv_id": row["conv_id"] or "",
             "depends_on": deps,
             "parallel_group": row["parallel_group"] or "",
+            "reasoning_effort": reasoning_effort,
             "tokens": {
                 "input": in_tok,
                 "output": out_tok,
@@ -354,7 +379,24 @@ class StateStore:
             "total_saved_vnd": total_saved_vnd,
         }
 
-    def upsert_task(self, task_id, agent_type, status, progress=None, scope=None, notes=None, conv_id=None, model=None, complexity=None, depends_on=None, parallel_group=None, input_tokens=None, output_tokens=None, cache_tokens=None):
+    def upsert_task(
+        self,
+        task_id,
+        agent_type=None,
+        status=None,
+        progress=None,
+        scope=None,
+        notes=None,
+        conv_id=None,
+        model=None,
+        complexity=None,
+        depends_on=None,
+        parallel_group=None,
+        input_tokens=None,
+        output_tokens=None,
+        cache_tokens=None,
+        reasoning_effort=None,
+    ):
         with self._lock:
             conn = self._get_connection()
             try:
@@ -381,7 +423,11 @@ class StateStore:
                 total_tok = in_tok + out_tok + cache_tok
 
                 final_agent = agent_type or existing.get("agent_type", "orchestrator")
-                final_model = model if model is not None else existing.get("model", "auto")
+                if model is not None:
+                    final_model = normalize_model_name(model)
+                else:
+                    final_model = existing.get("model", "gemini-4-argon")
+
                 final_complexity = (complexity if complexity is not None else existing.get("complexity", "medium")).lower()
                 final_status = status or existing.get("status", "pending")
                 final_progress = max(0, min(100, int(progress) if progress is not None else existing.get("progress", 0)))
@@ -390,13 +436,23 @@ class StateStore:
                 final_conv_id = conv_id if conv_id is not None else existing.get("conv_id", "")
                 created_at = existing.get("created_at", now)
 
+                # Reasoning effort validation/normalization
+                if reasoning_effort is not None:
+                    raw_effort = str(reasoning_effort).strip().lower() if reasoning_effort else ""
+                    if raw_effort in VALID_REASONING_EFFORTS:
+                        final_reasoning_effort = raw_effort
+                    else:
+                        final_reasoning_effort = None
+                else:
+                    final_reasoning_effort = existing.get("reasoning_effort", None)
+
                 with conn:
                     conn.execute("""
                         INSERT INTO tasks (
                             task_id, agent_type, model, complexity, status, progress, scope,
-                            notes, conv_id, depends_on, parallel_group, input_tokens,
+                            notes, conv_id, depends_on, parallel_group, reasoning_effort, input_tokens,
                             output_tokens, cache_tokens, total_tokens, created_at, updated_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         ON CONFLICT(task_id) DO UPDATE SET
                             agent_type=excluded.agent_type,
                             model=excluded.model,
@@ -408,6 +464,7 @@ class StateStore:
                             conv_id=excluded.conv_id,
                             depends_on=excluded.depends_on,
                             parallel_group=excluded.parallel_group,
+                            reasoning_effort=excluded.reasoning_effort,
                             input_tokens=excluded.input_tokens,
                             output_tokens=excluded.output_tokens,
                             cache_tokens=excluded.cache_tokens,
@@ -416,7 +473,7 @@ class StateStore:
                     """, (
                         task_id, final_agent, final_model, final_complexity, final_status,
                         final_progress, final_scope, final_notes, final_conv_id,
-                        json.dumps(deps), group, in_tok, out_tok, cache_tok, total_tok,
+                        json.dumps(deps), group, final_reasoning_effort, in_tok, out_tok, cache_tok, total_tok,
                         created_at, now
                     ))
 
@@ -743,12 +800,13 @@ class StateStore:
 
 
 GLOBAL_STORE = StateStore()
+_migrate_db = StateStore._migrate_db
 
 # ---------------------------------------------------------------------------
-# HTML Dashboard Template
+# HTML Dashboard Fallback Template
 # ---------------------------------------------------------------------------
 
-DASHBOARD_HTML = """<!DOCTYPE html>
+_FALLBACK_DASHBOARD_HTML = """<!DOCTYPE html>
 <html lang="en" class="dark">
 <head>
   <meta charset="UTF-8">
@@ -2324,6 +2382,28 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 """
 
 # ---------------------------------------------------------------------------
+# Dashboard Loader & Dynamic Resolver
+# ---------------------------------------------------------------------------
+
+def get_dashboard_html() -> str:
+    """Return upgraded dashboard HTML from dashboard.py, or fallback."""
+    try:
+        from dashboard import DASHBOARD_HTML as D_HTML
+        if D_HTML:
+            return D_HTML
+    except ImportError:
+        pass
+    try:
+        from packages.orchestrator.dashboard import DASHBOARD_HTML as D_HTML
+        if D_HTML:
+            return D_HTML
+    except ImportError:
+        pass
+    return _FALLBACK_DASHBOARD_HTML
+
+DASHBOARD_HTML = get_dashboard_html()
+
+# ---------------------------------------------------------------------------
 # HTTP Request Handler
 # ---------------------------------------------------------------------------
 
@@ -2345,8 +2425,8 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path
 
-        if path == "/" or path == "/index.html":
-            body = DASHBOARD_HTML.encode("utf-8")
+        if path in ("/", "/index.html"):
+            body = get_dashboard_html().encode("utf-8")
             self.send_response(HTTPStatus.OK)
             self._set_cors_headers()
             self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -2361,6 +2441,60 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
             self.send_response(HTTPStatus.OK)
             self._set_cors_headers()
             self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
+        if path == "/api/models":
+            data = {"status": "ok", "models": MODEL_REGISTRY}
+            body = json.dumps(data).encode("utf-8")
+            self.send_response(HTTPStatus.OK)
+            self._set_cors_headers()
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
+        if path == "/api/dag/ready":
+            state = GLOBAL_STORE.get_state()
+            data = evaluate_dag_ready(state["tasks"])
+            body = json.dumps(data).encode("utf-8")
+            self.send_response(HTTPStatus.OK)
+            self._set_cors_headers()
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
+        if path == "/api/analytics/models":
+            state = GLOBAL_STORE.get_state()
+            data = compute_model_analytics(state["tasks"])
+            body = json.dumps(data).encode("utf-8")
+            self.send_response(HTTPStatus.OK)
+            self._set_cors_headers()
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
+        if path == "/api/audit/export":
+            qs = parse_qs(parsed.query)
+            fmt = qs.get("format", ["markdown"])[0].lower()
+            state = GLOBAL_STORE.get_state()
+            report = generate_audit_report(state["tasks"], state["logs"], state["metrics"], format=fmt)
+            self.send_response(HTTPStatus.OK)
+            self._set_cors_headers()
+            if fmt == "json":
+                body = json.dumps(report).encode("utf-8")
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+            else:
+                body = report.encode("utf-8")
+                self.send_header("Content-Type", "text/markdown; charset=utf-8")
+                self.send_header("Content-Disposition", 'attachment; filename="mission_audit_report.md"')
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
@@ -2460,6 +2594,7 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
             complexity = payload.get("complexity") or payload.get("tier")
             depends_on = payload.get("depends_on")
             parallel_group = payload.get("parallel_group") or payload.get("group")
+            reasoning_effort = payload.get("reasoning_effort") or payload.get("effort")
             input_tokens = payload.get("input_tokens")
             output_tokens = payload.get("output_tokens")
             cache_tokens = payload.get("cache_tokens") or payload.get("cache_read_tokens")
@@ -2476,12 +2611,38 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
                 complexity=complexity,
                 depends_on=depends_on,
                 parallel_group=parallel_group,
+                reasoning_effort=reasoning_effort,
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
                 cache_tokens=cache_tokens,
             )
 
             res = json.dumps({"status": "ok", "task": task}).encode("utf-8")
+            self.send_response(HTTPStatus.OK)
+            self._set_cors_headers()
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(res)))
+            self.end_headers()
+            self.wfile.write(res)
+            return
+
+        if path == "/api/router/recommend":
+            agent_type = payload.get("agent_type", "")
+            complexity = payload.get("complexity", "medium")
+            scope = payload.get("scope", "")
+            file_count = int(payload.get("file_count") or payload.get("files") or 0)
+            has_security_impact = bool(payload.get("has_security_impact") or payload.get("security_impact") or False)
+            budget_mode = payload.get("budget_mode", "balanced")
+
+            rec = recommend_model(
+                agent_type=agent_type,
+                complexity=complexity,
+                scope=scope,
+                file_count=file_count,
+                has_security_impact=has_security_impact,
+                budget_mode=budget_mode,
+            )
+            res = json.dumps(rec).encode("utf-8")
             self.send_response(HTTPStatus.OK)
             self._set_cors_headers()
             self.send_header("Content-Type", "application/json")

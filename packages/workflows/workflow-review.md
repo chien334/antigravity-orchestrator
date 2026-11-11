@@ -7,13 +7,14 @@ description: Stage 5 Code Review Workflow - Conduct multi-axis review of git dif
 
 ## 1. Objective & Persona
 - **Persona**: `code-reviewer`
-- **Model Engine**: ✦ **Gemini 4 Argon** (`model: gemini-4-argon`, `reasoning_effort: high`)
+- **Model Engine**: ✦ **Gemini 4 Argon** (`model: gemini-4-argon`, `reasoning_effort: high`)  
+  *(Optionally escalate to ✦ **Gemini 4 Carbon** with `reasoning_effort: high` in `quality_first` mode or when reviewing mission-critical core subsystems).*
 - **Primary Skill**: `code-review-and-quality`
 
 ---
 
 ## 2. Input Contract
-- **Prerequisite**: Stage 4 Automated Tests must be completed and passing.
+- **Prerequisite**: Stage 4 Automated Tests must be completed and passing (100% green).
 - **Inputs Required**:
   1. Git Diff of changed files (`git diff origin/main...HEAD` or working tree diff).
   2. Architecture & Task Plan: `docs/plans/{feature_id}.plan.md`.
@@ -24,10 +25,11 @@ description: Stage 5 Code Review Workflow - Conduct multi-axis review of git dif
 ## 3. Execution Steps
 1. **Emit Start Telemetry**:
    ```bash
-   python3 tools/orchestrator/client.py update \
+   python3 packages/orchestrator/client.py update \
      --task "REVIEW-{FEATURE}" \
      --agent "code-reviewer" \
      --model "gemini-4-argon" \
+     --effort "high" \
      --complexity "high" \
      --status "running" \
      --progress 20 \
@@ -46,10 +48,11 @@ description: Stage 5 Code Review Workflow - Conduct multi-axis review of git dif
 4. **Artifact Generation**: Produce `docs/reviews/review_signoff.md`.
 5. **Emit Completion Telemetry**:
    ```bash
-   python3 tools/orchestrator/client.py update \
+   python3 packages/orchestrator/client.py update \
      --task "REVIEW-{FEATURE}" \
      --agent "code-reviewer" \
      --model "gemini-4-argon" \
+     --effort "high" \
      --status "completed" \
      --progress 100 \
      --scope "docs/reviews/review_signoff.md" \
@@ -65,7 +68,7 @@ Save to: `docs/reviews/review_signoff.md`
 # Code Review Sign-off: {Feature Name}
 
 - **Feature ID**: {feature_id}
-- **Reviewer**: code-reviewer (Gemini 4 Argon)
+- **Reviewer**: code-reviewer (Gemini 4 Argon, reasoning_effort: high)
 - **Status**: APPROVED | REQUEST_CHANGES
 - **Date**: {YYYY-MM-DD}
 

@@ -7,13 +7,14 @@ description: Stage 4 Testing Workflow - Implement tests matching acceptance crit
 
 ## 1. Objective & Persona
 - **Persona**: `test-engineer`
-- **Model Engine**: ⚡ **Gemini 3.8 Flash** (`model: gemini-3.8-flash`, `reasoning_effort: low/medium`)
+- **Model Engine**: ⚡ **Gemini 3.8 Flash** (`model: gemini-3.8-flash`, cost-efficient high-throughput)  
+  *(If unexpected test failures or regressions occur, escalate diagnostic responsibility to `debugger` with ✦ **Gemini 4 Carbon** and `reasoning_effort: high`).*
 - **Primary Skill**: `test-driven-development`
 
 ---
 
 ## 2. Input Contract
-- **Prerequisite**: Stage 3 Builders must have completed implementation.
+- **Prerequisite**: Stage 3 Builders must have completed implementation and passed syntax sanity checks.
 - **Inputs Required**:
   1. Acceptance Criteria & Gherkin Scenarios from `docs/specs/{feature_id}.spec.md`.
   2. Modified source code files from Stage 3.
@@ -24,11 +25,11 @@ description: Stage 4 Testing Workflow - Implement tests matching acceptance crit
 ## 3. Execution Steps
 1. **Emit Start Telemetry**:
    ```bash
-   python3 tools/orchestrator/client.py update \
+   python3 packages/orchestrator/client.py update \
      --task "TEST-{FEATURE}" \
      --agent "test-engineer" \
      --model "gemini-3.8-flash" \
-     --complexity "low" \
+     --complexity "medium" \
      --status "running" \
      --progress 20 \
      --scope "tests/test_{feature}.py" \
@@ -43,7 +44,7 @@ description: Stage 4 Testing Workflow - Implement tests matching acceptance crit
 4. **Artifact Generation**: Produce `docs/reports/test_report.json`.
 5. **Emit Completion Telemetry**:
    ```bash
-   python3 tools/orchestrator/client.py update \
+   python3 packages/orchestrator/client.py update \
      --task "TEST-{FEATURE}" \
      --agent "test-engineer" \
      --model "gemini-3.8-flash" \

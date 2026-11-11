@@ -5,7 +5,7 @@ install:
 	@./install.sh
 
 test:
-	@PYTHONPATH="packages:packages/orchestrator:$$PYTHONPATH" python3 tests/test_orchestrator.py
+	@PYTHONPATH="packages:packages/orchestrator:$$PYTHONPATH" python3 -m unittest discover -s tests
 
 run-server:
 	@python3 packages/orchestrator/server.py --port 8484

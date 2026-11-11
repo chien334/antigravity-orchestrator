@@ -1,10 +1,24 @@
+# Python artifacts
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+
+# SQLite Databases & WAL journal files
 *.db
+*.db-wal
+*.db-shm
+
+# OS artifacts
+.DS_Store
+
+# Environments & Local Tooling
 .venv/
 .agents/
 .gemini/
 tools/
+
+# Dynamic mission artifacts (generated during runtime workflow execution)
 docs/specs/
 docs/plans/
 docs/reports/
