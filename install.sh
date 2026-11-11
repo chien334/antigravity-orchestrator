@@ -85,7 +85,8 @@ echo -e "${BOLD}[3/5] Installing Global Antigravity Skills & Workflows...${NC}"
 
 GLOBAL_CONFIG_DIR="$HOME/.gemini/config"
 GLOBAL_COMMANDS_DIR="$HOME/.gemini/commands"
-mkdir -p "$GLOBAL_CONFIG_DIR/workflows" "$GLOBAL_CONFIG_DIR/global_workflows" "$GLOBAL_CONFIG_DIR/skills" "$GLOBAL_COMMANDS_DIR"
+GLOBAL_TOOLS_DIR="$HOME/.gemini/tools/orchestrator"
+mkdir -p "$GLOBAL_CONFIG_DIR/workflows" "$GLOBAL_CONFIG_DIR/global_workflows" "$GLOBAL_CONFIG_DIR/skills" "$GLOBAL_COMMANDS_DIR" "$GLOBAL_TOOLS_DIR"
 
 # Copy All Agent Skills (addyosmani 1-Agent = 1-Skill package library)
 echo -e "    -> Installing 1-Agent = 1-Skill packages..."
@@ -109,7 +110,16 @@ echo -e "    -> Installed Workflows: $GLOBAL_CONFIG_DIR/workflows/ (*.md)"
 # Copy Commands TOML
 cp "$SCRIPT_DIR/packages/commands/orchestrator.toml" "$GLOBAL_COMMANDS_DIR/orchestrator.toml"
 echo -e "    -> Installed Command: $GLOBAL_COMMANDS_DIR/orchestrator.toml"
-echo -e "${GREEN}[✓] Global configurations installed successfully!${NC}"
+
+# Copy Global Orchestrator Python Modules & Assets
+echo -e "    -> Installing Global Orchestrator Modules into: $GLOBAL_TOOLS_DIR..."
+cp "$SCRIPT_DIR/packages/orchestrator/"*.py "$GLOBAL_TOOLS_DIR/"
+chmod +x "$GLOBAL_TOOLS_DIR/"*.py
+if [[ -f "$SCRIPT_DIR/packages/orchestrator/requirements.txt" ]]; then
+    cp "$SCRIPT_DIR/packages/orchestrator/requirements.txt" "$GLOBAL_TOOLS_DIR/"
+fi
+echo -e "    -> Installed Orchestrator Modules: (__init__.py, models.py, router.py, dashboard.py, server.py, client.py)"
+echo -e "${GREEN}[✓] Global configurations & tools installed successfully!${NC}"
 
 # ------------------------------------------------------------------------------
 # 4. Optional: Install into Current Project Workspace
@@ -117,37 +127,49 @@ echo -e "${GREEN}[✓] Global configurations installed successfully!${NC}"
 echo ""
 echo -e "${BOLD}[4/5] Checking Workspace Installation...${NC}"
 TARGET_DIR="${1:-.}"
-if [[ "$TARGET_DIR" != "." ]] || [[ -d ".git" ]] || [[ -d ".agents" ]]; then
-    DEST_DIR="$(cd "$TARGET_DIR" && pwd)"
-    echo -e "    Targeting workspace: ${BOLD}${DEST_DIR}${NC}"
-    mkdir -p "$DEST_DIR/.agents/skills" \
-             "$DEST_DIR/.agents/workflows" \
-             "$DEST_DIR/.gemini/commands" \
-             "$DEST_DIR/tools/orchestrator" \
-             "$DEST_DIR/docs/specs" \
-             "$DEST_DIR/docs/plans" \
-             "$DEST_DIR/docs/reports" \
-             "$DEST_DIR/docs/reviews" \
-             "$DEST_DIR/docs/security"
+
+sync_target_workspace() {
+    local target_path="$1"
+    local dest_dir="$(cd "$target_path" && pwd)"
+    echo -e "    Targeting workspace: ${BOLD}${dest_dir}${NC}"
+    mkdir -p "$dest_dir/.agents/skills" \
+             "$dest_dir/.agents/workflows" \
+             "$dest_dir/.gemini/commands" \
+             "$dest_dir/tools/orchestrator" \
+             "$dest_dir/docs/specs" \
+             "$dest_dir/docs/plans" \
+             "$dest_dir/docs/reports" \
+             "$dest_dir/docs/reviews" \
+             "$dest_dir/docs/security"
 
     for skill_dir in "$SCRIPT_DIR/packages/skills/"*; do
         if [[ -d "$skill_dir" ]]; then
             sname=$(basename "$skill_dir")
-            mkdir -p "$DEST_DIR/.agents/skills/$sname"
-            cp -r "$skill_dir/"* "$DEST_DIR/.agents/skills/$sname/"
+            mkdir -p "$dest_dir/.agents/skills/$sname"
+            cp -r "$skill_dir/"* "$dest_dir/.agents/skills/$sname/"
         fi
     done
-    cp "$SCRIPT_DIR/packages/workflows/"*.md "$DEST_DIR/.agents/workflows/"
-    cp "$SCRIPT_DIR/packages/commands/orchestrator.toml" "$DEST_DIR/.gemini/commands/"
-    cp "$SCRIPT_DIR/packages/orchestrator/"*.py "$DEST_DIR/tools/orchestrator/"
-    chmod +x "$DEST_DIR/tools/orchestrator/"*.py
+    cp "$SCRIPT_DIR/packages/workflows/"*.md "$dest_dir/.agents/workflows/"
+    cp "$SCRIPT_DIR/packages/commands/orchestrator.toml" "$dest_dir/.gemini/commands/"
+    cp "$SCRIPT_DIR/packages/orchestrator/"*.py "$dest_dir/tools/orchestrator/"
+    chmod +x "$dest_dir/tools/orchestrator/"*.py
     if [[ -f "$SCRIPT_DIR/packages/rules/GEMINI.md" ]]; then
-        cp "$SCRIPT_DIR/packages/rules/GEMINI.md" "$DEST_DIR/GEMINI.md"
+        cp "$SCRIPT_DIR/packages/rules/GEMINI.md" "$dest_dir/GEMINI.md"
         echo -e "    -> Installed GEMINI.md multi-agent workflow rules into workspace root."
     fi
-    echo -e "${GREEN}[✓] Workspace initialized with ${SKILL_COUNT} skills at ${DEST_DIR}${NC}"
-else
-    echo -e "    (Skipped project-local install. Run './install.sh /path/to/project' to install in a specific repo)."
+    echo -e "${GREEN}[✓] Workspace synced: ${dest_dir}${NC}"
+}
+
+if [[ "$TARGET_DIR" != "." ]] && [[ -d "$TARGET_DIR" ]]; then
+    sync_target_workspace "$TARGET_DIR"
+elif [[ -d ".git" ]] || [[ -d ".agents" ]]; then
+    sync_target_workspace "."
+fi
+
+# Auto-sync live active workspace if it exists (e.g. running daemon)
+if [[ -d "$HOME/SourceCodes/hospital-suite/tools/orchestrator" ]]; then
+    echo -e "    -> Auto-syncing live daemon workspace: $HOME/SourceCodes/hospital-suite..."
+    sync_target_workspace "$HOME/SourceCodes/hospital-suite"
 fi
 
 # ------------------------------------------------------------------------------
@@ -155,7 +177,7 @@ fi
 # ------------------------------------------------------------------------------
 echo ""
 echo -e "${BOLD}[5/5] Running Self-Test Verification Suite...${NC}"
-PYTHONPATH="$SCRIPT_DIR/packages:$SCRIPT_DIR/packages/orchestrator:${PYTHONPATH:-}" python3 "$SCRIPT_DIR/tests/test_orchestrator.py"
+PYTHONPATH="$SCRIPT_DIR/packages:$SCRIPT_DIR/packages/orchestrator:${PYTHONPATH:-}" python3 -m unittest discover -s "$SCRIPT_DIR/tests"
 
 echo ""
 echo -e "${GREEN}${BOLD}================================================================${NC}"
