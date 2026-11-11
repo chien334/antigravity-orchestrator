@@ -1,13 +1,13 @@
 ---
 name: workflow-security
-description: Stage 6 Security Audit Workflow - Deep OWASP, authentication, data privacy, and secret scanning producing docs/security/security_audit.md
+description: Stage 6 Security Audit Workflow - Deep OWASP, authentication, data privacy, and secret scanning using Gemini 4 Carbon producing docs/security/security_audit.md
 ---
 
 # Stage 6: Security & Hardening Audit Workflow
 
 ## 1. Objective & Persona
 - **Persona**: `security-auditor`
-- **Model Engine**: ✦ **Gemini 4 Argon** (`model: gemini-4-argon`, `reasoning_effort: high`)
+- **Model Engine**: ✦ **Gemini 4 Carbon** (`model: gemini-4-carbon`, `reasoning_effort: high`)
 - **Primary Skill**: `security-and-hardening`
 
 ---
@@ -24,29 +24,33 @@ description: Stage 6 Security Audit Workflow - Deep OWASP, authentication, data 
 ## 3. Execution Steps
 1. **Emit Start Telemetry**:
    ```bash
-   python3 tools/orchestrator/client.py update \
+   python3 packages/orchestrator/client.py update \
      --task "SEC-{FEATURE}" \
      --agent "security-auditor" \
-     --model "gemini-4-argon" \
+     --model "gemini-4-carbon" \
+     --effort "high" \
      --complexity "critical" \
      --status "running" \
      --progress 20 \
      --scope "Threat Modeling & Vulnerability Scan" \
-     --notes "Analyzing OWASP Top 10, Auth/Authz, and Secret Leaks"
+     --notes "Deep frontier reasoning: OWASP Top 10, Auth/Authz, and Secret Leaks"
    ```
-2. **Deep Security Inspection**:
-   - **Injection Defense**: SQL injection, command execution, path traversal, XSS.
+2. **Deep Security Inspection with Gemini 4 Carbon**:
+   - **Injection Defense**: SQL injection, command execution, path traversal, XSS, SSRF.
    - **Authentication & Authorization**: Session token integrity, RBAC checks, privilege escalation boundaries.
    - **Data Privacy & Compliance**: Sanitization of PII / medical data in logs, queries, and errors.
    - **Secret & Credential Leakage**: Hardcoded passwords, API tokens, private keys.
    - **Denial of Service**: Unbounded loops, memory allocation limits, payload size limits.
+   - **Autonomous Verification Loops**: Fuzz edge-case payloads against security boundary contracts.
 3. **Artifact Generation**: Produce `docs/security/security_audit.md`.
 4. **Emit Completion Telemetry**:
    ```bash
-   python3 tools/orchestrator/client.py update \
+   python3 packages/orchestrator/client.py update \
      --task "SEC-{FEATURE}" \
      --agent "security-auditor" \
-     --model "gemini-4-argon" \
+     --model "gemini-4-carbon" \
+     --effort "high" \
+     --complexity "critical" \
      --status "completed" \
      --progress 100 \
      --scope "docs/security/security_audit.md" \
@@ -62,7 +66,7 @@ Save to: `docs/security/security_audit.md`
 # Security & Hardening Audit: {Feature Name}
 
 - **Feature ID**: {feature_id}
-- **Auditor**: security-auditor (Gemini 4 Argon)
+- **Auditor**: security-auditor (Gemini 4 Carbon, reasoning_effort: high)
 - **Status**: PASSED | BLOCKED
 - **Date**: {YYYY-MM-DD}
 
@@ -87,4 +91,4 @@ Save to: `docs/security/security_audit.md`
 - **Verdict**: `PASSED FOR PRODUCTION DEPLOYMENT`
 ```
 
-> **Handoff**: On `PASSED`, the Orchestrator marks the entire feature pipeline as `READY_FOR_RELEASE`.
+> **Handoff**: On `PASSED`, the Orchestrator marks the entire feature pipeline as `READY_FOR_RELEASE` and triggers audit export via `python3 packages/orchestrator/client.py export --format markdown`.
