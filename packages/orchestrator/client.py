@@ -2,12 +2,14 @@
 """
 Multi-Agent Orchestrator Client
 Python library and CLI utility for sending telemetry, task updates, and logs to the Orchestrator Server.
+Features Gemini 4 Carbon evolution: smart model routing, DAG ready-queue querying, model analytics, and audit exporting.
 """
 
 import argparse
 import json
 import os
 import sys
+from typing import Any, Dict, List, Optional, Union
 import urllib.error
 import urllib.request
 
@@ -17,7 +19,7 @@ DEFAULT_BASE_URL = os.environ.get("ORCHESTRATOR_URL", "http://localhost:8484").r
 class OrchestratorClient:
     """Client for interacting with the Multi-Agent Orchestrator Server."""
 
-    def __init__(self, base_url: str = None):
+    def __init__(self, base_url: Optional[str] = None):
         self.base_url = (base_url or DEFAULT_BASE_URL).rstrip("/")
 
     def _post(self, path: str, payload: dict) -> dict:
@@ -49,17 +51,18 @@ class OrchestratorClient:
         task_id: str,
         agent_type: str,
         status: str,
-        progress: int = None,
-        scope: str = None,
-        notes: str = None,
-        conv_id: str = None,
-        model: str = None,
-        complexity: str = None,
-        depends_on: list = None,
-        parallel_group: str = None,
-        input_tokens: int = None,
-        output_tokens: int = None,
-        cache_tokens: int = None,
+        progress: Optional[int] = None,
+        scope: Optional[str] = None,
+        notes: Optional[str] = None,
+        conv_id: Optional[str] = None,
+        model: Optional[str] = None,
+        complexity: Optional[str] = None,
+        depends_on: Optional[list] = None,
+        parallel_group: Optional[str] = None,
+        input_tokens: Optional[int] = None,
+        output_tokens: Optional[int] = None,
+        cache_tokens: Optional[int] = None,
+        reasoning_effort: Optional[str] = None,
     ) -> dict:
         """Update or create a task status in the Orchestrator dashboard."""
         payload = {
@@ -89,10 +92,12 @@ class OrchestratorClient:
             payload["output_tokens"] = output_tokens
         if cache_tokens is not None:
             payload["cache_tokens"] = cache_tokens
+        if reasoning_effort is not None:
+            payload["reasoning_effort"] = reasoning_effort
 
         return self._post("/api/tasks", payload)
 
-    def kill_task(self, task_id: str, reason: str = None) -> dict:
+    def kill_task(self, task_id: str, reason: Optional[str] = None) -> dict:
         """Kill or cancel a running task via the Orchestrator."""
         payload = {"task_id": task_id}
         if reason:
@@ -122,6 +127,110 @@ class OrchestratorClient:
     def reset(self) -> dict:
         """Reset state in the Orchestrator dashboard."""
         return self._post("/api/reset", {})
+
+    def list_models(self) -> dict:
+        """Retrieve registered models, pricing, and capabilities (GET /api/models)."""
+        return self._get("/api/models")
+
+    def recommend_model(
+        self,
+        agent_type: str,
+        complexity: str = "medium",
+        scope: str = "",
+        file_count: int = 0,
+        has_security_impact: bool = False,
+        budget_mode: str = "balanced",
+        **kwargs,
+    ) -> dict:
+        """Call POST /api/router/recommend to dynamically recommend model and reasoning effort."""
+        files = kwargs.get("files", file_count)
+        sec_impact = kwargs.get("security_impact", has_security_impact)
+        payload = {
+            "agent_type": agent_type,
+            "complexity": complexity,
+            "scope": scope,
+            "file_count": files,
+            "has_security_impact": sec_impact,
+            "budget_mode": budget_mode,
+        }
+        return self._post("/api/router/recommend", payload)
+
+    def recommend(
+        self,
+        agent_type: str,
+        complexity: str = "medium",
+        scope: str = "",
+        files: int = 0,
+        security_impact: bool = False,
+        budget_mode: str = "balanced",
+        **kwargs,
+    ) -> dict:
+        """Alias for recommend_model matching plan specification."""
+        file_count = kwargs.get("file_count", files)
+        has_sec = kwargs.get("has_security_impact", security_impact)
+        return self.recommend_model(
+            agent_type=agent_type,
+            complexity=complexity,
+            scope=scope,
+            file_count=file_count,
+            has_security_impact=has_sec,
+            budget_mode=budget_mode,
+        )
+
+    def get_ready_tasks(self) -> dict:
+        """Retrieve ready and unblocked tasks from the DAG Ready Queue (GET /api/dag/ready)."""
+        return self._get("/api/dag/ready")
+
+    def next_ready(self) -> dict:
+        """Call GET /api/dag/ready to retrieve ready and unblocked tasks."""
+        return self.get_ready_tasks()
+
+    def get_model_analytics(self) -> dict:
+        """Retrieve per-model token consumption and financial spend breakdown (GET /api/analytics/models)."""
+        return self._get("/api/analytics/models")
+
+    def export_audit(
+        self,
+        fmt: Optional[str] = None,
+        format: Optional[str] = None,
+        out_path: Optional[str] = None,
+        output: Optional[str] = None,
+    ) -> Union[str, dict]:
+        """Fetch audit report from GET /api/audit/export?format=... and optionally write to file.
+
+        Supports format/fmt='markdown' or 'json'.
+        """
+        export_format = (format or fmt or "markdown").lower()
+        target_path = out_path or output
+        url = f"{self.base_url}/api/audit/export?format={export_format}"
+        req = urllib.request.Request(url, method="GET")
+        try:
+            with urllib.request.urlopen(req, timeout=15) as res:
+                content = res.read().decode("utf-8")
+                if export_format == "json":
+                    try:
+                        data = json.loads(content)
+                    except json.JSONDecodeError:
+                        data = content
+                else:
+                    data = content
+        except urllib.error.URLError as e:
+            return {"error": f"Failed to export audit from Orchestrator at {url}: {e}"}
+
+        if target_path:
+            try:
+                parent_dir = os.path.dirname(target_path)
+                if parent_dir and not os.path.exists(parent_dir):
+                    os.makedirs(parent_dir, exist_ok=True)
+                with open(target_path, "w", encoding="utf-8") as f:
+                    if isinstance(data, (dict, list)):
+                        f.write(json.dumps(data, indent=2))
+                    else:
+                        f.write(str(data))
+            except Exception as e:
+                return {"error": f"Failed to write audit report to {target_path}: {e}"}
+
+        return data
 
 
 def auto_detect_tokens_and_conv(conv_id=None, in_tok=None, out_tok=None, cache_tok=None):
@@ -194,7 +303,21 @@ def main():
     update_parser.add_argument("--scope", type=str, default=None, help="Task scope or description")
     update_parser.add_argument("--notes", type=str, default=None, help="Additional notes or status update")
     update_parser.add_argument("--conv-id", type=str, default=None, help="Subagent conversation ID")
-    update_parser.add_argument("--model", type=str, default=None, help="Assigned Model (e.g. gemini-4-argon, pro, gemini-3.8-flash, flash, flash_lite)")
+    update_parser.add_argument(
+        "--model",
+        type=str,
+        default=None,
+        help="Assigned Model (e.g. gemini-4-carbon, carbon, gemini-4-argon, pro, gemini-3.8-flash, flash, flash_lite)",
+    )
+    update_parser.add_argument(
+        "--reasoning-effort",
+        "--effort",
+        dest="reasoning_effort",
+        type=str,
+        default=None,
+        choices=["low", "medium", "high"],
+        help="Tunable reasoning effort for models supporting reasoning depth (low, medium, high)",
+    )
     update_parser.add_argument(
         "--complexity",
         "--tier",
@@ -245,6 +368,109 @@ def main():
     # reset
     subparsers.add_parser("reset", help="Reset all orchestrator tasks and logs")
 
+    # models
+    models_parser = subparsers.add_parser(
+        "models",
+        aliases=["list-models", "model-list"],
+        help="List registered models, pricing, and capabilities",
+    )
+    models_parser.add_argument("--json", action="store_true", help="Output raw JSON response")
+    models_parser.add_argument(
+        "--format",
+        choices=["json", "text"],
+        default="json",
+        help="Output format (json, text, default: json)",
+    )
+
+    # recommend
+    recommend_parser = subparsers.add_parser(
+        "recommend",
+        help="Recommend optimal model and reasoning effort via Smart Router",
+    )
+    recommend_parser.add_argument("--agent", required=True, help="Agent persona name (e.g. security-auditor, builder, spec-engineer)")
+    recommend_parser.add_argument(
+        "--complexity",
+        type=str,
+        default="medium",
+        choices=["low", "medium", "high", "critical"],
+        help="Task complexity tier (low, medium, high, critical, default: medium)",
+    )
+    recommend_parser.add_argument("--scope", type=str, default="", help="Task scope description")
+    recommend_parser.add_argument("--files", "--file-count", dest="files", type=int, default=0, help="Number of files to be modified")
+    recommend_parser.add_argument(
+        "--security-impact",
+        "--has-security-impact",
+        dest="security_impact",
+        action="store_true",
+        help="Flag if task has cybersecurity or vulnerability impact",
+    )
+    recommend_parser.add_argument(
+        "--budget-mode",
+        type=str,
+        default="balanced",
+        choices=["balanced", "quality_first"],
+        help="Routing optimization mode (balanced, quality_first, default: balanced)",
+    )
+    recommend_parser.add_argument("--json", action="store_true", help="Output raw JSON response")
+    recommend_parser.add_argument(
+        "--format",
+        choices=["json", "text"],
+        default="json",
+        help="Output format (json, text, default: json)",
+    )
+
+    # next-ready
+    next_ready_parser = subparsers.add_parser(
+        "next-ready",
+        aliases=["next_ready", "ready"],
+        help="Query DAG Ready-Queue for unblocked tasks ready for immediate execution",
+    )
+    next_ready_parser.add_argument("--json", action="store_true", help="Output raw JSON response")
+    next_ready_parser.add_argument(
+        "--format",
+        choices=["json", "text"],
+        default="json",
+        help="Output format (json, text, default: json)",
+    )
+
+    # analytics
+    analytics_parser = subparsers.add_parser(
+        "analytics",
+        aliases=["model-analytics"],
+        help="Retrieve per-model token consumption and financial spend breakdown",
+    )
+    analytics_parser.add_argument("--json", action="store_true", help="Output raw JSON response")
+    analytics_parser.add_argument(
+        "--format",
+        choices=["json", "text"],
+        default="json",
+        help="Output format (json, text, default: json)",
+    )
+
+    # export
+    export_parser = subparsers.add_parser(
+        "export",
+        aliases=["audit-export", "export-audit"],
+        help="Export mission audit report in Markdown or JSON format",
+    )
+    export_parser.add_argument(
+        "--format",
+        "--fmt",
+        dest="format",
+        type=str,
+        default="markdown",
+        choices=["markdown", "json"],
+        help="Export format (markdown, json, default: markdown)",
+    )
+    export_parser.add_argument(
+        "--output",
+        "--out",
+        dest="output",
+        type=str,
+        default=None,
+        help="Output file path to save report (writes to stdout if omitted)",
+    )
+
     args = parser.parse_args()
     client = OrchestratorClient(base_url=args.url)
 
@@ -255,7 +481,6 @@ def main():
             sys.exit(1)
 
     elif args.command == "update":
-        # Auto-detect conversation ID and token metrics if not explicitly passed
         conv_id, in_tokens, out_tokens, cache_tokens = auto_detect_tokens_and_conv(
             conv_id=args.conv_id,
             in_tok=args.input_tokens,
@@ -278,6 +503,7 @@ def main():
             input_tokens=in_tokens,
             output_tokens=out_tokens,
             cache_tokens=cache_tokens,
+            reasoning_effort=args.reasoning_effort,
         )
         print(json.dumps(res, indent=2))
         if "error" in res:
@@ -305,6 +531,98 @@ def main():
         print(json.dumps(res, indent=2))
         if "error" in res:
             sys.exit(1)
+
+    elif args.command in ("models", "list-models", "model-list"):
+        res = client.list_models()
+        if "error" in res:
+            print(json.dumps(res, indent=2))
+            sys.exit(1)
+        if args.format == "text" and not args.json:
+            models = res.get("models", {})
+            print(f"{'Model':<24} {'Tier':<16} {'Rates ($ in/out/cache per 1M)':<32} {'Reasoning Efforts':<20}")
+            print("-" * 96)
+            for m_id, m_data in models.items():
+                rates = m_data.get("rates", {})
+                rate_str = f"${rates.get('in', 0):.3f} / ${rates.get('out', 0):.2f} / ${rates.get('cache', 0):.4f}"
+                efforts = ", ".join(m_data.get("supported_reasoning_efforts", [])) or "None"
+                print(f"{m_id:<24} {m_data.get('tier', ''):<16} {rate_str:<32} {efforts:<20}")
+        else:
+            print(json.dumps(res, indent=2))
+
+    elif args.command == "recommend":
+        res = client.recommend_model(
+            agent_type=args.agent,
+            complexity=args.complexity,
+            scope=args.scope,
+            file_count=args.files,
+            has_security_impact=args.security_impact,
+            budget_mode=args.budget_mode,
+        )
+        if "error" in res:
+            print(json.dumps(res, indent=2))
+            sys.exit(1)
+        if args.format == "text" and not args.json:
+            rec = res.get("recommendation", {})
+            print(f"Recommended Model: {rec.get('model', 'unknown')}")
+            if rec.get("reasoning_effort"):
+                print(f"Reasoning Effort:  {rec.get('reasoning_effort')}")
+            print(f"Tier:              {rec.get('tier', 'unknown')}")
+            print(f"Cost Tier:         {rec.get('estimated_cost_tier', '-')}")
+            print(f"Fallback Model:    {rec.get('fallback_model', '-')}")
+            print(f"Rationale:         {rec.get('rationale', '')}")
+        else:
+            print(json.dumps(res, indent=2))
+
+    elif args.command in ("next-ready", "next_ready", "ready"):
+        res = client.get_ready_tasks()
+        if "error" in res:
+            print(json.dumps(res, indent=2))
+            sys.exit(1)
+        if args.format == "text" and not args.json:
+            ready = res.get("ready_tasks", [])
+            blocked = res.get("blocked_tasks", [])
+            print(f"=== Ready Tasks ({len(ready)}) ===")
+            for t in ready:
+                print(f"  [{t.get('task_id')}] agent={t.get('agent_type')} model={t.get('model')} group={t.get('parallel_group')} scope={t.get('scope', '')}")
+            if res.get("can_fan_out"):
+                print(f"  => Parallel Fan-Out Available: group={res.get('fan_out_group')}")
+            print(f"\n=== Blocked Tasks ({len(blocked)}) ===")
+            for t in blocked:
+                print(f"  [{t.get('task_id')}] agent={t.get('agent_type')} waiting_for={','.join(t.get('waiting_for', []))}")
+        else:
+            print(json.dumps(res, indent=2))
+
+    elif args.command in ("analytics", "model-analytics"):
+        res = client.get_model_analytics()
+        if "error" in res:
+            print(json.dumps(res, indent=2))
+            sys.exit(1)
+        if args.format == "text" and not args.json:
+            summary = res.get("summary", {})
+            print("=== Model Analytics Summary ===")
+            print(f"Total Spend:    ${summary.get('total_spend_usd', 0.0):.4f} ({summary.get('total_spend_vnd', 0):,} VND)")
+            print(f"Total Saved:    ${summary.get('total_saved_usd', 0.0):.4f} ({summary.get('total_saved_vnd', 0):,} VND)")
+            print(f"Most Used:      {summary.get('most_used_model', '-')}")
+            print(f"Highest Cost:   {summary.get('highest_cost_model', '-')}")
+            print("\n=== Per-Model Breakdown ===")
+            models = res.get("models", {})
+            for m_id, s in models.items():
+                print(f"  {m_id}: {s.get('task_count', 0)} tasks | {s.get('total_tokens', 0):,} tokens | Hit Rate: {s.get('cache_hit_rate', 0)}% | Cost: ${s.get('cost_usd', 0.0):.4f}")
+        else:
+            print(json.dumps(res, indent=2))
+
+    elif args.command in ("export", "audit-export", "export-audit"):
+        res = client.export_audit(format=args.format, out_path=args.output)
+        if isinstance(res, dict) and "error" in res:
+            print(json.dumps(res, indent=2), file=sys.stderr)
+            sys.exit(1)
+        if not args.output:
+            if isinstance(res, (dict, list)):
+                print(json.dumps(res, indent=2))
+            else:
+                print(res)
+        else:
+            print(f"Audit report successfully exported to {args.output}")
 
 
 if __name__ == "__main__":
