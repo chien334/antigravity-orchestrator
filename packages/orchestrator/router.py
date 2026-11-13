@@ -18,8 +18,11 @@ try:
         USD_TO_VND_RATE,
         VALID_REASONING_EFFORTS,
         compute_cost,
+        extract_model_and_effort,
+        get_model_metadata,
         normalize_model_name,
         resolve_model_id,
+        validate_reasoning_effort,
     )
 except ImportError:
     try:
@@ -29,8 +32,11 @@ except ImportError:
             USD_TO_VND_RATE,
             VALID_REASONING_EFFORTS,
             compute_cost,
+            extract_model_and_effort,
+            get_model_metadata,
             normalize_model_name,
             resolve_model_id,
+            validate_reasoning_effort,
         )
     except ImportError:
         from packages.orchestrator.models import (
@@ -39,43 +45,84 @@ except ImportError:
             USD_TO_VND_RATE,
             VALID_REASONING_EFFORTS,
             compute_cost,
+            extract_model_and_effort,
+            get_model_metadata,
             normalize_model_name,
             resolve_model_id,
+            validate_reasoning_effort,
         )
 
 
 def recommend_model(
     agent_type: str,
-    complexity: str,
+    complexity: str = "medium",
     scope: str = "",
     file_count: int = 0,
     has_security_impact: bool = False,
     budget_mode: str = "balanced",
+    retry_count: int = 0,
 ) -> dict:
-    """Dynamically determine optimal model, reasoning effort, and fallback."""
+    """
+    5-Tier Smart Router recommending optimal model, reasoning effort, and fallback.
+    Supports budget_mode: 'balanced', 'speed_first', 'latency_sensitive', 'quality_first', 'cost_saving'.
+    Supports retry_count for Fast-Retry & Escalation Circuit Breaker.
+    """
     agent = (agent_type or "").lower().strip()
     comp = (complexity or "medium").lower().strip()
     scope_lower = (scope or "").lower()
     budget = (budget_mode or "balanced").lower().strip()
+    retries = max(0, int(retry_count or 0))
 
-    # Rule 1: Security Critical or Frontier Reasoning
-    if (
+    # =========================================================================
+    # RULE 1: STRICT SECURITY & FRONTIER GUARDRAIL (Zero-Downgrade Invariant)
+    # Checked FIRST regardless of budget_mode (even speed_first / cost_saving)
+    # =========================================================================
+    is_security_task = (
         has_security_impact
         or comp == "critical"
         or (agent in ("security-auditor", "debugger") and comp in ("high", "critical"))
-        or "vulnerability" in scope_lower
-        or "cve" in scope_lower
-        or "penetration" in scope_lower
-    ):
-        model = "gemini-4-carbon"
+        or any(k in scope_lower for k in ("vulnerability", "cve", "penetration", "auth", "crypto", "owasp", "rbac", "jwt", "migration"))
+    )
+    if is_security_task:
         effort = "high" if comp == "critical" or has_security_impact else "medium"
-        tier = "frontier"
-        rationale = "Critical-tier security audit, vulnerability modeling, or deep root-cause debugging requires Gemini 4 Carbon frontier reasoning."
-        cost_tier = "$$$$"
-        fallback = "gemini-4-argon"
+        return {
+            "status": "ok",
+            "recommendation": {
+                "model": "gemini-4-carbon",
+                "reasoning_effort": effort,
+                "tier": "frontier",
+                "rationale": "Critical-tier security audit, vulnerability modeling, or deep root-cause debugging requires Gemini 4 Carbon frontier reasoning.",
+                "estimated_cost_tier": "$$$$",
+                "fallback_model": "gemini-4-argon",
+            },
+        }
 
-    # Rule 2: Architecture, Spec, and Code Review
-    elif agent in ("spec-engineer", "task-planner", "code-reviewer") or comp == "high":
+    # =========================================================================
+    # RULE 2: CIRCUIT BREAKER ESCALATION (Fast-Retry Topology)
+    # If a task on Hydrogen has failed >= 2 times, trip circuit breaker to Carbon
+    # =========================================================================
+    if retries >= 2:
+        return {
+            "status": "ok",
+            "recommendation": {
+                "model": "gemini-4-carbon",
+                "reasoning_effort": "high",
+                "tier": "frontier",
+                "rationale": f"Circuit breaker tripped after {retries} failed attempts on Gemini 4 Hydrogen. Auto-escalated to Gemini 4 Carbon (high effort) for deep root-cause diagnosis.",
+                "estimated_cost_tier": "$$$$",
+                "fallback_model": "gemini-4-argon",
+                "circuit_breaker": {
+                    "status": "tripped",
+                    "retries": retries,
+                    "escalated_from": "gemini-4-hydrogen",
+                },
+            },
+        }
+
+    # =========================================================================
+    # RULE 3: ARCHITECTURE, SPECIFICATION & 5-AXIS CODE REVIEW
+    # =========================================================================
+    if agent in ("spec-engineer", "task-planner", "code-reviewer") or comp == "high":
         if budget == "quality_first":
             model = "gemini-4-carbon"
             effort = "medium"
@@ -83,41 +130,102 @@ def recommend_model(
             rationale = "High-complexity specification/architecture in quality-first mode requires Gemini 4 Carbon frontier reasoning."
             cost_tier = "$$$$"
             fallback = "gemini-4-argon"
+        elif budget in ("speed_first", "latency_sensitive") and agent == "code-reviewer" and comp != "high":
+            # Speed mode enables fast code review on Hydrogen with maximum depth (xhigh)
+            model = "gemini-4-hydrogen"
+            effort = "xhigh"
+            tier = "high_throughput"
+            rationale = "Rapid code review in speed-first mode dispatched to Gemini 4 Hydrogen with maximum reasoning depth (xhigh)."
+            cost_tier = "$$$"
+            fallback = "gemini-4-argon"
         else:
             model = "gemini-4-argon"
             effort = "medium"
             tier = "deep_reasoning"
             rationale = "High-complexity planning or code review dispatched to Gemini 4 Argon for balanced deep reasoning and throughput."
             cost_tier = "$$$"
+            fallback = "gemini-4-hydrogen"
+
+        return {
+            "status": "ok",
+            "recommendation": {
+                "model": model,
+                "reasoning_effort": effort,
+                "tier": tier,
+                "rationale": rationale,
+                "estimated_cost_tier": cost_tier,
+                "fallback_model": fallback,
+            },
+        }
+
+    # =========================================================================
+    # RULE 4: PARALLEL BUILDERS, TESTERS, SCOUTS & UI WORKERS
+    # =========================================================================
+    is_builder_or_tester = agent in ("builder", "test-engineer", "scout", "codebase-researcher", "ui-builder", "frontend-engineer")
+    if is_builder_or_tester or comp == "medium" or budget in ("speed_first", "latency_sensitive"):
+        if budget in ("cost_saving", "cost_first"):
+            model = "gemini-3.8-flash"
+            effort = None
+            tier = "cost_efficient"
+            rationale = "Parallel code implementation in cost-saving mode dispatched to Gemini 3.8 Flash."
+            cost_tier = "$$"
+            fallback = "gemini-3.8-flash-lite"
+            cb_meta = None
+        elif budget == "quality_first" and comp == "medium":
+            model = "gemini-4-argon"
+            effort = "medium"
+            tier = "deep_reasoning"
+            rationale = "Parallel code implementation in quality-first mode dispatched to Gemini 4 Argon for maximum precision."
+            cost_tier = "$$$"
+            fallback = "gemini-4-hydrogen"
+            cb_meta = None
+        else:
+            # Default / balanced / speed_first / latency_sensitive -> GEMINI-4-HYDROGEN
+            model = "gemini-4-hydrogen"
+            if retries == 1:
+                # Fast self-healing retry turn with elevated thinking
+                effort = "xhigh" if comp == "medium" or budget in ("speed_first", "latency_sensitive") else "high"
+                cb_status = "retrying"
+            else:
+                effort = "high" if comp == "medium" else "medium"
+                cb_status = "active"
+
+            tier = "high_throughput"
+            rationale = "Parallel code implementation, testing, or reconnaissance dispatched to Gemini 4 Hydrogen for 2.5x speed and 198 tok/s throughput."
+            cost_tier = "$$$"
             fallback = "gemini-3.8-flash"
+            cb_meta = {
+                "max_self_retries": 1,
+                "escalate_to": "gemini-4-carbon",
+                "escalate_effort": "high",
+                "retry_count": retries,
+                "status": cb_status,
+            }
 
-    # Rule 3: Parallel Building & Testing
-    elif agent in ("builder", "test-engineer") or comp == "medium":
-        model = "gemini-3.8-flash"
-        effort = None
-        tier = "cost_efficient"
-        rationale = "Parallel code implementation and test generation dispatched to Gemini 3.8 Flash for maximum throughput and >70% cost savings."
-        cost_tier = "$$"
-        fallback = "gemini-3.8-flash-lite"
-
-    # Rule 4: Micro-tier / Observability / Dead-code / Low complexity
-    else:
-        model = "gemini-3.8-flash-lite"
-        effort = None
-        tier = "ultra_fast"
-        rationale = "Low-complexity telemetry, doc formatting, or dead code simplification dispatched to Gemini 3.8 Flash-Lite."
-        cost_tier = "$"
-        fallback = "gemini-3.8-flash"
-
-    return {
-        "status": "ok",
-        "recommendation": {
+        rec = {
             "model": model,
             "reasoning_effort": effort,
             "tier": tier,
             "rationale": rationale,
             "estimated_cost_tier": cost_tier,
             "fallback_model": fallback,
+        }
+        if cb_meta:
+            rec["circuit_breaker"] = cb_meta
+        return {"status": "ok", "recommendation": rec}
+
+    # =========================================================================
+    # RULE 5: MICRO-TIER / OBSERVABILITY / DEAD-CODE / LOW COMPLEXITY
+    # =========================================================================
+    return {
+        "status": "ok",
+        "recommendation": {
+            "model": "gemini-3.8-flash-lite",
+            "reasoning_effort": None,
+            "tier": "ultra_fast",
+            "rationale": "Low-complexity telemetry, doc formatting, or dead code simplification dispatched to Gemini 3.8 Flash-Lite.",
+            "estimated_cost_tier": "$",
+            "fallback_model": "gemini-3.8-flash",
         },
     }
 

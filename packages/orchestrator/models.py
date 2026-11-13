@@ -8,9 +8,10 @@ from __future__ import annotations
 
 USD_TO_VND_RATE: float = 25400.0
 
-VALID_REASONING_EFFORTS: set[str] = {"low", "medium", "high"}
+VALID_REASONING_EFFORTS: set[str] = {"low", "medium", "high", "xhigh"}
 
 MODEL_REGISTRY: dict[str, dict] = {
+    # 1. Tier 1: Gemini 4 Carbon (Frontier Reasoning)
     "gemini-4-carbon": {
         "canonical_name": "gemini-4-carbon",
         "aliases": ["carbon", "gemini-4-carbon-preview", "gemini-carbon"],
@@ -30,6 +31,8 @@ MODEL_REGISTRY: dict[str, dict] = {
         },
         "target_personas": ["security-auditor", "spec-engineer", "debugger"],
     },
+
+    # 2. Tier 2: Gemini 4 Argon (Deep Reasoning)
     "gemini-4-argon": {
         "canonical_name": "gemini-4-argon",
         "aliases": ["argon", "pro", "gemini-4-argon-preview", "gemini-1.5-pro"],
@@ -49,6 +52,44 @@ MODEL_REGISTRY: dict[str, dict] = {
         },
         "target_personas": ["task-planner", "code-reviewer", "orchestrator"],
     },
+
+    # 3. Tier 3: Gemini 4 Hydrogen (High-Throughput Workhorse - NEW)
+    "gemini-4-hydrogen": {
+        "canonical_name": "gemini-4-hydrogen",
+        "aliases": [
+            "hydrogen",
+            "gemini-hydrogen",
+            "gemini-4-hydrogen-preview",
+            "gemini-4-hydrogen-low",
+            "gemini-4-hydrogen-medium",
+            "gemini-4-hydrogen-high",
+            "gemini-4-hydrogen-xhigh",
+        ],
+        "display_name": "Gemini 4 Hydrogen",
+        "tier": "high_throughput",
+        "description": "Ultra-fast, high-throughput agentic workhorse for parallel code generation, testing, and scouting (198 tok/s, 2.5x speed)",
+        "rates": {"in": 1.50, "out": 7.50, "cache": 0.075},  # USD per 1M tokens
+        "supported_reasoning_efforts": ["low", "medium", "high", "xhigh"],
+        "default_reasoning_effort": "medium",
+        "max_context_tokens": 1_048_576,
+        "ui_badge": {
+            "bg": "bg-cyan-950/60",
+            "border": "border-cyan-500/40",
+            "text": "text-cyan-300",
+            "dot": "bg-cyan-400",
+            "label": "Gemini 4 Hydrogen",
+        },
+        "target_personas": [
+            "builder",
+            "test-engineer",
+            "scout",
+            "codebase-researcher",
+            "ui-builder",
+            "frontend-engineer",
+        ],
+    },
+
+    # 4. Tier 4: Gemini 3.8 Flash (Cost-Efficient)
     "gemini-3.8-flash": {
         "canonical_name": "gemini-3.8-flash",
         "aliases": ["flash", "gemini-flash", "gemini-2.0-flash"],
@@ -66,8 +107,10 @@ MODEL_REGISTRY: dict[str, dict] = {
             "dot": "bg-amber-400",
             "label": "Gemini 3.8 Flash",
         },
-        "target_personas": ["builder", "test-engineer", "code-simplifier"],
+        "target_personas": ["code-simplifier", "doc-generator"],
     },
+
+    # 5. Tier 5: Gemini 3.8 Flash-Lite (Ultra-Fast Telemetry)
     "gemini-3.8-flash-lite": {
         "canonical_name": "gemini-3.8-flash-lite",
         "aliases": ["flash_lite", "flash-lite", "gemini-flash-lite"],
@@ -99,6 +142,14 @@ PRICING_TABLE: dict[str, dict] = {
     "pro": MODEL_REGISTRY["gemini-4-argon"]["rates"],
     "gemini-4-argon": MODEL_REGISTRY["gemini-4-argon"]["rates"],
     "gemini-1.5-pro": MODEL_REGISTRY["gemini-4-argon"]["rates"],
+    "hydrogen": MODEL_REGISTRY["gemini-4-hydrogen"]["rates"],
+    "gemini-4-hydrogen": MODEL_REGISTRY["gemini-4-hydrogen"]["rates"],
+    "gemini-hydrogen": MODEL_REGISTRY["gemini-4-hydrogen"]["rates"],
+    "gemini-4-hydrogen-preview": MODEL_REGISTRY["gemini-4-hydrogen"]["rates"],
+    "gemini-4-hydrogen-low": MODEL_REGISTRY["gemini-4-hydrogen"]["rates"],
+    "gemini-4-hydrogen-medium": MODEL_REGISTRY["gemini-4-hydrogen"]["rates"],
+    "gemini-4-hydrogen-high": MODEL_REGISTRY["gemini-4-hydrogen"]["rates"],
+    "gemini-4-hydrogen-xhigh": MODEL_REGISTRY["gemini-4-hydrogen"]["rates"],
     "flash": MODEL_REGISTRY["gemini-3.8-flash"]["rates"],
     "gemini-flash": MODEL_REGISTRY["gemini-3.8-flash"]["rates"],
     "gemini-2.0-flash": MODEL_REGISTRY["gemini-3.8-flash"]["rates"],
@@ -138,6 +189,30 @@ def normalize_model_name(name: str | None) -> str:
 # Alias per contract specification
 resolve_model_id = normalize_model_name
 
+def extract_model_and_effort(name: str | None, effort: str | None = None) -> tuple[str, str | None]:
+    """
+    Extract canonical model name and implied reasoning effort.
+    E.g. 'gemini-4-hydrogen-xhigh' with effort=None -> ('gemini-4-hydrogen', 'xhigh').
+    """
+    if not name:
+        return "gemini-4-argon", effort
+
+    raw = str(name).strip().lower()
+    inferred_effort = effort
+
+    # Check for suffix effort patterns: -low, -medium, -high, -xhigh
+    for suffix in ["-xhigh", "-high", "-medium", "-low"]:
+        if raw.endswith(suffix):
+            cand_canon = normalize_model_name(raw[: -len(suffix)])
+            if cand_canon in MODEL_REGISTRY:
+                eff = suffix.lstrip("-")
+                if not inferred_effort:
+                    inferred_effort = eff
+                return cand_canon, inferred_effort
+
+    canon = normalize_model_name(raw)
+    return canon, inferred_effort
+
 def compute_cost(model: str | None, in_tok: int, out_tok: int, cache_tok: int) -> dict:
     """Calculate actual cost and cache savings in USD and VND."""
     canon = normalize_model_name(model)
@@ -171,9 +246,13 @@ def get_model_metadata(model: str | None) -> dict:
     canon = normalize_model_name(model)
     return MODEL_REGISTRY[canon]
 
-def validate_reasoning_effort(model: str | None, effort: str | None) -> tuple[bool, str | None]:
+def validate_reasoning_effort(model: str | None, effort: str | None, clamp: bool = False) -> tuple[bool, str | None]:
     """
     Validate reasoning effort for a model.
+    'xhigh' is strictly allowed on gemini-4-hydrogen.
+    For Carbon and Argon:
+      - If clamp=True: clamps 'xhigh' -> 'high'.
+      - If clamp=False: returns (False, None) for 'xhigh' on models not supporting it.
     Returns (is_valid, normalized_effort).
     """
     if effort is None or effort == "":
@@ -181,8 +260,15 @@ def validate_reasoning_effort(model: str | None, effort: str | None) -> tuple[bo
     clean_effort = str(effort).strip().lower()
     if clean_effort not in VALID_REASONING_EFFORTS:
         return False, None
+
     canon = normalize_model_name(model)
     supported = MODEL_REGISTRY[canon].get("supported_reasoning_efforts", [])
-    if clean_effort not in supported:
-        return False, None
-    return True, clean_effort
+
+    if clean_effort in supported:
+        return True, clean_effort
+
+    # Clamping policy for Carbon & Argon when xhigh is supplied
+    if clean_effort == "xhigh" and clamp and canon in ("gemini-4-carbon", "gemini-4-argon"):
+        return True, "high"
+
+    return False, None
