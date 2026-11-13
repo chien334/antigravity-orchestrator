@@ -1,6 +1,6 @@
 ---
 name: workflow-plan
-description: Stage 2 Planning Workflow - Ingest docs/specs/{feature_id}.spec.md, design architecture, schemas, and produce docs/plans/{feature_id}.plan.md with 4-Tier Model DAG
+description: Stage 2 Planning Workflow - Ingest docs/specs/{feature_id}.spec.md, design architecture, schemas, and produce docs/plans/{feature_id}.plan.md with 5-Tier Model DAG
 ---
 
 # Stage 2: Architecture & Task DAG Planning Workflow
@@ -17,7 +17,7 @@ description: Stage 2 Planning Workflow - Ingest docs/specs/{feature_id}.spec.md,
 - **Prerequisite**: Stage 1 must be completed.
 - **Input Artifact**: `docs/specs/{feature_id}.spec.md`
 - **Context Provided**:
-  * Pointers to existing code, database schemas, and configuration.
+  * Pointers to existing code, database schemas, and configuration (gathered via fast `gemini-4-hydrogen` scouts under the Scout-Then-Architect topology).
   * Acceptance criteria from the spec.
 
 ---
@@ -34,18 +34,20 @@ description: Stage 2 Planning Workflow - Ingest docs/specs/{feature_id}.spec.md,
      --status "running" \
      --progress 20 \
      --scope "docs/specs/{feature_id}.spec.md" \
-     --notes "Designing system contracts and 4-tier task DAG"
+     --notes "Designing system contracts and 5-Tier Periodic Table task DAG"
    ```
 2. **Architecture & Contract Modeling**: Define database schema, API signatures, and data contracts between modules.
-3. **DAG Breakdown & 4-Tier Model Allocation**:
+3. **DAG Breakdown & 5-Tier Model Allocation**:
    - Split tasks into minimal blast-radius units.
    - Assign `parallel_group` to tasks that operate on disjoint files (Decoupled File Scope Invariant).
    - Tag prerequisite dependencies using `depends_on`.
-   - Allocate models according to the 4-tier taxonomy:
+   - Allocate models according to the 5-Tier Periodic Table taxonomy:
      * **Tier 1 (`gemini-4-carbon`)**: Critical security, auth/authz, complex cryptographic models (`effort: high`).
-     * **Tier 2 (`gemini-4-argon`)**: Architecture design, schema contracts, reviews (`effort: medium`).
-     * **Tier 3 (`gemini-3.8-flash`)**: Parallel code implementation and unit testing (>70% cost savings).
-     * **Tier 4 (`gemini-3.8-flash-lite`)**: Micro-tier telemetry, docs, and linting.
+     * **Tier 2 (`gemini-4-argon`)**: Architecture design, schema contracts, reviews (`effort: medium`/`high`).
+     * **Tier 3 (`gemini-4-hydrogen`)**: Parallel code implementation, automated testing, and codebase scouting at 198 tok/sec (`effort: medium`/`high`/`xhigh`).
+     * **Tier 4 (`gemini-3.8-flash`)**: Cost-first bulk scaffolding, doc formatting, and text simplification.
+     * **Tier 5 (`gemini-3.8-flash-lite`)**: Micro-tier telemetry, docs, and linting.
+   - Define Fast-Retry Circuit Breaker thresholds (`retry_count >= 2` escalates to Carbon).
 4. **Artifact Generation**: Produce `docs/plans/{feature_id}.plan.md`.
 5. **Emit Completion Telemetry**:
    ```bash
@@ -57,7 +59,7 @@ description: Stage 2 Planning Workflow - Ingest docs/specs/{feature_id}.spec.md,
      --status "completed" \
      --progress 100 \
      --scope "docs/plans/{feature_id}.plan.md" \
-     --notes "Plan DAG finalized with parallel worker slots and 4-tier model assignments"
+     --notes "Plan DAG finalized with parallel worker slots, 5-tier model assignments, and Circuit Breaker policies"
    ```
 
 ---
@@ -66,30 +68,23 @@ description: Stage 2 Planning Workflow - Ingest docs/specs/{feature_id}.spec.md,
 Save to: `docs/plans/{feature_id}.plan.md`
 
 ```markdown
-# Architecture & Implementation Plan: {Feature Name}
+# Architectural Plan: {Feature Name}
 
-- **Feature ID**: {feature_id}
-- **Source Spec**: docs/specs/{feature_id}.spec.md
-- **Architect**: task-planner (Gemini 4 Argon)
-- **Status**: APPROVED
+## 1. System Topology & Contracts
+- **Module Boundaries**: ...
+- **Database Schema Changes**: ...
+- **Interface Signatures**: ...
 
-## 1. Technical Architecture & Schemas
-- Interface contracts, data models, or SQL migrations.
-- File boundary allocations (strictly disjoint for parallel builders).
+## 2. Disjoint File Scope Allocation
+| Task ID | Persona | Assigned Model | Parallel Group | Depends On | Disjoint Target Files |
+|---|---|---|---|---|---|
+| `BUILD-01` | `builder` | `gemini-4-hydrogen` | `BUILD-PARALLEL` | `PLAN-{FEATURE}` | `src/frontend/ViewA.tsx` |
+| `BUILD-02` | `builder` | `gemini-4-hydrogen` | `BUILD-PARALLEL` | `PLAN-{FEATURE}` | `src/backend/ServiceB.py` |
+| `TEST-01`  | `test-engineer` | `gemini-4-hydrogen` | - | `BUILD-01, BUILD-02` | `tests/test_feature.py` |
 
-## 2. Directed Acyclic Graph (DAG) & Task Matrix
-
-| Task ID | Description | Target Files | Model | Reasoning Effort | Complexity | Depends On | Parallel Group |
-| :--- | :--- | :--- | :---: | :---: | :---: | :---: | :---: |
-| **BUILD-01** | Backend Schema & DB Migration | `backend/models/...` | ⚡ Flash | - | `medium` | `[]` | `BUILD-PARALLEL` |
-| **BUILD-02** | Frontend Component & UI | `frontend/src/...` | ⚡ Flash | - | `medium` | `[]` | `BUILD-PARALLEL` |
-| **BUILD-03** | REST API Route Handler | `backend/api/...` | ⚡ Flash | - | `medium` | `["BUILD-01"]` | `BUILD-PARALLEL` |
-| **TEST-01** | Unit & Integration Test Suite | `tests/...` | ⚡ Flash | - | `medium` | `["BUILD-02", "BUILD-03"]` | - |
-| **REVIEW-01** | 5-Axis Code Review | All modified files | ✦ Argon | `high` | `high` | `["TEST-01"]` | - |
-| **SEC-01** | Security & OWASP Audit | All modified files | ✦ Carbon | `high` | `critical` | `["REVIEW-01"]` | - |
-
-## 3. Barrier Synchronization Criteria
-- Conditions required before advancing to Testing and Code Review.
+## 3. Circuit Breaker Policy
+- **Max Self-Retries**: 1 on `gemini-4-hydrogen` (`xhigh` effort)
+- **Escalation Target**: `gemini-4-carbon` (`high` effort)
 ```
 
-> **Handoff**: The Orchestrator queries `python3 packages/orchestrator/client.py next-ready` (or `GET /api/dag/ready`) to evaluate unblocked tasks in `docs/plans/{feature_id}.plan.md` and dispatches workers to **Stage 3 (`workflow-build`)**.
+> **Handoff**: The approved plan unblocks Stage 3 parallel builders evaluated via `GET /api/dag/ready`.

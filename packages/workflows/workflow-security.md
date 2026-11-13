@@ -7,7 +7,9 @@ description: Stage 6 Security Audit Workflow - Deep OWASP, authentication, data 
 
 ## 1. Objective & Persona
 - **Persona**: `security-auditor`
-- **Model Engine**: ✦ **Gemini 4 Carbon** (`model: gemini-4-carbon`, `reasoning_effort: high`)
+- **Model Engine**: ✦ **Gemini 4 Carbon** (`model: gemini-4-carbon`, `reasoning_effort: high`)  
+  *Google Frontier Reasoning model dedicated to deep vulnerability fuzzing, formal invariants, and cryptographic validation.*  
+  *(**Strict Security Guardrail Invariant**: Security audits, OWASP vulnerability scans, and auth/crypto logic NEVER downgrade to lower tiers under any budget mode, including `speed_first` and `cost_saving`).*
 - **Primary Skill**: `security-and-hardening`
 
 ---
@@ -53,6 +55,9 @@ description: Stage 6 Security Audit Workflow - Deep OWASP, authentication, data 
      --complexity "critical" \
      --status "completed" \
      --progress 100 \
+     --input-tokens {IN_TOK} \
+     --output-tokens {OUT_TOK} \
+     --cache-tokens {CACHE_TOK} \
      --scope "docs/security/security_audit.md" \
      --notes "Security audit passed: Zero high/critical vulnerabilities"
    ```
@@ -63,32 +68,22 @@ description: Stage 6 Security Audit Workflow - Deep OWASP, authentication, data 
 Save to: `docs/security/security_audit.md`
 
 ```markdown
-# Security & Hardening Audit: {Feature Name}
+# Security & Hardening Audit Report: {Feature Name}
 
-- **Feature ID**: {feature_id}
-- **Auditor**: security-auditor (Gemini 4 Carbon, reasoning_effort: high)
-- **Status**: PASSED | BLOCKED
-- **Date**: {YYYY-MM-DD}
+- **Auditor**: `security-auditor`
+- **Model Engine**: `gemini-4-carbon` (effort: high)
+- **Verdict**: `PASSED` | `FAILED`
 
-## 1. Executive Summary
-- Scope of audit: {target_modules}
-- Overall Risk Rating: `LOW` / `NEGLIGIBLE`
+## Threat Model & Findings
+| Vulnerability Class | Risk Level | Status | Notes |
+|---|---|---|---|
+| OWASP Injection | Critical | PASS | Input validation and parameterized calls verified |
+| Auth & RBAC Bypass | High | PASS | Role checks strictly enforced |
+| Secret Leakage | Critical | PASS | Zero plaintext tokens in source code |
 
-## 2. Threat Vector Scorecard
-
-| Threat Vector | Status | Finding & Mitigation |
-| :--- | :---: | :--- |
-| **SQL / Command Injection** | ✅ SECURE | Parameterized queries & ORM bounds |
-| **Authentication & RBAC** | ✅ SECURE | Context-level permission verification |
-| **PII & Data Sanitization** | ✅ SECURE | Zero sensitive data logged |
-| **Secret Scanning** | ✅ SECURE | No hardcoded tokens detected |
-| **Rate Limiting & DoS** | ✅ SECURE | Payload bounds & timeouts enforced |
-
-## 3. Vulnerability Findings (CVSS v3)
-- No critical, high, or medium severity vulnerabilities found.
-
-## 4. Final Security Sign-off
-- **Verdict**: `PASSED FOR PRODUCTION DEPLOYMENT`
+## Sign-Off Signature
+- **Security Checksum**: `{SHA256}`
+- **Release Approved**: `YES`
 ```
 
-> **Handoff**: On `PASSED`, the Orchestrator marks the entire feature pipeline as `READY_FOR_RELEASE` and triggers audit export via `python3 packages/orchestrator/client.py export --format markdown`.
+> **Handoff**: The finalized security audit unlocks the **Mission Audit Exporter (`GET /api/audit/export`)** and production release.

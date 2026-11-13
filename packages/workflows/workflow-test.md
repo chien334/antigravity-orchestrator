@@ -1,14 +1,16 @@
 ---
 name: workflow-test
-description: Stage 4 Testing Workflow - Implement tests matching acceptance criteria from docs/specs/{feature_id}.spec.md and produce docs/reports/test_report.json
+description: Stage 4 Testing Workflow - Implement tests matching acceptance criteria from docs/specs/{feature_id}.spec.md using Gemini 4 Hydrogen and produce docs/reports/test_report.json
 ---
 
 # Stage 4: Automated Verification & Testing Workflow
 
 ## 1. Objective & Persona
 - **Persona**: `test-engineer`
-- **Model Engine**: ⚡ **Gemini 3.8 Flash** (`model: gemini-3.8-flash`, cost-efficient high-throughput)  
-  *(If unexpected test failures or regressions occur, escalate diagnostic responsibility to `debugger` with ✦ **Gemini 4 Carbon** and `reasoning_effort: high`).*
+- **Model Engine**: ✦ **Gemini 4 Hydrogen** (`model: gemini-4-hydrogen`, `reasoning_effort: medium | high`)  
+  *High-throughput test authoring and sandbox test execution (198 tok/s, 2.5x speed) with 95% cache savings ($0.075 / 1M cache tokens).*  
+  *(Fallback to ⚡ **Gemini 3.8 Flash** in `cost_saving` mode).*  
+  *(**Fast-Retry Circuit Breaker**: If unexpected test failures occur, allow 1 fast self-healing turn on Hydrogen with `effort: xhigh`. If regressions persist after 2 attempts (`retry_count >= 2`), trip the circuit breaker and escalate diagnostic responsibility to `debugger` with ✦ **Gemini 4 Carbon** and `reasoning_effort: high`).*
 - **Primary Skill**: `test-driven-development`
 
 ---
@@ -28,30 +30,38 @@ description: Stage 4 Testing Workflow - Implement tests matching acceptance crit
    python3 packages/orchestrator/client.py update \
      --task "TEST-{FEATURE}" \
      --agent "test-engineer" \
-     --model "gemini-3.8-flash" \
+     --model "gemini-4-hydrogen" \
+     --effort "medium" \
      --complexity "medium" \
      --status "running" \
      --progress 20 \
      --scope "tests/test_{feature}.py" \
-     --notes "Writing unit and integration assertions"
+     --notes "Writing unit and integration assertions at 198 tok/sec"
    ```
 2. **Implement Test Scenarios**:
    - Write comprehensive unit tests for every branch, boundary condition, and edge case defined in the spec.
-   - Use standard frameworks (e.g. `unittest`, `pytest`, `jest`).
-3. **Execute Test Suite**:
+   - Use standard frameworks (e.g. `unittest`, `pytest`, `jest`, `vitest`).
+3. **Execute Test Suite & Fast-Retry Circuit Breaker**:
    - Run tests and capture machine-readable output.
-   - All tests must pass 100%. If any test fails, report failure details to the Orchestrator for escalation.
+   - If tests fail:
+     * **Attempt 1 (`retry_count: 1`)**: Fast self-healing retry turn on `gemini-4-hydrogen` with elevated reasoning (`--effort xhigh`).
+     * **Attempt 2+ (`retry_count >= 2`)**: Trip circuit breaker! Escalate to `debugger` with **Gemini 4 Carbon** (`--effort high`) for deep failure isolation.
+   - All tests must achieve 100% pass rate before advancing.
 4. **Artifact Generation**: Produce `docs/reports/test_report.json`.
 5. **Emit Completion Telemetry**:
    ```bash
    python3 packages/orchestrator/client.py update \
      --task "TEST-{FEATURE}" \
      --agent "test-engineer" \
-     --model "gemini-3.8-flash" \
+     --model "gemini-4-hydrogen" \
+     --effort "medium" \
      --status "completed" \
      --progress 100 \
+     --input-tokens {IN_TOK} \
+     --output-tokens {OUT_TOK} \
+     --cache-tokens {CACHE_TOK} \
      --scope "docs/reports/test_report.json" \
-     --notes "All tests passed with 100% success rate"
+     --notes "All tests passed with 100% success rate on Gemini 4 Hydrogen"
    ```
 
 ---
@@ -64,13 +74,13 @@ Save to: `docs/reports/test_report.json`
   "feature_id": "{feature_id}",
   "timestamp": "{ISO_8601_TIMESTAMP}",
   "tester": "test-engineer",
-  "engine": "gemini-3.8-flash",
+  "engine": "gemini-4-hydrogen",
   "summary": {
     "total_tests": 12,
     "passed": 12,
     "failed": 0,
     "skipped": 0,
-    "duration_seconds": 2.45
+    "duration_seconds": 1.15
   },
   "test_suites": [
     {

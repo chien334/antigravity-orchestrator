@@ -8,7 +8,9 @@ description: Stage 5 Code Review Workflow - Conduct multi-axis review of git dif
 ## 1. Objective & Persona
 - **Persona**: `code-reviewer`
 - **Model Engine**: ✦ **Gemini 4 Argon** (`model: gemini-4-argon`, `reasoning_effort: high`)  
-  *(Optionally escalate to ✦ **Gemini 4 Carbon** with `reasoning_effort: high` in `quality_first` mode or when reviewing mission-critical core subsystems).*
+  *Deep reasoning engine for 5-axis code quality inspection and architectural compliance.*  
+  *(Escalate to ✦ **Gemini 4 Carbon** with `reasoning_effort: high` in `quality_first` mode or when reviewing mission-critical core subsystems).*  
+  *(In `speed_first` / `latency_sensitive` mode, rapid code reviews of non-critical PRs are dispatched to ✦ **Gemini 4 Hydrogen** with `reasoning_effort: xhigh` thinking depth).*
 - **Primary Skill**: `code-review-and-quality`
 
 ---
@@ -55,6 +57,9 @@ description: Stage 5 Code Review Workflow - Conduct multi-axis review of git dif
      --effort "high" \
      --status "completed" \
      --progress 100 \
+     --input-tokens {IN_TOK} \
+     --output-tokens {OUT_TOK} \
+     --cache-tokens {CACHE_TOK} \
      --scope "docs/reviews/review_signoff.md" \
      --notes "Review completed with sign-off status: APPROVED"
    ```
@@ -65,32 +70,22 @@ description: Stage 5 Code Review Workflow - Conduct multi-axis review of git dif
 Save to: `docs/reviews/review_signoff.md`
 
 ```markdown
-# Code Review Sign-off: {Feature Name}
+# Code Review Sign-Off: {Feature Name}
 
-- **Feature ID**: {feature_id}
-- **Reviewer**: code-reviewer (Gemini 4 Argon, reasoning_effort: high)
-- **Status**: APPROVED | REQUEST_CHANGES
-- **Date**: {YYYY-MM-DD}
+- **Reviewer**: `code-reviewer`
+- **Model Engine**: `gemini-4-argon` (effort: high)
+- **Verdict**: `APPROVED` | `REQUEST_CHANGES`
 
-## 1. Summary of Changes
-- Total files reviewed: {count}
-- Additions / Deletions: +{added} / -{deleted}
+## 5-Axis Assessment
+1. **Correctness**: ...
+2. **Architecture**: ...
+3. **Maintainability**: ...
+4. **Performance**: ...
+5. **Error Handling**: ...
 
-## 2. Review Axes Scorecard
-
-| Axis | Status | Notes |
-| :--- | :---: | :--- |
-| **1. Correctness & Logic** | ✅ PASS | Matches acceptance criteria from spec |
-| **2. Architecture & Contracts** | ✅ PASS | Adheres to plan data interfaces |
-| **3. Maintainability** | ✅ PASS | Readable, modular, no dead code |
-| **4. Performance** | ✅ PASS | No quadratic loops or unbounded buffers |
-| **5. Error Handling** | ✅ PASS | Exceptions typed and handled |
-
-## 3. Findings & Required Modifications
-- None (or itemized list if REQUEST_CHANGES)
-
-## 4. Final Verdict
-- **Sign-off**: `APPROVED`
+## Sign-Off Signature
+- **Sign-Off Hash**: `{GIT_HEAD_SHA}`
+- **Ready for Security Audit**: `YES`
 ```
 
-> **Handoff**: On `APPROVED`, the Orchestrator routes the changes to **Stage 6 (`workflow-security`)**.
+> **Handoff**: The approved sign-off `docs/reviews/review_signoff.md` is passed as input to **Stage 6 (`workflow-security`)**.
