@@ -421,6 +421,8 @@ class TestOrchestratorClient(OrchestratorTestBase):
             "Security Review",
             "--notes",
             "Running bandit static scan",
+            "--conv-id",
+            "conv-cli-01",
         ]
         result = subprocess.run(cmd_update, capture_output=True, text=True, check=True)
         data = json.loads(result.stdout)

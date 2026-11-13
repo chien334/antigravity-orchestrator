@@ -143,7 +143,7 @@ class TestModelCatalogAndPricing(unittest.TestCase):
 
     def test_reasoning_effort_validation(self):
         """Verify VALID_REASONING_EFFORTS and validate_reasoning_effort logic."""
-        self.assertEqual(VALID_REASONING_EFFORTS, {"low", "medium", "high"})
+        self.assertEqual(VALID_REASONING_EFFORTS, {"low", "medium", "high", "xhigh"})
 
         # Gemini 4 Carbon supports low, medium, high
         for effort in ["low", "medium", "high", "LOW", "High"]:
@@ -518,16 +518,28 @@ class TestCarbonRESTEndpoints(unittest.TestCase):
         self.assertEqual(rec2_bal["reasoning_effort"], "medium")
         self.assertEqual(rec2_bal["tier"], "deep_reasoning")
 
-        # 3. Medium complexity / Builder -> Flash None
+        # 3. Medium complexity / Builder in balanced mode -> Hydrogen high (high_throughput)
         status, _, d3 = self._post("/api/router/recommend", {
             "agent_type": "builder",
             "complexity": "medium",
         })
         self.assertEqual(status, 200)
         rec3 = d3["recommendation"]
-        self.assertEqual(rec3["model"], "gemini-3.8-flash")
-        self.assertIsNone(rec3["reasoning_effort"])
-        self.assertEqual(rec3["tier"], "cost_efficient")
+        self.assertEqual(rec3["model"], "gemini-4-hydrogen")
+        self.assertEqual(rec3["reasoning_effort"], "high")
+        self.assertEqual(rec3["tier"], "high_throughput")
+
+        # In cost_saving mode, Builder routes to Flash None (cost_efficient)
+        status, _, d3_cost = self._post("/api/router/recommend", {
+            "agent_type": "builder",
+            "complexity": "medium",
+            "budget_mode": "cost_saving",
+        })
+        self.assertEqual(status, 200)
+        rec3_cost = d3_cost["recommendation"]
+        self.assertEqual(rec3_cost["model"], "gemini-3.8-flash")
+        self.assertIsNone(rec3_cost["reasoning_effort"])
+        self.assertEqual(rec3_cost["tier"], "cost_efficient")
 
         # 4. Low complexity / Simplifier -> Flash-Lite None
         status, _, d4 = self._post("/api/router/recommend", {
@@ -819,7 +831,11 @@ class TestCarbonSDKAndCLI(unittest.TestCase):
 
         rec2 = client.recommend(agent_type="builder", complexity="medium")
         self.assertEqual(rec2["status"], "ok")
-        self.assertEqual(rec2["recommendation"]["model"], "gemini-3.8-flash")
+        self.assertEqual(rec2["recommendation"]["model"], "gemini-4-hydrogen")
+
+        rec2_cost = client.recommend(agent_type="builder", complexity="medium", budget_mode="cost_saving")
+        self.assertEqual(rec2_cost["status"], "ok")
+        self.assertEqual(rec2_cost["recommendation"]["model"], "gemini-3.8-flash")
 
         # 4. next_ready() and alias get_ready_tasks()
         ready = client.next_ready()
@@ -865,6 +881,7 @@ class TestCarbonSDKAndCLI(unittest.TestCase):
             "--complexity", "critical",
             "--scope", "CLI Subprocess Verification",
             "--notes", "Testing CLI flags",
+            "--conv-id", "conv-carbon-cli",
             "--input-tokens", "12000",
             "--output-tokens", "3000",
             "--cache-tokens", "60000",
