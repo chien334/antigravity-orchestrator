@@ -2,7 +2,7 @@
 """
 Multi-Agent Orchestrator Client
 Python library and CLI utility for sending telemetry, task updates, and logs to the Orchestrator Server.
-Features Gemini 4 Carbon evolution: smart model routing, DAG ready-queue querying, model analytics, and audit exporting.
+Features Gemini 4 Carbon and Gemini 4 Hydrogen evolution: 5-tier smart model routing, Circuit Breaker escalation, DAG ready-queue querying, model analytics, and audit exporting.
 """
 
 import argparse
@@ -140,11 +140,13 @@ class OrchestratorClient:
         file_count: int = 0,
         has_security_impact: bool = False,
         budget_mode: str = "balanced",
+        retry_count: int = 0,
         **kwargs,
     ) -> dict:
         """Call POST /api/router/recommend to dynamically recommend model and reasoning effort."""
         files = kwargs.get("files", file_count)
         sec_impact = kwargs.get("security_impact", has_security_impact)
+        retries = kwargs.get("retries", retry_count)
         payload = {
             "agent_type": agent_type,
             "complexity": complexity,
@@ -152,6 +154,7 @@ class OrchestratorClient:
             "file_count": files,
             "has_security_impact": sec_impact,
             "budget_mode": budget_mode,
+            "retry_count": retries,
         }
         return self._post("/api/router/recommend", payload)
 
@@ -163,11 +166,13 @@ class OrchestratorClient:
         files: int = 0,
         security_impact: bool = False,
         budget_mode: str = "balanced",
+        retry_count: int = 0,
         **kwargs,
     ) -> dict:
         """Alias for recommend_model matching plan specification."""
         file_count = kwargs.get("file_count", files)
         has_sec = kwargs.get("has_security_impact", security_impact)
+        retries = kwargs.get("retries", retry_count)
         return self.recommend_model(
             agent_type=agent_type,
             complexity=complexity,
@@ -175,6 +180,8 @@ class OrchestratorClient:
             file_count=file_count,
             has_security_impact=has_sec,
             budget_mode=budget_mode,
+            retry_count=retries,
+            **kwargs,
         )
 
     def get_ready_tasks(self) -> dict:
@@ -307,7 +314,7 @@ def main():
         "--model",
         type=str,
         default=None,
-        help="Assigned Model (e.g. gemini-4-carbon, carbon, gemini-4-argon, pro, gemini-3.8-flash, flash, flash_lite)",
+        help="Assigned Model (e.g. gemini-4-carbon, carbon, gemini-4-argon, pro, gemini-4-hydrogen, hydrogen, gemini-3.8-flash, flash, flash_lite)",
     )
     update_parser.add_argument(
         "--reasoning-effort",
@@ -315,8 +322,8 @@ def main():
         dest="reasoning_effort",
         type=str,
         default=None,
-        choices=["low", "medium", "high"],
-        help="Tunable reasoning effort for models supporting reasoning depth (low, medium, high)",
+        choices=["low", "medium", "high", "xhigh"],
+        help="Tunable reasoning effort for models supporting reasoning depth (low, medium, high, xhigh)",
     )
     update_parser.add_argument(
         "--complexity",
@@ -408,8 +415,16 @@ def main():
         "--budget-mode",
         type=str,
         default="balanced",
-        choices=["balanced", "quality_first"],
-        help="Routing optimization mode (balanced, quality_first, default: balanced)",
+        choices=["balanced", "quality_first", "speed_first", "latency_sensitive", "cost_saving"],
+        help="Routing optimization mode (balanced, quality_first, speed_first, latency_sensitive, cost_saving, default: balanced)",
+    )
+    recommend_parser.add_argument(
+        "--retry-count",
+        "--retries",
+        dest="retry_count",
+        type=int,
+        default=0,
+        help="Prior failure retry count for Circuit Breaker escalation (default: 0)",
     )
     recommend_parser.add_argument("--json", action="store_true", help="Output raw JSON response")
     recommend_parser.add_argument(
@@ -539,13 +554,13 @@ def main():
             sys.exit(1)
         if args.format == "text" and not args.json:
             models = res.get("models", {})
-            print(f"{'Model':<24} {'Tier':<16} {'Rates ($ in/out/cache per 1M)':<32} {'Reasoning Efforts':<20}")
-            print("-" * 96)
+            print(f"{'Model':<24} {'Tier':<18} {'Rates ($ in/out/cache per 1M)':<32} {'Reasoning Efforts':<26}")
+            print("-" * 102)
             for m_id, m_data in models.items():
                 rates = m_data.get("rates", {})
                 rate_str = f"${rates.get('in', 0):.3f} / ${rates.get('out', 0):.2f} / ${rates.get('cache', 0):.4f}"
                 efforts = ", ".join(m_data.get("supported_reasoning_efforts", [])) or "None"
-                print(f"{m_id:<24} {m_data.get('tier', ''):<16} {rate_str:<32} {efforts:<20}")
+                print(f"{m_id:<24} {m_data.get('tier', ''):<18} {rate_str:<32} {efforts:<26}")
         else:
             print(json.dumps(res, indent=2))
 
@@ -557,6 +572,7 @@ def main():
             file_count=args.files,
             has_security_impact=args.security_impact,
             budget_mode=args.budget_mode,
+            retry_count=args.retry_count,
         )
         if "error" in res:
             print(json.dumps(res, indent=2))
@@ -569,6 +585,15 @@ def main():
             print(f"Tier:              {rec.get('tier', 'unknown')}")
             print(f"Cost Tier:         {rec.get('estimated_cost_tier', '-')}")
             print(f"Fallback Model:    {rec.get('fallback_model', '-')}")
+            if rec.get("circuit_breaker"):
+                cb = rec["circuit_breaker"]
+                cb_status = str(cb.get("status", "unknown")).upper()
+                if cb.get("status") == "tripped":
+                    print(f"Circuit Breaker:   TRIPPED (retries: {cb.get('retries', 0)}, escalated from: {cb.get('escalated_from', 'gemini-4-hydrogen')})")
+                elif cb.get("status") == "retrying":
+                    print(f"Circuit Breaker:   RETRYING (retry #{cb.get('retry_count', 1)}, escalating to: {cb.get('escalate_to', 'gemini-4-carbon')})")
+                else:
+                    print(f"Circuit Breaker:   {cb_status} (retries: {cb.get('retry_count', 0)})")
             print(f"Rationale:         {rec.get('rationale', '')}")
         else:
             print(json.dumps(res, indent=2))
@@ -607,7 +632,7 @@ def main():
             print("\n=== Per-Model Breakdown ===")
             models = res.get("models", {})
             for m_id, s in models.items():
-                print(f"  {m_id}: {s.get('task_count', 0)} tasks | {s.get('total_tokens', 0):,} tokens | Hit Rate: {s.get('cache_hit_rate', 0)}% | Cost: ${s.get('cost_usd', 0.0):.4f}")
+                print(f"  {m_id:<22}: {s.get('task_count', 0):>3} tasks | {s.get('total_tokens', 0):>12,} tokens | Hit Rate: {s.get('cache_hit_rate', 0):>5.1f}% | Cost: ${s.get('cost_usd', 0.0):>9.4f}")
         else:
             print(json.dumps(res, indent=2))
 

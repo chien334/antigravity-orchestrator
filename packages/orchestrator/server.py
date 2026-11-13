@@ -34,8 +34,11 @@ try:
         USD_TO_VND_RATE,
         VALID_REASONING_EFFORTS,
         compute_cost,
+        extract_model_and_effort,
+        get_model_metadata,
         normalize_model_name,
         resolve_model_id,
+        validate_reasoning_effort,
     )
     from router import (
         recommend_model,
@@ -52,8 +55,11 @@ except ImportError:
             USD_TO_VND_RATE,
             VALID_REASONING_EFFORTS,
             compute_cost,
+            extract_model_and_effort,
+            get_model_metadata,
             normalize_model_name,
             resolve_model_id,
+            validate_reasoning_effort,
         )
         from packages.orchestrator.router import (
             recommend_model,
@@ -69,8 +75,11 @@ except ImportError:
             USD_TO_VND_RATE,
             VALID_REASONING_EFFORTS,
             compute_cost,
+            extract_model_and_effort,
+            get_model_metadata,
             normalize_model_name,
             resolve_model_id,
+            validate_reasoning_effort,
         )
         from .router import (
             recommend_model,
@@ -424,7 +433,9 @@ class StateStore:
 
                 final_agent = agent_type or existing.get("agent_type", "orchestrator")
                 if model is not None:
-                    final_model = normalize_model_name(model)
+                    final_model, extracted_effort = extract_model_and_effort(model, reasoning_effort)
+                    if reasoning_effort is None:
+                        reasoning_effort = extracted_effort
                 else:
                     final_model = existing.get("model", "gemini-4-argon")
 
@@ -2633,6 +2644,7 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
             file_count = int(payload.get("file_count") or payload.get("files") or 0)
             has_security_impact = bool(payload.get("has_security_impact") or payload.get("security_impact") or False)
             budget_mode = payload.get("budget_mode", "balanced")
+            retry_count = int(payload.get("retry_count") or payload.get("retries") or 0)
 
             rec = recommend_model(
                 agent_type=agent_type,
@@ -2641,6 +2653,7 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
                 file_count=file_count,
                 has_security_impact=has_security_impact,
                 budget_mode=budget_mode,
+                retry_count=retry_count,
             )
             res = json.dumps(rec).encode("utf-8")
             self.send_response(HTTPStatus.OK)

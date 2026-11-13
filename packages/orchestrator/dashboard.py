@@ -1,8 +1,8 @@
 """
 Web Dashboard for Antigravity Multi-Agent Orchestrator.
-Exposes DASHBOARD_HTML: str containing upgraded dark-mode UI with Carbon styling,
-Per-Model Financial Analytics, Interactive Zero-Dependency SVG DAG Visualizer,
-and Smart Model Router Sandbox.
+Exposes DASHBOARD_HTML: str containing upgraded dark-mode UI with Gemini 4 Carbon & Hydrogen styling,
+Per-Model Financial Analytics (5-Tier Periodic Table Architecture), Interactive Zero-Dependency SVG DAG Visualizer,
+and Smart Model Router Sandbox with Fast-Retry Circuit Breaker.
 """
 
 DASHBOARD_HTML = """<!DOCTYPE html>
@@ -37,6 +37,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
               500: '#10b981',
               900: '#064e3b',
               950: '#022c22',
+            },
+            hydrogen: {
+              300: '#67e8f9',
+              400: '#22d3ee',
+              500: '#06b6d4',
+              900: '#164e63',
+              950: '#083344',
             }
           }
         }
@@ -57,6 +64,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
     .glow-carbon {
       animation: glow-emerald 3s ease-in-out infinite;
+    }
+    @keyframes glow-cyan {
+      0%, 100% { box-shadow: 0 0 15px rgba(6, 182, 212, 0.25); }
+      50% { box-shadow: 0 0 25px rgba(6, 182, 212, 0.55); }
+    }
+    .glow-hydrogen, .glow-cyan {
+      animation: glow-cyan 3s ease-in-out infinite;
     }
     ::-webkit-scrollbar {
       width: 6px;
@@ -80,7 +94,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   <header class="border-b border-slate-800/80 bg-slate-900/70 backdrop-blur sticky top-0 z-50">
     <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3 flex items-center justify-between gap-4">
       <div class="flex items-center space-x-3 min-w-0">
-        <div class="h-9 w-9 rounded-xl bg-gradient-to-br from-emerald-500 via-indigo-500 to-purple-600 flex items-center justify-center shadow-lg shadow-emerald-500/20 shrink-0">
+        <div class="h-9 w-9 rounded-xl bg-gradient-to-br from-cyan-400 via-emerald-500 to-indigo-600 flex items-center justify-center shadow-lg shadow-cyan-500/20 shrink-0">
           <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
           </svg>
@@ -89,7 +103,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           <div class="flex items-center space-x-2 flex-wrap">
             <h1 class="text-base font-bold tracking-tight text-white whitespace-nowrap">Hospital Suite - Multi-Agent Orchestrator</h1>
             <span class="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 font-semibold border border-emerald-500/30">Gemini 4 Carbon</span>
-            <span class="text-[10px] px-2 py-0.5 rounded-full bg-indigo-500/10 text-indigo-400 font-medium border border-indigo-500/20">v2.2 Fleet</span>
+            <span class="text-[10px] px-2 py-0.5 rounded-full bg-cyan-500/15 text-cyan-300 font-semibold border border-cyan-500/40 flex items-center gap-1 shadow-sm shadow-cyan-500/10"><span class="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" style="background-color: #06b6d4;"></span>⚡ Gemini 4 Hydrogen</span>
+            <span class="text-[10px] px-2 py-0.5 rounded-full bg-indigo-500/10 text-indigo-400 font-medium border border-indigo-500/20">5-Tier Fleet</span>
           </div>
           <p class="text-xs text-slate-400 truncate">1-Agent = 1-Skill Real-Time Execution Engine &middot; Autonomous Multi-Model Fleet</p>
         </div>
@@ -137,7 +152,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <button id="tab-btn-analytics" onclick="switchTab('analytics')" class="py-2.5 px-3 border-b-2 font-semibold text-xs sm:text-sm flex items-center space-x-2 transition border-transparent text-slate-400 hover:text-slate-200">
           <svg class="w-4 h-4 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" /></svg>
           <span>📊 Model Analytics</span>
-          <span class="ml-1 px-1.5 py-0.2 rounded-full text-[10px] bg-indigo-500/20 text-indigo-300 font-mono">Carbon Tier</span>
+          <span class="ml-1 px-1.5 py-0.2 rounded-full text-[10px] bg-cyan-500/20 text-cyan-300 font-mono">5-Tier Fleet</span>
         </button>
 
         <button id="tab-btn-history" onclick="switchTab('history')" class="py-2.5 px-3 border-b-2 font-semibold text-xs sm:text-sm flex items-center space-x-2 transition border-transparent text-slate-400 hover:text-slate-200">
@@ -462,7 +477,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             <span class="text-xs text-slate-400">1 USD = 25,400 VND Baseline</span>
           </div>
           <h2 class="text-lg font-bold text-white mt-1">Multi-Model Token Consumption &amp; Cache Savings Analytics</h2>
-          <p class="text-xs text-slate-300 mt-0.5">Granular telemetry tracking frontier Gemini 4 Carbon, Argon deep reasoning, and high-throughput Flash tiers.</p>
+          <p class="text-xs text-slate-300 mt-0.5">Granular telemetry tracking frontier Gemini 4 Carbon, Argon deep reasoning, high-throughput Gemini 4 Hydrogen, Flash, and Flash-Lite tiers.</p>
         </div>
         <div class="flex items-center space-x-2">
           <button onclick="refreshModelAnalytics()" class="px-3 py-1.5 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/40 text-xs font-semibold flex items-center space-x-1.5 transition">
@@ -472,9 +487,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         </div>
       </div>
 
-      <!-- 4-Model Comparative Cards Grid -->
-      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4" id="model-analytics-cards">
-        <!-- Rendered dynamically: Carbon, Argon, Flash, Flash-Lite -->
+      <!-- 5-Model Comparative Cards Grid -->
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4" id="model-analytics-cards">
+        <!-- Rendered dynamically: Carbon, Argon, Hydrogen, Flash, Flash-Lite -->
       </div>
 
       <!-- Total Spend Distribution Visual Progress Bar -->
@@ -486,12 +501,14 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <div class="w-full bg-slate-950 rounded-full h-3 overflow-hidden flex" id="spend-distribution-bar">
           <div id="bar-carbon" class="bg-emerald-500 h-full transition-all duration-300" style="width: 0%;" title="Carbon: $0.00"></div>
           <div id="bar-argon" class="bg-indigo-500 h-full transition-all duration-300" style="width: 0%;" title="Argon: $0.00"></div>
+          <div id="bar-hydrogen" class="bg-cyan-500 h-full transition-all duration-300" style="width: 0%; background-color: #06b6d4;" title="Hydrogen: $0.00"></div>
           <div id="bar-flash" class="bg-amber-500 h-full transition-all duration-300" style="width: 0%;" title="Flash: $0.00"></div>
           <div id="bar-lite" class="bg-slate-500 h-full transition-all duration-300" style="width: 0%;" title="Flash-Lite: $0.00"></div>
         </div>
         <div class="flex flex-wrap items-center justify-between gap-2 text-xs pt-1">
           <div class="flex items-center space-x-1.5"><span class="w-3 h-3 rounded bg-emerald-500"></span><span class="text-emerald-300 font-mono text-[11px]" id="legend-carbon">Carbon: $0.00 (0%)</span></div>
           <div class="flex items-center space-x-1.5"><span class="w-3 h-3 rounded bg-indigo-500"></span><span class="text-indigo-300 font-mono text-[11px]" id="legend-argon">Argon: $0.00 (0%)</span></div>
+          <div class="flex items-center space-x-1.5"><span class="w-3 h-3 rounded bg-cyan-500" style="background-color: #06b6d4;"></span><span class="text-cyan-300 font-mono text-[11px]" id="legend-hydrogen">Hydrogen: $0.00 (0%)</span></div>
           <div class="flex items-center space-x-1.5"><span class="w-3 h-3 rounded bg-amber-500"></span><span class="text-amber-300 font-mono text-[11px]" id="legend-flash">Flash: $0.00 (0%)</span></div>
           <div class="flex items-center space-x-1.5"><span class="w-3 h-3 rounded bg-slate-500"></span><span class="text-slate-300 font-mono text-[11px]" id="legend-lite">Flash-Lite: $0.00 (0%)</span></div>
         </div>
@@ -607,6 +624,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
               <option value="all">All Models</option>
               <option value="carbon">Gemini 4 Carbon (Frontier)</option>
               <option value="argon">Gemini 4 Argon (Pro)</option>
+              <option value="hydrogen">Gemini 4 Hydrogen (Ultra-Fast)</option>
               <option value="flash">Gemini 3.8 Flash</option>
               <option value="lite">Gemini 3.8 Flash-Lite</option>
             </select>
@@ -617,6 +635,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             <span class="text-slate-400">Effort:</span>
             <select id="hist-filter-effort" onchange="renderHistoryTable()" class="bg-slate-800/80 border border-slate-700/80 rounded-xl px-2.5 py-1.5 text-slate-200 text-xs focus:outline-none focus:border-emerald-500">
               <option value="all">All Efforts</option>
+              <option value="xhigh">XHigh Effort [Thinking]</option>
               <option value="high">High Effort</option>
               <option value="medium">Medium Effort</option>
               <option value="low">Low Effort</option>
@@ -846,6 +865,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
               <option value="task-planner">task-planner (Architecture &amp; DAG Planner)</option>
               <option value="code-reviewer">code-reviewer (Code Quality &amp; Multi-Axis)</option>
               <option value="builder" selected>builder (Software Implementation)</option>
+              <option value="ui-builder">ui-builder (Rapid UI &amp; Dashboard Iteration)</option>
+              <option value="frontend-engineer">frontend-engineer (Frontend &amp; UI Specialist)</option>
+              <option value="scout">scout (Codebase Reconnaissance &amp; URI Pointers)</option>
+              <option value="codebase-researcher">codebase-researcher (Deep Code Search &amp; Pointers)</option>
               <option value="test-engineer">test-engineer (Automated Test Specialist)</option>
               <option value="observability-and-instrumentation">observability (Telemetry &amp; Instrumentation)</option>
               <option value="code-simplifier">code-simplifier (Refactoring &amp; Dead-code)</option>
@@ -870,10 +893,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           <input type="text" id="router-scope" placeholder="e.g., Audit SQL injection vulnerabilities and CVE exploits in auth controller" class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-slate-200 focus:outline-none focus:border-emerald-500" value="Audit authentication middleware for token forgery vulnerabilities">
         </div>
 
-        <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 items-center">
+        <div class="grid grid-cols-1 sm:grid-cols-4 gap-3 items-center">
           <!-- File count -->
           <div>
-            <label class="block text-slate-300 font-semibold mb-1">Estimated File Impact</label>
+            <label class="block text-slate-300 font-semibold mb-1">Estimated Files</label>
             <input type="number" id="router-files" value="3" min="1" max="100" class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-slate-200 focus:outline-none focus:border-emerald-500">
           </div>
 
@@ -882,8 +905,22 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             <label class="block text-slate-300 font-semibold mb-1">Optimization Goal</label>
             <select id="router-budget" class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-slate-200 focus:outline-none focus:border-emerald-500">
               <option value="balanced" selected>Balanced (Cost vs Quality)</option>
+              <option value="speed_first">Speed First (198 tok/s Workhorse)</option>
+              <option value="latency_sensitive">Latency Sensitive (Fastest Response)</option>
               <option value="quality_first">Quality First (Prefer Frontier Carbon)</option>
+              <option value="cost_saving">Cost Saving (Bulk Flash Scaffolding)</option>
               <option value="cost_first">Cost First (Max Flash Savings)</option>
+            </select>
+          </div>
+
+          <!-- Retry Count (Circuit Breaker Simulation) -->
+          <div>
+            <label class="block text-slate-300 font-semibold mb-1" title="Simulates Fast-Retry Circuit Breaker failure threshold">Retry Count</label>
+            <select id="router-retries" class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-slate-200 focus:outline-none focus:border-cyan-500 font-mono">
+              <option value="0" selected>0 (First Turn)</option>
+              <option value="1">1 (Self-Heal Retry)</option>
+              <option value="2">2 (CB Tripped &rarr; Carbon)</option>
+              <option value="3">3+ (Escalated High)</option>
             </select>
           </div>
 
@@ -905,6 +942,15 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
         <!-- Result Card -->
         <div id="router-result-card" class="hidden mt-4 p-4 rounded-xl border border-slate-700 bg-slate-950/80 space-y-3">
+          <!-- Fast-Retry Circuit Breaker Alert Banner -->
+          <div id="router-circuit-breaker-banner" class="hidden p-3 rounded-lg border text-xs font-mono flex items-start space-x-2.5">
+            <span id="router-cb-icon" class="text-base">⚡</span>
+            <div class="flex-1">
+              <div id="router-cb-title" class="font-bold text-amber-300">Fast-Retry Circuit Breaker Alert</div>
+              <div id="router-cb-desc" class="text-[11px] text-slate-300 mt-0.5"></div>
+            </div>
+          </div>
+
           <div class="flex items-center justify-between">
             <span class="text-xs uppercase tracking-wider text-slate-400 font-semibold">Router Recommendation</span>
             <span id="router-cost-tier" class="px-2 py-0.5 rounded font-mono font-bold text-xs bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">$$$</span>
@@ -966,6 +1012,15 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         color: 'indigo',
         efforts: ['low', 'medium', 'high'],
         desc: 'Balanced deep reasoning engine for architecture, planning, and multi-axis code review.'
+      },
+      'gemini-4-hydrogen': {
+        name: 'Gemini 4 Hydrogen',
+        tier: 'high_throughput',
+        tag: 'Ultra-Fast Workhorse (2.5x)',
+        rates: { in: 1.50, out: 7.50, cache: 0.075 },
+        color: 'cyan',
+        efforts: ['low', 'medium', 'high', 'xhigh'],
+        desc: 'Speed-optimized, high-throughput model (198 tok/s, 2.5x speed) for parallel builders, automated test suites, and pointer scouting.'
       },
       'gemini-3.8-flash': {
         name: 'Gemini 3.8 Flash',
@@ -1203,6 +1258,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const colors = {
         'builder': 'bg-indigo-500/10 text-indigo-400 border-indigo-500/30',
         'software-builder': 'bg-indigo-500/10 text-indigo-400 border-indigo-500/30',
+        'ui-builder': 'bg-cyan-500/10 text-cyan-300 border-cyan-500/30',
+        'frontend-engineer': 'bg-cyan-500/10 text-cyan-300 border-cyan-500/30',
+        'scout': 'bg-cyan-500/10 text-cyan-300 border-cyan-500/30',
+        'codebase-researcher': 'bg-cyan-500/10 text-cyan-300 border-cyan-500/30',
         'architect': 'bg-cyan-500/10 text-cyan-400 border-cyan-500/30',
         'planner': 'bg-cyan-500/10 text-cyan-400 border-cyan-500/30',
         'task-planner': 'bg-cyan-500/10 text-cyan-400 border-cyan-500/30',
@@ -1242,6 +1301,14 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             <span>Gemini 4 Argon</span>
           </span>
         `;
+      } else if (m.includes('hydrogen')) {
+        badge = `
+          <span class="px-2 py-0.5 rounded text-[11px] font-mono border bg-cyan-950/60 text-cyan-300 border-cyan-500/40 flex items-center gap-1.5 inline-flex shadow-sm shadow-cyan-500/10" style="border-color: rgba(6, 182, 212, 0.4);">
+            <span class="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" style="background-color: #06b6d4;"></span>
+            <span class="text-[10px] text-cyan-400">⚡</span>
+            <span class="font-bold">Gemini 4 Hydrogen</span>
+          </span>
+        `;
       } else if (m.includes('flash-lite') || m.includes('flash_lite') || m.includes('lite')) {
         badge = `
           <span class="px-2 py-0.5 rounded text-[11px] font-mono border bg-slate-900 text-slate-300 border-slate-700 flex items-center gap-1 inline-flex">
@@ -1264,7 +1331,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       if (reasoning_effort) {
         const eff = reasoning_effort.toLowerCase();
         let effBadge = '';
-        if (eff === 'high') {
+        if (eff === 'xhigh') {
+          effBadge = `<span class="ml-1 px-1.5 py-0.5 rounded text-[9px] font-mono font-bold bg-cyan-500/25 text-cyan-200 border border-cyan-400/60 animate-pulse shadow-sm shadow-cyan-500/20" title="Maximum Reasoning Effort [XHigh Thinking]" style="border-color: rgba(6, 182, 212, 0.6);">XHigh [Thinking]</span>`;
+        } else if (eff === 'high') {
           effBadge = `<span class="ml-1 px-1.5 py-0.5 rounded text-[9px] font-mono font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-400/40 animate-pulse" title="High Reasoning Effort [Thinking]">High [Thinking]</span>`;
         } else if (eff === 'medium') {
           effBadge = `<span class="ml-1 px-1.5 py-0.5 rounded text-[9px] font-mono font-semibold bg-indigo-500/20 text-indigo-300 border border-indigo-400/30" title="Medium Reasoning Effort [Thinking]">Med [Thinking]</span>`;
@@ -1714,6 +1783,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         let canon = 'gemini-4-argon';
         if (rawM.includes('carbon')) canon = 'gemini-4-carbon';
         else if (rawM.includes('argon') || rawM.includes('pro')) canon = 'gemini-4-argon';
+        else if (rawM.includes('hydrogen')) canon = 'gemini-4-hydrogen';
         else if (rawM.includes('flash-lite') || rawM.includes('lite')) canon = 'gemini-3.8-flash-lite';
         else if (rawM.includes('flash') || rawM.includes('3.8')) canon = 'gemini-3.8-flash';
 
@@ -1757,7 +1827,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const tbody = document.getElementById('analytics-tbody');
       if (!container || !tbody) return;
 
-      // 1. Render 4 model cards
+      // 1. Render 5 model cards
       container.innerHTML = Object.keys(MODEL_SPECS).map(key => {
         const spec = MODEL_SPECS[key];
         const stat = models[key] || { task_count: 0, input_tokens: 0, output_tokens: 0, cache_tokens: 0, total_tokens: 0, cost_usd: 0.0, cost_vnd: 0, saved_usd: 0.0, cache_hit_rate: 0.0 };
@@ -1772,6 +1842,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         } else if (key === 'gemini-4-argon') {
           cardBorder = 'border-indigo-500/30 bg-gradient-to-br from-indigo-950/30 to-slate-900';
           titleColor = 'text-indigo-300';
+        } else if (key === 'gemini-4-hydrogen') {
+          cardBorder = 'border-cyan-500/40 bg-gradient-to-br from-cyan-950/40 to-slate-900 shadow-lg shadow-cyan-500/10';
+          titleColor = 'text-cyan-300';
+          accentGlow = 'glow-hydrogen';
         } else if (key === 'gemini-3.8-flash') {
           cardBorder = 'border-amber-500/30 bg-gradient-to-br from-amber-950/30 to-slate-900';
           titleColor = 'text-amber-300';
@@ -1827,23 +1901,37 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
       const cSpend = (models['gemini-4-carbon']?.cost_usd || 0);
       const aSpend = (models['gemini-4-argon']?.cost_usd || 0);
+      const hSpend = (models['gemini-4-hydrogen']?.cost_usd || 0);
       const fSpend = (models['gemini-3.8-flash']?.cost_usd || 0);
       const lSpend = (models['gemini-3.8-flash-lite']?.cost_usd || 0);
 
       const cPct = totalSpend > 0 ? (cSpend / totalSpend * 100) : 0;
       const aPct = totalSpend > 0 ? (aSpend / totalSpend * 100) : 0;
+      const hPct = totalSpend > 0 ? (hSpend / totalSpend * 100) : 0;
       const fPct = totalSpend > 0 ? (fSpend / totalSpend * 100) : 0;
       const lPct = totalSpend > 0 ? (lSpend / totalSpend * 100) : 0;
 
-      document.getElementById('bar-carbon').style.width = `${cPct}%`;
-      document.getElementById('bar-argon').style.width = `${aPct}%`;
-      document.getElementById('bar-flash').style.width = `${fPct}%`;
-      document.getElementById('bar-lite').style.width = `${lPct}%`;
+      const barCarbon = document.getElementById('bar-carbon');
+      if (barCarbon) barCarbon.style.width = `${cPct}%`;
+      const barArgon = document.getElementById('bar-argon');
+      if (barArgon) barArgon.style.width = `${aPct}%`;
+      const barHydrogen = document.getElementById('bar-hydrogen');
+      if (barHydrogen) barHydrogen.style.width = `${hPct}%`;
+      const barFlash = document.getElementById('bar-flash');
+      if (barFlash) barFlash.style.width = `${fPct}%`;
+      const barLite = document.getElementById('bar-lite');
+      if (barLite) barLite.style.width = `${lPct}%`;
 
-      document.getElementById('legend-carbon').textContent = `Carbon: ${formatMoneyUSD(cSpend)} (${cPct.toFixed(1)}%)`;
-      document.getElementById('legend-argon').textContent = `Argon: ${formatMoneyUSD(aSpend)} (${aPct.toFixed(1)}%)`;
-      document.getElementById('legend-flash').textContent = `Flash: ${formatMoneyUSD(fSpend)} (${fPct.toFixed(1)}%)`;
-      document.getElementById('legend-lite').textContent = `Flash-Lite: ${formatMoneyUSD(lSpend)} (${lPct.toFixed(1)}%)`;
+      const legCarbon = document.getElementById('legend-carbon');
+      if (legCarbon) legCarbon.textContent = `Carbon: ${formatMoneyUSD(cSpend)} (${cPct.toFixed(1)}%)`;
+      const legArgon = document.getElementById('legend-argon');
+      if (legArgon) legArgon.textContent = `Argon: ${formatMoneyUSD(aSpend)} (${aPct.toFixed(1)}%)`;
+      const legHydrogen = document.getElementById('legend-hydrogen');
+      if (legHydrogen) legHydrogen.textContent = `Hydrogen: ${formatMoneyUSD(hSpend)} (${hPct.toFixed(1)}%)`;
+      const legFlash = document.getElementById('legend-flash');
+      if (legFlash) legFlash.textContent = `Flash: ${formatMoneyUSD(fSpend)} (${fPct.toFixed(1)}%)`;
+      const legLite = document.getElementById('legend-lite');
+      if (legLite) legLite.textContent = `Flash-Lite: ${formatMoneyUSD(lSpend)} (${lPct.toFixed(1)}%)`;
 
       // 3. Render table
       tbody.innerHTML = Object.keys(MODEL_SPECS).map(key => {
@@ -1884,6 +1972,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           const m = (t.model || '').toLowerCase();
           if (modelFilter === 'carbon' && !m.includes('carbon')) return false;
           if (modelFilter === 'argon' && !m.includes('argon') && !m.includes('pro')) return false;
+          if (modelFilter === 'hydrogen' && !m.includes('hydrogen')) return false;
           if (modelFilter === 'flash' && (!m.includes('flash') || m.includes('lite'))) return false;
           if (modelFilter === 'lite' && !m.includes('lite')) return false;
         }
@@ -2060,7 +2149,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       });
       md.push("");
       md.push("## 2. Compliance & Verification Signatures");
-      md.push("- **Model Taxonomy**: Verified Gemini 4 Carbon, Argon, Flash, Flash-Lite pricing.");
+      md.push("- **Model Taxonomy**: Verified Gemini 4 Carbon, Argon, Hydrogen, Flash, Flash-Lite pricing.");
       md.push("- **Disjoint Scope Verification**: Verified non-overlapping parallel builder workspaces.");
       md.push("- **Mission Status**: PASS (Automated Audit Signoff)");
       md.push("");
@@ -2105,6 +2194,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const files = parseInt(document.getElementById('router-files').value || '1', 10);
       const security = document.getElementById('router-security').checked;
       const budget = document.getElementById('router-budget').value;
+      const retries = parseInt(document.getElementById('router-retries')?.value || '0', 10);
 
       const payload = {
         agent_type: persona,
@@ -2112,7 +2202,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         scope: scope,
         file_count: files,
         has_security_impact: security,
-        budget_mode: budget
+        budget_mode: budget,
+        retry_count: retries
       };
 
       fetch('/api/router/recommend', {
@@ -2137,30 +2228,67 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
 
     function fallbackRouterRecommendation(p) {
-      const agent = (p.agent_type || '').toLowerCase();
-      const comp = (p.complexity || 'medium').toLowerCase();
+      const agent = (p.agent_type || '').toLowerCase().trim();
+      const comp = (p.complexity || 'medium').toLowerCase().trim();
       const scopeLower = (p.scope || '').toLowerCase();
-      let model = 'gemini-3.8-flash';
-      let effort = null;
-      let tier = 'cost_efficient';
-      let rationale = '';
-      let costTier = '$$';
-      let fallback = 'gemini-3.8-flash-lite';
+      const budget = (p.budget_mode || 'balanced').toLowerCase().trim();
+      const retries = Math.max(0, parseInt(p.retry_count || 0, 10));
 
-      if (p.has_security_impact || comp === 'critical' || ((agent === 'security-auditor' || agent === 'debugger') && (comp === 'high' || comp === 'critical')) || scopeLower.includes('vulnerability') || scopeLower.includes('cve')) {
+      let model = 'gemini-4-hydrogen';
+      let effort = null;
+      let tier = 'high_throughput';
+      let rationale = '';
+      let costTier = '$$$';
+      let fallback = 'gemini-3.8-flash';
+      let cbMeta = null;
+
+      // =========================================================================
+      // RULE 1: STRICT SECURITY & FRONTIER GUARDRAIL (Zero-Downgrade Invariant)
+      // =========================================================================
+      const isSecurityTask = (
+        p.has_security_impact
+        || comp === 'critical'
+        || ((agent === 'security-auditor' || agent === 'debugger') && (comp === 'high' || comp === 'critical'))
+        || ['vulnerability', 'cve', 'penetration', 'auth', 'crypto', 'owasp', 'rbac', 'jwt', 'migration'].some(k => scopeLower.includes(k))
+      );
+
+      if (isSecurityTask) {
         model = 'gemini-4-carbon';
         effort = (comp === 'critical' || p.has_security_impact) ? 'high' : 'medium';
         tier = 'frontier';
-        rationale = 'Critical-tier security audit, vulnerability analysis, or frontier debugging requires Gemini 4 Carbon deep reasoning.';
+        rationale = 'Critical-tier security audit, vulnerability modeling, or deep root-cause debugging requires Gemini 4 Carbon frontier reasoning.';
         costTier = '$$$$';
         fallback = 'gemini-4-argon';
-      } else if (agent === 'spec-engineer' || agent === 'task-planner' || agent === 'code-reviewer' || comp === 'high') {
-        if (p.budget_mode === 'quality_first') {
+      }
+      // =========================================================================
+      // RULE 2: CIRCUIT BREAKER ESCALATION (Fast-Retry Topology)
+      // =========================================================================
+      else if (retries >= 2) {
+        model = 'gemini-4-carbon';
+        effort = 'high';
+        tier = 'frontier';
+        rationale = `Circuit breaker tripped after ${retries} failed attempts on Gemini 4 Hydrogen. Auto-escalated to Gemini 4 Carbon (high effort) for deep root-cause diagnosis.`;
+        costTier = '$$$$';
+        fallback = 'gemini-4-argon';
+        cbMeta = { status: 'tripped', retries: retries, escalated_from: 'gemini-4-hydrogen' };
+      }
+      // =========================================================================
+      // RULE 3: ARCHITECTURE, SPECIFICATION & 5-AXIS CODE REVIEW
+      // =========================================================================
+      else if (['spec-engineer', 'task-planner', 'code-reviewer'].includes(agent) || comp === 'high') {
+        if (budget === 'quality_first') {
           model = 'gemini-4-carbon';
           effort = 'medium';
           tier = 'frontier';
-          rationale = 'High-complexity specification/architecture in quality-first mode dispatched to Gemini 4 Carbon.';
+          rationale = 'High-complexity specification/architecture in quality-first mode requires Gemini 4 Carbon frontier reasoning.';
           costTier = '$$$$';
+          fallback = 'gemini-4-argon';
+        } else if (['speed_first', 'latency_sensitive'].includes(budget) && agent === 'code-reviewer' && comp !== 'high') {
+          model = 'gemini-4-hydrogen';
+          effort = 'xhigh';
+          tier = 'high_throughput';
+          rationale = 'Rapid code review in speed-first mode dispatched to Gemini 4 Hydrogen with maximum reasoning depth (xhigh).';
+          costTier = '$$$';
           fallback = 'gemini-4-argon';
         } else {
           model = 'gemini-4-argon';
@@ -2168,16 +2296,50 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           tier = 'deep_reasoning';
           rationale = 'High-complexity planning or review dispatched to Gemini 4 Argon for balanced deep reasoning and throughput.';
           costTier = '$$$';
+          fallback = 'gemini-4-hydrogen';
+        }
+      }
+      // =========================================================================
+      // RULE 4: PARALLEL BUILDERS, TESTERS, SCOUTS & UI WORKERS
+      // =========================================================================
+      else if (
+        ['builder', 'test-engineer', 'scout', 'codebase-researcher', 'ui-builder', 'frontend-engineer'].includes(agent)
+        || comp === 'medium'
+        || ['speed_first', 'latency_sensitive'].includes(budget)
+      ) {
+        if (budget === 'cost_saving' || budget === 'cost_first') {
+          model = 'gemini-3.8-flash';
+          effort = null;
+          tier = 'cost_efficient';
+          rationale = 'Parallel code implementation in cost-saving mode dispatched to Gemini 3.8 Flash.';
+          costTier = '$$';
+          fallback = 'gemini-3.8-flash-lite';
+        } else if (budget === 'quality_first' && comp === 'medium') {
+          model = 'gemini-4-argon';
+          effort = 'medium';
+          tier = 'deep_reasoning';
+          rationale = 'Parallel code implementation in quality-first mode dispatched to Gemini 4 Argon for maximum precision.';
+          costTier = '$$$';
+          fallback = 'gemini-4-hydrogen';
+        } else {
+          model = 'gemini-4-hydrogen';
+          if (retries === 1) {
+            effort = (comp === 'medium' || budget === 'speed_first' || budget === 'latency_sensitive') ? 'xhigh' : 'high';
+            cbMeta = { status: 'retrying', retry_count: retries, max_self_retries: 1 };
+          } else {
+            effort = comp === 'medium' ? 'high' : 'medium';
+            cbMeta = { status: 'active', retry_count: retries, max_self_retries: 1 };
+          }
+          tier = 'high_throughput';
+          rationale = 'Parallel code implementation, testing, or reconnaissance dispatched to Gemini 4 Hydrogen for 2.5x speed and 198 tok/s throughput.';
+          costTier = '$$$';
           fallback = 'gemini-3.8-flash';
         }
-      } else if (agent === 'builder' || agent === 'test-engineer' || comp === 'medium') {
-        model = 'gemini-3.8-flash';
-        effort = null;
-        tier = 'cost_efficient';
-        rationale = 'Parallel code implementation and test generation dispatched to Gemini 3.8 Flash for maximum throughput and >70% cost savings.';
-        costTier = '$$';
-        fallback = 'gemini-3.8-flash-lite';
-      } else {
+      }
+      // =========================================================================
+      // RULE 5: MICRO-TIER / TELEMETRY / FORMATTING
+      // =========================================================================
+      else {
         model = 'gemini-3.8-flash-lite';
         effort = null;
         tier = 'ultra_fast';
@@ -2186,14 +2348,17 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         fallback = 'gemini-3.8-flash';
       }
 
-      renderRouterResult({
+      const rec = {
         model: model,
         reasoning_effort: effort,
         tier: tier,
         rationale: rationale,
         estimated_cost_tier: costTier,
         fallback_model: fallback
-      }, p);
+      };
+      if (cbMeta) rec.circuit_breaker = cbMeta;
+
+      renderRouterResult(rec, p);
     }
 
     function renderRouterResult(rec, input) {
@@ -2202,14 +2367,55 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       if (!card) return;
       card.classList.remove('hidden');
 
+      const retries = (input && input.retry_count !== undefined) ? Number(input.retry_count) : (rec.circuit_breaker ? Number(rec.circuit_breaker.retry_count || rec.circuit_breaker.retries || 0) : 0);
+      const isTripped = (rec.circuit_breaker && rec.circuit_breaker.status === 'tripped') || retries >= 2;
+      const isRetrying = (rec.circuit_breaker && rec.circuit_breaker.status === 'retrying') || retries === 1;
+
+      const cbBanner = document.getElementById('router-circuit-breaker-banner');
+      const cbTitle = document.getElementById('router-cb-title');
+      const cbDesc = document.getElementById('router-cb-desc');
+      const cbIcon = document.getElementById('router-cb-icon');
+
+      if (cbBanner) {
+        if (isTripped) {
+          cbBanner.classList.remove('hidden');
+          cbBanner.className = 'p-3 rounded-lg border border-rose-500/50 bg-rose-950/40 text-xs font-mono flex items-start space-x-2.5 shadow-md shadow-rose-500/10';
+          if (cbIcon) cbIcon.textContent = '🚨';
+          if (cbTitle) cbTitle.textContent = `⚡ FAST-RETRY CIRCUIT BREAKER TRIPPED (${retries} Failures)`;
+          if (cbDesc) cbDesc.textContent = 'Threshold exceeded on Gemini 4 Hydrogen. Automatically escalated to Frontier Tier 1 Gemini 4 Carbon (HIGH reasoning effort) for deep root-cause diagnosis!';
+        } else if (isRetrying) {
+          cbBanner.classList.remove('hidden');
+          cbBanner.className = 'p-3 rounded-lg border border-amber-500/50 bg-amber-950/40 text-xs font-mono flex items-start space-x-2.5 shadow-md shadow-amber-500/10';
+          if (cbIcon) cbIcon.textContent = '⚡';
+          if (cbTitle) cbTitle.textContent = '⚡ FAST SELF-HEALING RETRY (Turn 1)';
+          if (cbDesc) cbDesc.textContent = `Attempting rapid self-healing on Gemini 4 Hydrogen with elevated reasoning effort [${(rec.reasoning_effort || 'HIGH').toUpperCase()}].`;
+        } else {
+          cbBanner.classList.add('hidden');
+        }
+      }
+
       document.getElementById('router-cost-tier').textContent = rec.estimated_cost_tier || '$$$';
       document.getElementById('router-model-badge').innerHTML = getModelBadge(rec.model);
       
       const elEffort = document.getElementById('router-effort-pill');
       if (rec.reasoning_effort) {
         const eff = rec.reasoning_effort.toLowerCase();
-        const pulse = eff === 'high' ? 'animate-pulse' : '';
-        elEffort.innerHTML = `<span class="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-400/40 ${pulse}">Reasoning: ${rec.reasoning_effort.toUpperCase()}</span>`;
+        let effBadgeClass = 'bg-slate-800 text-slate-300 border border-slate-700';
+        let effLabel = `Reasoning: ${rec.reasoning_effort.toUpperCase()}`;
+        if (eff === 'xhigh') {
+          effBadgeClass = 'bg-cyan-500/25 text-cyan-200 border border-cyan-400/60 animate-pulse shadow-sm shadow-cyan-500/20';
+          effLabel = 'Reasoning: XHIGH [Thinking]';
+        } else if (eff === 'high') {
+          effBadgeClass = 'bg-emerald-500/20 text-emerald-300 border border-emerald-400/40 animate-pulse';
+          effLabel = 'Reasoning: HIGH [Thinking]';
+        } else if (eff === 'medium') {
+          effBadgeClass = 'bg-indigo-500/20 text-indigo-300 border border-indigo-400/30';
+          effLabel = 'Reasoning: MED [Thinking]';
+        } else if (eff === 'low') {
+          effBadgeClass = 'bg-slate-800 text-slate-300 border border-slate-700';
+          effLabel = 'Reasoning: LOW [Thinking]';
+        }
+        elEffort.innerHTML = `<span class="px-2 py-0.5 rounded text-[10px] font-mono font-bold ${effBadgeClass}">${effLabel}</span>`;
       } else {
         elEffort.innerHTML = `<span class="px-2 py-0.5 rounded text-[10px] font-mono bg-slate-800 text-slate-400 border border-slate-700">Standard (None)</span>`;
       }
