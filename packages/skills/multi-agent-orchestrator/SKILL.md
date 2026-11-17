@@ -114,6 +114,7 @@ To maximize precision, throughput, and financial economy, tasks are dynamically 
 | **Tier 3: High-Throughput Workhorse** | **Gemini 4 Hydrogen** | `gemini-4-hydrogen` | **$1.50** | **$7.50** | **$0.075** | `low`, `medium`, `high`, `xhigh` | • `builder`: Parallel disjoint feature implementation, CRUD, UI components at 198 tok/s (2.5x speed).<br>• `test-engineer`: Unit/integration test suites, assertion gates, test fixtures.<br>• `scout`: Codebase reconnaissance and symbol pointer discovery.<br>• 95% cache read savings ($0.075 / 1M tokens). |
 | **Tier 4: Cost-Efficient Builder / Bulk** | **Gemini 3.8 Flash** | `gemini-3.8-flash` | **$0.075** | **$0.30** | **$0.01875** | `None` | • `code-simplifier`: Text formatting, doc generation, low-complexity scaffolding.<br>• Fallback for bulk execution in `cost_saving` mode. |
 | **Tier 5: Ultra-Fast Micro-Tier** | **Gemini 3.8 Flash-Lite** | `gemini-3.8-flash-lite` | **$0.0375** | **$0.15** | **$0.01** | `None` | • `observability-and-instrumentation`: Heartbeats, quick linting, documentation formatting.<br>• Near-zero latency execution. |
+| **External Heavy-Analysis Offload** | **Gemini Desktop App** (`EXTERNAL_WORKERS`) | `gemini-desktop-app` | **$0.00** | **$0.00** | **$0.00** | `None` | • `spec-engineer`, `task-planner`, `code-reviewer`, `debugger` (`read_only=True`).<br>• Offloads large non-mutating synthesis to local macOS/Windows/Linux Gemini Desktop GUI via [`gemini-desktop-worker`](../gemini-desktop-worker/SKILL.md); tracks `AGY Quota Saved` vs Carbon baseline. |
 
 ### Tunable Reasoning Effort Guidelines (`--reasoning-effort` / `--effort`)
 - **`xhigh`** (Exclusively supported on `gemini-4-hydrogen`): Maximum depth thinking for challenging algorithmic edge cases, self-healing test fixes, and complex logic implementation without sacrificing 198 tok/s velocity. *(Clamped to `high` on Carbon/Argon).*
@@ -167,11 +168,12 @@ To maximize fleet velocity while preserving mathematical correctness and securit
 3. **Attempt 2+ (`retry_count >= 2`)**: Trip circuit breaker! The task is automatically escalated to **Gemini 4 Carbon** (`reasoning_effort: high`) for deep root-cause diagnosis.
 4. **Zero-Downgrade Security Guardrail**: If failure logs match security terms (`auth`, `rbac`, `secret`, `leak`, `overflow`, `crypto`), circuit breaker trips immediately to Carbon without intermediate retries.
 
-### Topology D: Smart Router Budget Modes
+### Topology D: Smart Router Budget Modes (including Hybrid Desktop Offload)
 - **`balanced` (Default)**: Builders & Testers on Hydrogen, Specs & Reviews on Argon, Security on Carbon.
 - **`speed_first` / `latency_sensitive`**: All standard development, build, test, and documentation tasks assigned to `gemini-4-hydrogen` (with `xhigh` effort for reviews). Security strictly remains on Carbon.
 - **`quality_first`**: Builders on Argon, Specs/Reviews/Security on Carbon.
 - **`cost_saving` / `cost_first`**: Builders on Gemini 3.8 Flash, Telemetry on Flash-Lite, Security on Carbon.
+- **`hybrid_desktop` / `offload_heavy_to_desktop`**: Evaluates **Rule 1.5 (Desktop Offload Gate)** after Rule 1 (Security Guardrail) & Rule 2 (Circuit Breaker). Heavy **read-only** analytical tasks (`spec-engineer`, `task-planner`, `code-reviewer`, or read-only `scout`/`debugger`) route to `gemini-desktop-app` (`$0.00` AGY API spend) when `--desktop-available` and `--read-only` (or `file_count == 0`) hold, while all file-editing Stage 3 builders remain on `gemini-4-hydrogen` (`198 tok/s`) and security audits remain locked on `gemini-4-carbon`.
 
 ### Smart Router API & CLI
 Query the smart router before assigning subagents:
@@ -182,6 +184,21 @@ python3 packages/orchestrator/client.py recommend \
   --complexity medium \
   --budget-mode speed_first \
   --retry-count 1
+
+# Hybrid Desktop offload check for heavy read-only synthesis
+python3 packages/orchestrator/client.py recommend \
+  --agent spec-engineer \
+  --complexity high \
+  --budget-mode hybrid_desktop \
+  --desktop-available \
+  --read-only
+
+# Pre-flight & dispatch to local Gemini Desktop App ($0.00 AGY API spend)
+python3 packages/orchestrator/client.py desktop-doctor --format text
+python3 packages/orchestrator/client.py desktop-ask \
+  --task SPEC-01 \
+  --prompt-file docs/specs/draft_brief.md \
+  --driver auto
 
 # Security task always routes to Carbon regardless of budget mode
 python3 packages/orchestrator/client.py recommend \
@@ -281,16 +298,20 @@ ORCHESTRATOR_PORT=9000 python3 packages/orchestrator/server.py
 
 ### REST API Endpoints
 - `GET /`: Dashboard Web UI.
-- `GET /events`: Server-Sent Events stream (`text/event-stream`).
+- `GET /events`: Server-Sent Events stream (`text/event-stream`, including `desktop_job_queued`, `desktop_job_started`, `desktop_job_completed`, `desktop_job_failed`, `desktop_job_cancelled`).
 - `GET /api/state`: Full JSON snapshot of tasks, logs, and metrics.
-- `GET /api/models`: Model registry metadata and pricing rates for all 5 tiers.
-- `POST /api/router/recommend`: Smart model and reasoning effort recommendation (supporting `budget_mode` and `retry_count`).
+- `GET /api/models`: Model registry metadata for all 5 API tiers plus `external_workers` (`gemini-desktop-app`).
+- `POST /api/router/recommend`: Smart model and reasoning effort recommendation (supporting `budget_mode`, `retry_count`, `desktop_available`, `read_only`, and `prefer_desktop`).
 - `GET /api/dag/ready`: Evaluate DAG dependencies and return ready unblocked tasks.
-- `GET /api/analytics/models`: 5-tier per-model token consumption and financial breakdown.
+- `GET /api/analytics/models`: 5-tier per-model token consumption, financial breakdown, and Desktop Worker `AGY Quota Saved` totals.
+- `GET /api/desktop/status`: Cross-platform Gemini Desktop App readiness probe (`macos_ax`, `windows_uia`, `linux_pwa`, `orca`, `mock`).
+- `POST /api/desktop/dispatch`: Enqueue or synchronously execute a secret-redacted, sentinel-framed job on the local Gemini Desktop App (`docs/reports/desktop_worker/{job_id}.md`).
+- `GET /api/desktop/jobs` & `GET /api/desktop/jobs/{job_id}`: Inspect FIFO desktop worker queue and artifact pointers.
+- `POST /api/desktop/cancel` & `POST /api/desktop/jobs/{job_id}/cancel`: Cancel a queued or active desktop job cleanly.
 - `GET /api/audit/export?format=markdown|json`: Export signed mission audit report.
 - `POST /api/tasks`: Upsert task status with `reasoning_effort` (`xhigh`), tokens, and dependencies.
 - `POST /api/logs`: Append log entry.
-- `POST /api/reset`: Reset all task and log states.
+- `POST /api/reset`: Reset all task, log, and desktop job states.
 
 ---
 

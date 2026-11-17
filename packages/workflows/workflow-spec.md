@@ -8,8 +8,9 @@ description: Stage 1 Spec Workflow - Analyze requirements, user stories, boundar
 ## 1. Objective & Persona
 - **Persona**: `spec-engineer`
 - **Model Engine**: ✦ **Gemini 4 Carbon** (`model: gemini-4-carbon`, `reasoning_effort: high`)  
-  *Frontier reasoning engine for formal specification proofs, boundary invariants, and edge-case discovery.*
-- **Primary Skill**: `spec-driven-development`
+  *Frontier reasoning engine for formal specification proofs, boundary invariants, and edge-case discovery.*  
+  *(Optional `hybrid_desktop` Offload: For large non-security-sensitive briefs or second-opinion edge-case synthesis, run `client.py desktop-doctor` and dispatch via `client.py desktop-ask --prompt-file ...` using the `gemini-desktop-worker` skill at `$0.00` AGY API spend. `SecretRedactor` scrubs credentials pre-flight and writes a compact pointer artifact to `docs/reports/desktop_worker/{job_id}.md`. Security-impacting specs (`has_security_impact=True`) MUST stay exclusively on `gemini-4-carbon`).*
+- **Primary Skill**: `spec-driven-development` *(+ `gemini-desktop-worker` when `hybrid_desktop` offload is active)*
 
 ---
 

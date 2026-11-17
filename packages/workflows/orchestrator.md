@@ -23,6 +23,7 @@ Start full-session Multi-Agent Orchestrator mode:
    - ✦ **Tier 3: High-Throughput Workhorse (`gemini-4-hydrogen`, `reasoning_effort: low | medium | high | xhigh`)**: Ultra-fast workhorse for parallel code builders, automated test suites, codebase scouting, and UI iteration (198 tok/s, 2.5x speed). Rates: $1.50 / 1M in, $7.50 / 1M out, $0.075 / 1M cache (95% cache savings).
    - ⚡ **Tier 4: Cost-Efficient Builder / Bulk (`gemini-3.8-flash`)**: Cost-first parallel implementations, scaffolding, and doc formatting. Rates: $0.075 / 1M in, $0.30 / 1M out, $0.01875 / 1M cache.
    - ⚡ **Tier 5: Ultra-Fast Micro-Tier (`gemini-3.8-flash-lite`)**: Low-latency micro-tier for telemetry heartbeats, quick formatting, and linting. Rates: $0.0375 / 1M in, $0.15 / 1M out, $0.01 / 1M cache.
+   - 🖥️ **External Heavy-Analysis Offload Tier (`gemini-desktop-app` via `gemini-desktop-worker`)**: Local cross-platform Gemini Desktop App bridge (`macos_ax` / `windows_uia` / `linux_pwa` / `mock`) for `$0.00` AGY API spend on heavy **read-only** synthesis (`spec-engineer`, `task-planner`, `code-reviewer`, read-only `debugger`/`scout`) under `--budget-mode hybrid_desktop` or `offload_heavy_to_desktop`. Pre-flight `SecretRedactor` scrubs credentials, Clipboard Save/Restore protects user clipboard (`<= 300ms`), and outputs write to `docs/reports/desktop_worker/{job_id}.md` pointers. *(Rule 1 Security Guardrail & Stage 3 `gemini-4-hydrogen` file-editing builders NEVER offload to Desktop).*
 
 4. **Fast-Retry & Escalation Circuit Breaker**:
    - Hydrogen builders & testers perform 1 fast self-healing turn on failure (`effort: xhigh`).
@@ -35,8 +36,12 @@ Start full-session Multi-Agent Orchestrator mode:
    - Enforce the **Decoupled File Scope Invariant**: builder workers must operate on strictly disjoint files.
 
 6. **Token Telemetry & CLI Subcommands**:
-   - Query smart recommendations:
-     `python3 packages/orchestrator/client.py recommend --agent <AGENT> --complexity <low|medium|high|critical> [--budget-mode <balanced|speed_first|quality_first|cost_saving>] [--retry-count <N>] [--security-impact]`
+   - Query smart recommendations (including `hybrid_desktop` / `offload_heavy_to_desktop`):
+     `python3 packages/orchestrator/client.py recommend --agent <AGENT> --complexity <low|medium|high|critical> [--budget-mode <balanced|speed_first|quality_first|cost_saving|hybrid_desktop|offload_heavy_to_desktop>] [--desktop-available] [--read-only] [--retry-count <N>] [--security-impact]`
+   - Check Gemini Desktop App readiness & dispatch bounded read-only analysis (`$0.00` API spend):
+     `python3 packages/orchestrator/client.py desktop-doctor --format text`
+     `python3 packages/orchestrator/client.py desktop-ask --task <TASK_ID> --prompt-file <PATH> --driver auto`
+     `python3 packages/orchestrator/client.py desktop-jobs --limit 20` / `desktop-cancel --job-id <JOB_ID>`
    - Discover runnable unblocked DAG tasks:
      `python3 packages/orchestrator/client.py next-ready`
    - Inspect registered models and pricing:

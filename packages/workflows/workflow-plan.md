@@ -8,7 +8,8 @@ description: Stage 2 Planning Workflow - Ingest docs/specs/{feature_id}.spec.md,
 ## 1. Objective & Persona
 - **Persona**: `task-planner`
 - **Model Engine**: ✦ **Gemini 4 Argon** (`model: gemini-4-argon`, `reasoning_effort: high` / `medium`)  
-  *(Escalate to ✦ **Gemini 4 Carbon** if executing in `quality_first` mode or modeling critical cryptographic/security architecture).*
+  *(Escalate to ✦ **Gemini 4 Carbon** if executing in `quality_first` mode or modeling critical cryptographic/security architecture).*  
+  *(Optional `hybrid_desktop` Offload: Heavy read-only architecture synthesis or design trade-off second-opinions may be offloaded to `gemini-desktop-app` via `client.py desktop-ask` (`$0.00` AGY API spend) after `SecretRedactor` scrubbing, returning the `docs/reports/desktop_worker/{job_id}.md` pointer to `task-planner`.)*
 - **Primary Skill**: `planning-and-task-breakdown` & `api-and-interface-design`
 
 ---
@@ -47,6 +48,7 @@ description: Stage 2 Planning Workflow - Ingest docs/specs/{feature_id}.spec.md,
      * **Tier 3 (`gemini-4-hydrogen`)**: Parallel code implementation, automated testing, and codebase scouting at 198 tok/sec (`effort: medium`/`high`/`xhigh`).
      * **Tier 4 (`gemini-3.8-flash`)**: Cost-first bulk scaffolding, doc formatting, and text simplification.
      * **Tier 5 (`gemini-3.8-flash-lite`)**: Micro-tier telemetry, docs, and linting.
+     * **External Offload (`gemini-desktop-app`, `hybrid_desktop`)**: Heavy non-mutating synthesis/critique only (`read_only=True`, `file_count=0`, `has_security_impact=False`), drained sequentially via `desktop_jobs` while Stage 3 `gemini-4-hydrogen` builders execute file edits in parallel. Never assign file-writing or test-running tasks to `gemini-desktop-app`.
    - Define Fast-Retry Circuit Breaker thresholds (`retry_count >= 2` escalates to Carbon).
 4. **Artifact Generation**: Produce `docs/plans/{feature_id}.plan.md`.
 5. **Emit Completion Telemetry**:

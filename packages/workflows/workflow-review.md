@@ -10,7 +10,8 @@ description: Stage 5 Code Review Workflow - Conduct multi-axis review of git dif
 - **Model Engine**: ✦ **Gemini 4 Argon** (`model: gemini-4-argon`, `reasoning_effort: high`)  
   *Deep reasoning engine for 5-axis code quality inspection and architectural compliance.*  
   *(Escalate to ✦ **Gemini 4 Carbon** with `reasoning_effort: high` in `quality_first` mode or when reviewing mission-critical core subsystems).*  
-  *(In `speed_first` / `latency_sensitive` mode, rapid code reviews of non-critical PRs are dispatched to ✦ **Gemini 4 Hydrogen** with `reasoning_effort: xhigh` thinking depth).*
+  *(In `speed_first` / `latency_sensitive` mode, rapid code reviews of non-critical PRs are dispatched to ✦ **Gemini 4 Hydrogen** with `reasoning_effort: xhigh` thinking depth).*  
+  *(Optional `hybrid_desktop` Offload: Non-mutating 5-axis design critiques of bounded diff/plan summaries without security impact may be offloaded to `gemini-desktop-app` via `client.py desktop-ask --driver auto` after `SecretRedactor` scrubbing, returning `docs/reports/desktop_worker/{job_id}.md` to `code-reviewer` for final sign-off. Security-sensitive diffs MUST remain on `gemini-4-carbon` / `gemini-4-argon`.)*
 - **Primary Skill**: `code-review-and-quality`
 
 ---
