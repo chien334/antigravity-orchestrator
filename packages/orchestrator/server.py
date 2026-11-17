@@ -8,12 +8,14 @@ financial token cost computation, historical audit reporting, and agent kill con
 import argparse
 import datetime
 import hmac
+import inspect
 import json
 import os
 import queue
 import re
 import sqlite3
 import sys
+import tempfile
 import threading
 import time
 import uuid
@@ -118,7 +120,7 @@ except ImportError:
 # ---------------------------------------------------------------------------
 DESKTOP_WORKER_AVAILABLE = False
 DEFAULT_MAX_PROMPT_CHARS = 150_000
-DEFAULT_TIMEOUT_SEC = 180
+DEFAULT_TIMEOUT_SEC = 240
 SUPPORTED_DRIVERS = ("auto", "macos_ax", "orca", "windows_uia", "linux_pwa", "mock")
 VALID_JOB_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{1,63}$")
 DesktopDriverStatus = None
@@ -141,7 +143,7 @@ def _load_desktop_worker_symbols() -> bool:
         try:
             mod = __import__(mod_name, fromlist=["*"])
             DEFAULT_MAX_PROMPT_CHARS = getattr(mod, "DEFAULT_MAX_PROMPT_CHARS", 150_000)
-            DEFAULT_TIMEOUT_SEC = getattr(mod, "DEFAULT_TIMEOUT_SEC", 180)
+            DEFAULT_TIMEOUT_SEC = getattr(mod, "DEFAULT_TIMEOUT_SEC", 240)
             SUPPORTED_DRIVERS = getattr(mod, "SUPPORTED_DRIVERS", SUPPORTED_DRIVERS)
             VALID_JOB_ID_RE = getattr(mod, "VALID_JOB_ID_RE", VALID_JOB_ID_RE)
             DesktopDriverStatus = getattr(mod, "DesktopDriverStatus", None)
@@ -161,7 +163,7 @@ def _load_desktop_worker_symbols() -> bool:
         try:
             from . import desktop_worker as mod  # type: ignore
             DEFAULT_MAX_PROMPT_CHARS = getattr(mod, "DEFAULT_MAX_PROMPT_CHARS", 150_000)
-            DEFAULT_TIMEOUT_SEC = getattr(mod, "DEFAULT_TIMEOUT_SEC", 180)
+            DEFAULT_TIMEOUT_SEC = getattr(mod, "DEFAULT_TIMEOUT_SEC", 240)
             SUPPORTED_DRIVERS = getattr(mod, "SUPPORTED_DRIVERS", SUPPORTED_DRIVERS)
             VALID_JOB_ID_RE = getattr(mod, "VALID_JOB_ID_RE", VALID_JOB_ID_RE)
             DesktopDriverStatus = getattr(mod, "DesktopDriverStatus", None)
@@ -261,13 +263,99 @@ def _validate_output_path(output_path: str | None) -> str | None:
     return str(resolved)
 
 
+def _is_sensitive_workspace_root(resolved_ws: str) -> bool:
+    """Return True if resolved_ws points to /, a system root, or a protected OS directory."""
+    if not resolved_ws:
+        return True
+    p = Path(resolved_ws)
+    norm = resolved_ws.rstrip("/\\") or "/"
+    norm_lower = norm.lower()
+
+    if norm_lower == "/" or (len(p.parts) <= 1 and p.anchor):
+        return True
+
+    if os.name == "nt" or sys.platform == "win32":
+        win_roots = (
+            "windows",
+            "program files",
+            "program files (x86)",
+            "programdata",
+            "system volume information",
+        )
+        parts_lower = [part.lower() for part in p.parts]
+        if len(parts_lower) >= 2 and parts_lower[1] in win_roots:
+            return True
+        return False
+
+    protected_trees = (
+        "/etc",
+        "/private/etc",
+        "/system",
+        "/library",
+        "/usr",
+        "/bin",
+        "/sbin",
+        "/dev",
+        "/proc",
+        "/sys",
+        "/boot",
+        "/cores",
+    )
+    for tree in protected_trees:
+        if norm_lower == tree or norm_lower.startswith(tree + "/"):
+            return True
+
+    if norm_lower == "/private":
+        return True
+
+    if norm_lower in ("/var", "/private/var") or norm_lower.startswith(("/var/", "/private/var/")):
+        allowed_var_temp_prefixes = (
+            "/var/folders/",
+            "/private/var/folders/",
+            "/var/tmp/",
+            "/private/var/tmp/",
+        )
+        if norm_lower.startswith(allowed_var_temp_prefixes):
+            return False
+        sys_tmp = os.path.realpath(tempfile.gettempdir()).rstrip("/").lower()
+        if sys_tmp not in ("/var", "/private/var") and (
+            norm_lower == sys_tmp or norm_lower.startswith(sys_tmp + "/")
+        ):
+            return False
+        return True
+
+    return False
+
+
+def _validate_workspace_path(workspace_path: str) -> str:
+    """Validate and resolve a user-supplied workspace directory path safely."""
+    if not isinstance(workspace_path, str):
+        raise ValueError("workspace_path must be a string")
+    if "\x00" in workspace_path:
+        raise ValueError("Invalid workspace_path: null byte is not allowed")
+    stripped = workspace_path.strip()
+    if not stripped:
+        raise ValueError("Invalid workspace_path: path must not be empty")
+    if workspace_path.startswith("-") or stripped.startswith("-"):
+        raise ValueError("Invalid workspace_path: leading '-' is not allowed")
+
+    expanded = os.path.expanduser(stripped)
+    resolved = os.path.realpath(expanded)
+    if not os.path.isdir(resolved):
+        raise ValueError(f"Invalid workspace_path: directory does not exist: {stripped!r}")
+    if _is_sensitive_workspace_root(resolved):
+        raise ValueError(f"Invalid workspace_path: sensitive system root is not allowed: {resolved!r}")
+    return resolved
+
+
 # ---------------------------------------------------------------------------
 # State Store (SQLite-backed)
 # ---------------------------------------------------------------------------
 
 class StateStore:
-    def __init__(self, db_path=None):
+    def __init__(self, db_path=None, workspace_root=None):
         self.db_path = db_path or DEFAULT_DB_PATH
+        self._explicit_workspace_root = workspace_root
         self._lock = threading.Lock()
         self.subscribers = set()  # set of queue.Queue
         self._processed_steps = {}  # conv_id -> last processed step
@@ -283,6 +371,16 @@ class StateStore:
         self._init_db()
         self._start_token_auditor()
         self._start_desktop_worker()
+
+    @property
+    def workspace_root(self) -> Path:
+        if self._explicit_workspace_root is not None:
+            return Path(os.path.realpath(str(self._explicit_workspace_root)))
+        return _get_workspace_root()
+
+    @workspace_root.setter
+    def workspace_root(self, value) -> None:
+        self._explicit_workspace_root = value
 
     def _start_token_auditor(self):
         """Background daemon: automatically audits tokens and streams live agent activities from transcripts."""
@@ -433,8 +531,17 @@ class StateStore:
 
         cur.execute("PRAGMA table_info(desktop_jobs)")
         dj_cols = [row["name"] for row in cur.fetchall()]
-        if dj_cols and "estimated_saved_vnd" not in dj_cols:
-            conn.execute("ALTER TABLE desktop_jobs ADD COLUMN estimated_saved_vnd INTEGER NOT NULL DEFAULT 0")
+        if dj_cols:
+            if "estimated_saved_vnd" not in dj_cols:
+                conn.execute("ALTER TABLE desktop_jobs ADD COLUMN estimated_saved_vnd INTEGER NOT NULL DEFAULT 0")
+            if "mode" not in dj_cols:
+                conn.execute("ALTER TABLE desktop_jobs ADD COLUMN mode TEXT DEFAULT 'task'")
+            if "workspace_path" not in dj_cols:
+                conn.execute("ALTER TABLE desktop_jobs ADD COLUMN workspace_path TEXT DEFAULT NULL")
+            if "workspace_attached" not in dj_cols:
+                conn.execute("ALTER TABLE desktop_jobs ADD COLUMN workspace_attached INTEGER DEFAULT 0")
+            if "background" not in dj_cols:
+                conn.execute("ALTER TABLE desktop_jobs ADD COLUMN background INTEGER DEFAULT 1")
 
     def _init_db(self):
         with self._lock:
@@ -481,6 +588,10 @@ class StateStore:
                             os_platform TEXT NOT NULL,
                             driver_name TEXT NOT NULL,
                             app_path TEXT,
+                            mode TEXT DEFAULT 'task',
+                            workspace_path TEXT DEFAULT NULL,
+                            workspace_attached INTEGER DEFAULT 0,
+                            background INTEGER DEFAULT 1,
                             prompt_chars INTEGER NOT NULL DEFAULT 0,
                             prompt_preview TEXT,
                             redaction_count INTEGER NOT NULL DEFAULT 0,
@@ -566,6 +677,19 @@ class StateStore:
         out_chars = int(row["output_chars"] or 0)
         driver_name = row["driver_name"]
         err_msg = row["error_message"]
+        row_keys = row.keys()
+        mode = row["mode"] if "mode" in row_keys and row["mode"] else "task"
+        workspace_path = row["workspace_path"] if "workspace_path" in row_keys else None
+        workspace_attached = (
+            bool(row["workspace_attached"])
+            if "workspace_attached" in row_keys and row["workspace_attached"] is not None
+            else False
+        )
+        background = (
+            bool(row["background"])
+            if "background" in row_keys and row["background"] is not None
+            else True
+        )
 
         return {
             "job_id": row["job_id"],
@@ -575,6 +699,10 @@ class StateStore:
             "driver_name": driver_name,
             "driver_used": driver_name,
             "app_path": row["app_path"],
+            "mode": mode,
+            "workspace_path": workspace_path,
+            "workspace_attached": workspace_attached,
+            "background": background,
             "prompt_chars": int(row["prompt_chars"] or 0),
             "prompt_preview": row["prompt_preview"] or "",
             "redaction_count": int(row["redaction_count"] or 0),
@@ -1051,7 +1179,7 @@ class StateStore:
             _load_desktop_worker_symbols()
         if DesktopWorkerManager is None:
             return None
-        ws_root = _get_workspace_root()
+        ws_root = self.workspace_root
         reports_root = Path(os.path.realpath(str(ws_root / "docs" / "reports")))
         artifacts_dir = Path(os.path.realpath(str(reports_root / "desktop_worker")))
         db_dir = str(Path(self.db_path).resolve().parent)
@@ -1229,6 +1357,12 @@ class StateStore:
                     output_chars = int(exec_result.raw_char_count or 0) if exec_result is not None else 0
                     duration_ms = int(exec_result.duration_ms or 0) if exec_result is not None else 0
                     clipboard_restored = 1 if (exec_result.clipboard_restored if exec_result is not None else True) else 0
+                    row_keys = row.keys()
+                    workspace_attached = (
+                        int(bool(getattr(exec_result, "workspace_attached", False)))
+                        if exec_result is not None
+                        else (int(bool(row["workspace_attached"])) if "workspace_attached" in row_keys else 0)
+                    )
 
                     if final_status == "completed" and exec_result is not None:
                         saved_usd = float(getattr(exec_result, "estimated_saved_usd", 0.0) or 0.0)
@@ -1254,6 +1388,7 @@ class StateStore:
                                 status = ?,
                                 os_platform = ?,
                                 driver_name = ?,
+                                workspace_attached = ?,
                                 redaction_count = ?,
                                 redactions_json = ?,
                                 artifact_path = ?,
@@ -1271,6 +1406,7 @@ class StateStore:
                                 final_status,
                                 os_platform,
                                 driver_name,
+                                workspace_attached,
                                 redaction_count,
                                 json.dumps(merged_redactions),
                                 artifact_path,
@@ -1362,6 +1498,9 @@ class StateStore:
                 "remediation_steps": ["Ensure packages/orchestrator/desktop_worker.py is installed."],
             }
 
+        ws_candidate = os.path.realpath(str(self.workspace_root))
+        default_ws = ws_candidate if (os.path.isdir(ws_candidate) and not _is_sensitive_workspace_root(ws_candidate)) else None
+
         return {
             "status": "ok",
             "desktop": status_dict,
@@ -1370,6 +1509,7 @@ class StateStore:
             "agy_quota_saved_usd": quota_usd,
             "active_job": active_job,
             "queue_depth": queue_depth,
+            "workspace_root": default_ws,
         }
 
     def enqueue_desktop_job(self, payload: dict) -> tuple[dict, bool, bool]:
@@ -1382,6 +1522,31 @@ class StateStore:
             raise ValueError("prompt is required and must be a non-empty string")
         if len(prompt) > DEFAULT_MAX_PROMPT_CHARS:
             raise ValueError(f"prompt exceeds maximum allowed length of {DEFAULT_MAX_PROMPT_CHARS} chars")
+
+        raw_mode = payload.get("mode")
+        if raw_mode is None:
+            mode = "task"
+        elif not isinstance(raw_mode, str):
+            raise ValueError("Invalid mode: must be 'task' or 'chat'")
+        else:
+            mode = raw_mode.strip().lower()
+            if mode not in ("task", "chat"):
+                raise ValueError(f"Invalid mode '{raw_mode}': must be 'task' or 'chat'")
+
+        no_workspace = bool(payload.get("no_workspace", False))
+        raw_ws = payload.get("workspace_path")
+        if raw_ws is not None and not isinstance(raw_ws, str):
+            raise ValueError("workspace_path must be a string or null")
+
+        if isinstance(raw_ws, str) and ("\x00" in raw_ws or raw_ws.strip() != ""):
+            resolved_ws = _validate_workspace_path(raw_ws)
+            workspace_path: str | None = None if no_workspace else resolved_ws
+        else:
+            workspace_path = None
+            if mode == "task" and not no_workspace:
+                ws_candidate = os.path.realpath(str(self.workspace_root))
+                if os.path.isdir(ws_candidate) and not _is_sensitive_workspace_root(ws_candidate):
+                    workspace_path = ws_candidate
 
         driver = str(payload.get("driver") or "auto").strip().lower()
         if driver not in SUPPORTED_DRIVERS:
@@ -1401,7 +1566,9 @@ class StateStore:
             job_id = f"dsk-{ts_part}-{uuid.uuid4().hex[:6]}"
 
         try:
-            timeout_sec = int(payload.get("timeout_sec", DEFAULT_TIMEOUT_SEC) if payload.get("timeout_sec") is not None else DEFAULT_TIMEOUT_SEC)
+            raw_timeout = payload.get("timeout_sec")
+            default_timeout = 240 if int(DEFAULT_TIMEOUT_SEC or 240) == 180 else int(DEFAULT_TIMEOUT_SEC or 240)
+            timeout_sec = int(default_timeout if raw_timeout is None else raw_timeout)
         except (TypeError, ValueError):
             raise ValueError("timeout_sec must be an integer")
         if timeout_sec < 1 or timeout_sec > 1800:
@@ -1422,6 +1589,23 @@ class StateStore:
         restore_focus = bool(payload.get("restore_focus", False))
         new_chat = bool(payload.get("new_chat", True))
         async_mode = True if payload.get("async_mode") is None else bool(payload.get("async_mode"))
+        raw_background = payload.get("background")
+        if raw_background is None:
+            background = True
+        elif isinstance(raw_background, bool):
+            background = raw_background
+        elif isinstance(raw_background, (int, float)):
+            background = bool(raw_background)
+        elif isinstance(raw_background, str):
+            bg_str = raw_background.strip().lower()
+            if bg_str in ("true", "1", "yes", "on"):
+                background = True
+            elif bg_str in ("false", "0", "no", "off"):
+                background = False
+            else:
+                raise ValueError("background must be a boolean")
+        else:
+            raise ValueError("background must be a boolean")
 
         task_id = str(payload["task_id"]).strip() if payload.get("task_id") else None
         raw_app_path = payload.get("app_path")
@@ -1458,11 +1642,12 @@ class StateStore:
                             """
                             INSERT INTO desktop_jobs (
                                 job_id, task_id, status, os_platform, driver_name, app_path,
+                                mode, workspace_path, workspace_attached, background,
                                 prompt_chars, prompt_preview, redaction_count, redactions_json,
                                 artifact_path, summary_excerpt, output_chars, duration_ms,
                                 estimated_saved_usd, estimated_saved_vnd, clipboard_restored,
                                 error_message, created_at, started_at, completed_at
-                            ) VALUES (?, ?, 'rejected_secrets', ?, ?, ?, ?, ?, ?, ?, NULL, '', 0, 0, 0.0, 0, 1, ?, ?, NULL, ?)
+                            ) VALUES (?, ?, 'rejected_secrets', ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, NULL, '', 0, 0, 0.0, 0, 1, ?, ?, NULL, ?)
                             """,
                             (
                                 job_id,
@@ -1470,6 +1655,9 @@ class StateStore:
                                 os_platform,
                                 driver,
                                 app_path,
+                                mode,
+                                workspace_path,
+                                1 if background else 0,
                                 len(prompt),
                                 prompt_preview,
                                 redaction_count,
@@ -1497,7 +1685,7 @@ class StateStore:
         # Ensure DesktopWorkerManager symbols loaded so we can construct DesktopJobRequest
         self._get_desktop_manager()
         if DesktopJobRequest is not None:
-            req_obj = DesktopJobRequest(
+            req_kwargs = dict(
                 job_id=job_id,
                 prompt=sanitized_prompt,
                 task_id=task_id,
@@ -1514,6 +1702,21 @@ class StateStore:
                 new_chat=new_chat,
                 metadata=clean_metadata,
             )
+            try:
+                sig_params = inspect.signature(DesktopJobRequest).parameters
+                has_var_kw = any(
+                    p.kind == inspect.Parameter.VAR_KEYWORD
+                    for p in sig_params.values()
+                )
+                if has_var_kw or "mode" in sig_params:
+                    req_kwargs["mode"] = mode
+                if has_var_kw or "workspace_path" in sig_params:
+                    req_kwargs["workspace_path"] = workspace_path
+                if has_var_kw or "background" in sig_params:
+                    req_kwargs["background"] = bool(background)
+            except (TypeError, ValueError):
+                pass
+            req_obj = DesktopJobRequest(**req_kwargs)
         else:
             req_obj = None
 
@@ -1532,11 +1735,12 @@ class StateStore:
                         """
                         INSERT INTO desktop_jobs (
                             job_id, task_id, status, os_platform, driver_name, app_path,
+                            mode, workspace_path, workspace_attached, background,
                             prompt_chars, prompt_preview, redaction_count, redactions_json,
                             artifact_path, summary_excerpt, output_chars, duration_ms,
                             estimated_saved_usd, estimated_saved_vnd, clipboard_restored,
                             error_message, created_at, started_at, completed_at
-                        ) VALUES (?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, NULL, '', 0, 0, 0.0, 0, 1, NULL, ?, NULL, NULL)
+                        ) VALUES (?, ?, 'queued', ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, NULL, '', 0, 0, 0.0, 0, 1, NULL, ?, NULL, NULL)
                         """,
                         (
                             job_id,
@@ -1544,6 +1748,9 @@ class StateStore:
                             os_platform,
                             driver,
                             app_path,
+                            mode,
+                            workspace_path,
+                            1 if background else 0,
                             len(prompt),
                             prompt_preview,
                             redaction_count,

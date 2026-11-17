@@ -1104,6 +1104,20 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             <textarea id="desktop-prompt" rows="4" placeholder="Paste large architecture synthesis, multi-file root-cause question, or 5-axis design critique prompt here..." class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-slate-200 font-mono text-xs focus:outline-none focus:border-teal-500"></textarea>
           </div>
 
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label for="desktop-dispatch-mode" class="block text-slate-300 font-semibold mb-1">Execution Mode</label>
+              <select id="desktop-dispatch-mode" onchange="onDesktopDispatchModeChange()" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-slate-200 font-mono focus:outline-none focus:border-teal-500">
+                <option value="task" selected>⚡ Task Mode (Workspace Agent — Default)</option>
+                <option value="chat">💬 Chat Mode (Quick Q&amp;A)</option>
+              </select>
+            </div>
+            <div id="desktop-dispatch-workspace-group">
+              <label for="desktop-dispatch-workspace" class="block text-slate-300 font-semibold mb-1">Workspace Directory (Optional)</label>
+              <input type="text" id="desktop-dispatch-workspace" placeholder="Auto: Active Server Workspace (or enter /path/to/repo)" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-slate-200 font-mono focus:outline-none focus:border-teal-500">
+            </div>
+          </div>
+
           <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div>
               <label for="desktop-task-id" class="block text-slate-300 font-semibold mb-1">Linked Task ID (Optional)</label>
@@ -1122,12 +1136,16 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             </div>
             <div>
               <label for="desktop-timeout" class="block text-slate-300 font-semibold mb-1">Timeout (sec)</label>
-              <input type="number" id="desktop-timeout" value="180" min="10" max="900" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-slate-200 font-mono focus:outline-none focus:border-teal-500">
+              <input type="number" id="desktop-timeout" value="240" min="10" max="900" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-slate-200 font-mono focus:outline-none focus:border-teal-500">
             </div>
           </div>
 
           <div class="flex flex-wrap items-center justify-between gap-3 pt-1">
             <div class="flex flex-wrap items-center gap-4">
+              <label class="flex items-center space-x-2 cursor-pointer select-none">
+                <input type="checkbox" id="desktop-dispatch-background" checked class="rounded bg-slate-800 border-slate-700 text-teal-500 focus:ring-0 w-4 h-4">
+                <span class="text-slate-300 font-medium">🔇 Chạy ngầm / Background Mode — Không chiếm chuột & màn hình</span>
+              </label>
               <label class="flex items-center space-x-2 cursor-pointer select-none">
                 <input type="checkbox" id="desktop-redact" checked class="rounded bg-slate-800 border-slate-700 text-teal-500 focus:ring-0 w-4 h-4">
                 <span class="text-slate-300 font-medium">Redact Secrets (Pre-Flight)</span>
@@ -3357,6 +3375,34 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         .catch(() => {});
     }
 
+    function getDesktopJobModeBadge(mode) {
+      const m = (mode || 'task').toLowerCase();
+      if (m === 'chat') {
+        return '<span class="px-1.5 py-0.5 rounded text-[9px] font-bold font-mono bg-slate-700/70 text-slate-300 border border-slate-600">CHAT</span>';
+      }
+      return '<span class="px-1.5 py-0.5 rounded text-[9px] font-bold font-mono bg-cyan-500/15 text-emerald-300 border border-cyan-500/40">TASK</span>';
+    }
+
+    function getWorkspaceBasename(wsPath) {
+      const cleaned = String(wsPath || '').replace(/[\\/]+$/, '');
+      if (!cleaned) return '';
+      const parts = cleaned.split(/[\\/]/);
+      return parts[parts.length - 1] || cleaned;
+    }
+
+    function onDesktopDispatchModeChange() {
+      const modeEl = document.getElementById('desktop-dispatch-mode');
+      const wsEl = document.getElementById('desktop-dispatch-workspace');
+      const wsGroup = document.getElementById('desktop-dispatch-workspace-group');
+      const isChat = (modeEl?.value || 'task').toLowerCase() === 'chat';
+      if (wsEl) {
+        wsEl.disabled = isChat;
+      }
+      if (wsGroup) {
+        wsGroup.classList.toggle('hidden', isChat);
+      }
+    }
+
     function renderDesktopJobsTable() {
       const tbody = document.getElementById('desktop-jobs-tbody');
       const countBadge = document.getElementById('desktop-jobs-count-badge');
@@ -3389,11 +3435,25 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           ? `<button type="button" data-cancel-job-id="${escapeHtml(j.job_id)}" class="px-2.5 py-1 rounded-lg bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/40 font-bold text-[10px] transition">Cancel</button>`
           : `<span class="text-[10px] text-slate-500 font-mono">${j.duration_ms ? `${Number(j.duration_ms)}ms` : '-'}</span>`;
 
+        const modeBadgeHtml = getDesktopJobModeBadge(j.mode);
+        const wsBase = getWorkspaceBasename(j.workspace_path);
+        const workspaceBadgeHtml = wsBase
+          ? `<span class="px-1.5 py-0.5 rounded text-[9px] font-mono bg-teal-500/10 text-cyan-300 border border-teal-500/30 truncate max-w-[140px]" title="${escapeHtml(j.workspace_path)}">📁 ${escapeHtml(wsBase)}</span>`
+          : '';
+        const bgBadgeHtml = (j.background !== false && j.background !== 0)
+          ? `<span class="px-1.5 py-0.5 rounded text-[9px] font-mono bg-slate-800/80 text-slate-300 border border-slate-700/80" title="Background mode (silent, no focus steal)">🔇 BG</span>`
+          : '';
+
         return `
           <tr class="hover:bg-slate-900/60 transition align-top">
             <td class="py-2.5 px-3 font-mono">
               <div class="font-bold text-white">${escapeHtml(j.job_id)}</div>
               ${j.task_id ? `<div class="text-[10px] text-indigo-300">${escapeHtml(j.task_id)}</div>` : ''}
+              <div class="flex flex-wrap items-center gap-1 mt-1">
+                ${modeBadgeHtml}
+                ${workspaceBadgeHtml}
+                ${bgBadgeHtml}
+              </div>
             </td>
             <td class="py-2.5 px-3 font-mono text-[11px]">
               <div>${osMeta.icon} ${escapeHtml(j.os_platform || '-')}</div>
@@ -3424,6 +3484,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const modal = document.getElementById('desktop-worker-modal');
       if (!modal) return;
       modal.classList.remove('hidden');
+      onDesktopDispatchModeChange();
       refreshDesktopStatus();
       refreshDesktopJobs();
       if (desktopPollTimer) clearInterval(desktopPollTimer);
@@ -3445,6 +3506,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     function dispatchDesktopJob() {
       const promptEl = document.getElementById('desktop-prompt');
       const taskEl = document.getElementById('desktop-task-id');
+      const modeEl = document.getElementById('desktop-dispatch-mode');
+      const wsEl = document.getElementById('desktop-dispatch-workspace');
       const driverEl = document.getElementById('desktop-driver');
       const timeoutEl = document.getElementById('desktop-timeout');
       const redactEl = document.getElementById('desktop-redact');
@@ -3463,10 +3526,16 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         return;
       }
 
+      const mode = (modeEl?.value || 'task').toLowerCase();
+      const workspacePath = (wsEl?.value || '').trim();
+      const bgEl = document.getElementById('desktop-dispatch-background');
       const payload = {
         prompt: prompt,
         driver: driverEl?.value || 'auto',
-        timeout_sec: parseInt(timeoutEl?.value || '180', 10),
+        mode: mode,
+        workspace_path: (mode !== 'chat' && workspacePath) ? workspacePath : null,
+        timeout_sec: parseInt(timeoutEl?.value || '240', 10),
+        background: bgEl ? Boolean(bgEl.checked) : true,
         redact_secrets: Boolean(redactEl?.checked),
         strict_secrets: Boolean(strictEl?.checked),
         async_mode: Boolean(asyncEl?.checked)

@@ -321,7 +321,7 @@ class OrchestratorClient:
         prompt: str,
         task_id: Optional[str] = None,
         driver: str = "auto",
-        timeout_sec: int = 180,
+        timeout_sec: int = 240,
         output_path: Optional[str] = None,
         redact_secrets: bool = True,
         strict_secrets: bool = False,
@@ -332,8 +332,14 @@ class OrchestratorClient:
         app_path: Optional[str] = None,
         metadata: Optional[dict] = None,
         job_id: Optional[str] = None,
+        mode: str = "task",
+        workspace_path: Optional[str] = None,
+        no_workspace: bool = False,
+        background: bool = True,
     ) -> dict:
         """Dispatch a bounded read-only prompt to the local Gemini Desktop Worker (POST /api/desktop/dispatch)."""
+        eff_mode = (mode or "task").strip().lower() or "task"
+        eff_workspace = None if no_workspace else workspace_path
         payload: dict[str, Any] = {
             "prompt": prompt,
             "driver": _normalize_desktop_driver(driver),
@@ -344,6 +350,10 @@ class OrchestratorClient:
             "restore_clipboard": bool(restore_clipboard),
             "new_chat": bool(new_chat),
             "async_mode": bool(async_mode),
+            "mode": eff_mode,
+            "workspace_path": eff_workspace,
+            "no_workspace": bool(no_workspace),
+            "background": bool(background),
         }
         if task_id is not None:
             payload["task_id"] = task_id
@@ -718,7 +728,40 @@ def main():
         help="Target OS override (default: auto)",
     )
     desktop_dispatch_parser.add_argument("--app-path", type=str, default=None, help="Explicit Gemini app path")
-    desktop_dispatch_parser.add_argument("--timeout", type=int, default=180, help="Job timeout in seconds (default: 180)")
+    desktop_dispatch_parser.add_argument(
+        "--mode",
+        type=str,
+        default="task",
+        choices=["task", "chat"],
+        help="Execution mode in Gemini Desktop App: task (Workspace Agent, default) or chat (Quick Q&A)",
+    )
+    desktop_dispatch_parser.add_argument(
+        "-w",
+        "--workspace",
+        dest="workspace",
+        type=str,
+        default=None,
+        help="Workspace directory path to attach in task mode (defaults to current working directory unless --no-workspace)",
+    )
+    desktop_dispatch_parser.add_argument(
+        "--no-workspace",
+        action="store_true",
+        help="Disable automatic current working directory workspace attachment",
+    )
+    desktop_dispatch_parser.add_argument(
+        "--background",
+        dest="background",
+        action="store_true",
+        default=True,
+        help="Run silently in background without stealing mouse/clipboard/focus (default)",
+    )
+    desktop_dispatch_parser.add_argument(
+        "--allow-foreground",
+        dest="background",
+        action="store_false",
+        help="Allow foreground UI interaction (only needed once to bookmark a new workspace folder)",
+    )
+    desktop_dispatch_parser.add_argument("--timeout", type=int, default=240, help="Job timeout in seconds (default: 240)")
     desktop_dispatch_parser.add_argument("--output", "--out", dest="output", type=str, default=None, help="Optional output Markdown artifact path inside docs/reports/")
     desktop_dispatch_parser.add_argument("--no-redact", action="store_true", help="Disable pre-flight secret redaction")
     desktop_dispatch_parser.add_argument("--strict-secrets", action="store_true", help="Reject job if any secret pattern is detected")
@@ -967,6 +1010,7 @@ def main():
             print(f"Queue Depth:   {res.get('queue_depth', d.get('queue_depth', 0))}")
             print(f"Lock Busy:     {d.get('lock_busy', False)}")
             print(f"Quota Saved:   ${res.get('quota_saved_usd', 0.0):.4f} ({res.get('quota_saved_vnd', 0):,} VND)")
+            print("Supported Modes: task (default), chat")
             if d.get("warnings"):
                 print("Warnings:")
                 for w in d["warnings"]:
@@ -1003,6 +1047,14 @@ def main():
             print(json.dumps({"error": "Must provide --prompt, --prompt-file, or --context-file"}, indent=2))
             sys.exit(2)
 
+        eff_mode = (args.mode or "task").strip().lower()
+        if args.no_workspace or eff_mode == "chat":
+            resolved_workspace = None
+        elif args.workspace:
+            resolved_workspace = os.path.abspath(os.path.expanduser(args.workspace))
+        else:
+            resolved_workspace = os.getcwd()
+
         metadata = {"agent_type": args.agent} if args.agent else None
         res = client.desktop_dispatch(
             prompt=full_prompt,
@@ -1018,15 +1070,26 @@ def main():
             target_os=args.target_os,
             app_path=args.app_path,
             metadata=metadata,
+            mode=eff_mode,
+            workspace_path=resolved_workspace,
+            no_workspace=args.no_workspace,
+            background=args.background,
         )
         if "error" in res:
             print(json.dumps(res, indent=2))
             sys.exit(1)
         if args.format == "text" and not args.json:
             job = res.get("job", res)
+            job_mode = job.get("mode") or eff_mode or "task"
+            job_ws = job.get("workspace_path") if "workspace_path" in job else resolved_workspace
+            ws_display = f"{job_ws} (attached)" if job_ws else "none"
+            is_bg = bool(job.get("background", args.background))
+            exec_display = "background (silent)" if is_bg else "foreground"
             print("=== Desktop Worker Dispatch ===")
             print(f"Job ID:            {job.get('job_id', '-')}")
             print(f"Status:            {job.get('status', res.get('status', '-'))}")
+            print(f"Mode: {job_mode} | Workspace: {ws_display}")
+            print(f"Execution: {exec_display}")
             print(f"Driver / OS:       {job.get('driver_used') or job.get('driver_name', '-')} ({job.get('os_platform', '-')})")
             print(f"Artifact Path:     {job.get('artifact_path') or '-'}")
             print(f"Duration:          {job.get('duration_ms', 0)} ms")
@@ -1063,8 +1126,12 @@ def main():
                     f"Total Saved: ${summary.get('total_saved_usd', 0.0):.4f}"
                 )
             for j in jobs:
+                j_mode = j.get("mode") or "task"
+                j_ws = j.get("workspace_path")
+                j_ws_display = f"{j_ws} (attached)" if j_ws else "none"
                 print(
                     f"  [{j.get('job_id', '-')}] status={j.get('status', '-')} "
+                    f"Mode: {j_mode} | Workspace: {j_ws_display} "
                     f"driver={j.get('driver_name', '-')} task={j.get('task_id') or '-'} "
                     f"saved=${j.get('estimated_saved_usd', 0.0):.4f} "
                     f"artifact={j.get('artifact_path') or '-'}"
