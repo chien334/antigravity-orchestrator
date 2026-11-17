@@ -111,6 +111,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       </div>
       
       <div class="flex items-center space-x-2.5 sm:space-x-3 shrink-0">
+        <!-- Desktop Worker Status Pill -->
+        <button id="desktop-status-pill" onclick="openDesktopModal()" class="px-3 py-1.5 rounded-lg bg-teal-950/50 hover:bg-teal-900/60 text-teal-200 border border-teal-500/40 text-xs font-semibold flex items-center space-x-2 transition shadow-sm shadow-teal-500/10" title="Open Cross-Platform Gemini Desktop Worker Bridge ($0.00 AGY API)">
+          <span id="desktop-pill-dot" class="h-2 w-2 rounded-full bg-amber-400 pulse-slow"></span>
+          <span id="desktop-pill-label" class="whitespace-nowrap">🖥️ Checking Desktop...</span>
+        </button>
+
         <!-- Smart Router Sandbox Trigger Button -->
         <button onclick="openRouterModal()" class="px-3 py-1.5 rounded-lg bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/40 text-xs font-semibold flex items-center space-x-1.5 transition shadow-sm" title="Open Smart Model & Reasoning Effort Recommendation Sandbox">
           <span>🧠 Router Sandbox</span>
@@ -293,7 +299,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             <span id="metric-cache-rate" class="px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 text-xs font-bold border border-emerald-500/20 font-mono">0%</span>
           </div>
         </div>
-        <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+        <div class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
           <!-- Input Tokens -->
           <div class="bg-slate-950/60 border border-slate-800/60 rounded-xl p-3">
             <div class="text-[11px] text-slate-400 font-medium flex items-center justify-between">
@@ -363,6 +369,19 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             <div class="mt-1 flex flex-col">
               <span id="metric-saved-usd" class="text-lg sm:text-xl font-bold font-mono text-emerald-400">$0.00</span>
               <span id="metric-saved-vnd" class="text-[10px] text-emerald-300/80 font-mono">~ 0 ₫ saved</span>
+            </div>
+          </div>
+
+          <!-- Desktop Offload AGY Quota Saved -->
+          <div onclick="openDesktopModal()" class="cursor-pointer bg-gradient-to-br from-teal-950/50 to-slate-950/80 border border-teal-500/40 hover:border-teal-400/70 rounded-xl p-3 shadow-sm transition" title="Estimated AGY API spend saved by offloading heavy analysis to Gemini Desktop App ($0.00 AGY API burn)">
+            <div class="text-[11px] text-teal-300 font-medium flex items-center justify-between">
+              <span>AGY Quota Saved</span>
+              <span class="text-teal-300 text-[10px] font-mono font-bold px-1.5 py-0.2 rounded bg-teal-500/15 border border-teal-500/30">$0.00 API</span>
+            </div>
+            <div class="mt-1 flex flex-col">
+              <span id="metric-desktop-saved-usd" class="text-lg sm:text-xl font-bold font-mono text-teal-300">$0.00</span>
+              <span id="metric-desktop-saved-vnd" class="text-[10px] text-teal-300/80 font-mono">~ 0 ₫ saved</span>
+              <span id="metric-desktop-jobs" class="text-[10px] text-slate-400 font-mono mt-0.5">0 desktop jobs</span>
             </div>
           </div>
         </div>
@@ -514,6 +533,37 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         </div>
       </div>
 
+      <!-- Desktop Worker Offload Summary Bar -->
+      <div id="analytics-desktop-summary" class="bg-gradient-to-r from-teal-950/40 via-slate-900 to-emerald-950/30 border border-teal-500/30 rounded-2xl p-4 shadow-lg flex flex-wrap items-center justify-between gap-4">
+        <div class="flex items-center space-x-3">
+          <div class="h-9 w-9 rounded-xl bg-teal-500/15 border border-teal-500/30 flex items-center justify-center text-lg">🖥️</div>
+          <div>
+            <div class="flex items-center space-x-2">
+              <span class="text-xs font-bold text-teal-300 uppercase tracking-wider">Gemini Desktop Worker Offload</span>
+              <span class="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-teal-500/20 text-teal-200 border border-teal-500/40">$0.00 AGY API Burn</span>
+            </div>
+            <p class="text-[11px] text-slate-400 mt-0.5">Non-mutating heavy synthesis &amp; second-opinion jobs offloaded to local Gemini Desktop App</p>
+          </div>
+        </div>
+        <div class="flex items-center space-x-6 font-mono text-xs">
+          <div>
+            <div class="text-[10px] text-slate-400 uppercase">Offloaded Jobs</div>
+            <div id="analytics-desktop-jobs-count" class="text-base font-bold text-white">0</div>
+          </div>
+          <div>
+            <div class="text-[10px] text-slate-400 uppercase">Est. Quota Saved</div>
+            <div id="analytics-desktop-saved-usd" class="text-base font-bold text-teal-300">$0.00</div>
+          </div>
+          <div>
+            <div class="text-[10px] text-slate-400 uppercase">VND Equivalent</div>
+            <div id="analytics-desktop-saved-vnd" class="text-sm font-semibold text-teal-400/90">~ 0 ₫</div>
+          </div>
+          <button onclick="openDesktopModal()" class="px-3 py-1.5 rounded-lg bg-teal-600/20 hover:bg-teal-600/30 text-teal-200 border border-teal-500/40 text-xs font-sans font-semibold transition">
+            Open Control Center &rarr;
+          </button>
+        </div>
+      </div>
+
       <!-- Detailed Per-Model Ledger Table -->
       <div class="bg-slate-900/50 border border-slate-800/80 rounded-2xl overflow-hidden shadow-xl">
         <div class="px-5 py-3.5 border-b border-slate-800/80 bg-slate-900/70 flex items-center justify-between">
@@ -627,6 +677,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
               <option value="hydrogen">Gemini 4 Hydrogen (Ultra-Fast)</option>
               <option value="flash">Gemini 3.8 Flash</option>
               <option value="lite">Gemini 3.8 Flash-Lite</option>
+              <option value="desktop">Gemini Desktop App ($0 API)</option>
             </select>
           </div>
 
@@ -897,7 +948,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           <!-- File count -->
           <div>
             <label class="block text-slate-300 font-semibold mb-1">Estimated Files</label>
-            <input type="number" id="router-files" value="3" min="1" max="100" class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-slate-200 focus:outline-none focus:border-emerald-500">
+            <input type="number" id="router-files" value="3" min="0" max="100" class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-slate-200 focus:outline-none focus:border-emerald-500">
           </div>
 
           <!-- Budget Mode -->
@@ -910,6 +961,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
               <option value="quality_first">Quality First (Prefer Frontier Carbon)</option>
               <option value="cost_saving">Cost Saving (Bulk Flash Scaffolding)</option>
               <option value="cost_first">Cost First (Max Flash Savings)</option>
+              <option value="hybrid_desktop">Hybrid Desktop (Offload Heavy Synthesis)</option>
+              <option value="offload_heavy_to_desktop">Offload Heavy to Desktop ($0 API)</option>
             </select>
           </div>
 
@@ -931,6 +984,22 @@ DASHBOARD_HTML = """<!DOCTYPE html>
               <span class="text-slate-300 font-medium">Security Impact / CVE</span>
             </label>
           </div>
+        </div>
+
+        <!-- Desktop Offload & Read-Only Controls -->
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 bg-slate-950/50 border border-slate-800/80 rounded-xl p-3">
+          <label class="flex items-center space-x-2 cursor-pointer select-none">
+            <input type="checkbox" id="router-read-only" class="rounded bg-slate-800 border-slate-700 text-teal-500 focus:ring-0 w-4 h-4">
+            <span class="text-slate-300 font-medium">Read-Only / Non-Mutating</span>
+          </label>
+          <label class="flex items-center space-x-2 cursor-pointer select-none">
+            <input type="checkbox" id="router-desktop-available" class="rounded bg-slate-800 border-slate-700 text-teal-500 focus:ring-0 w-4 h-4">
+            <span class="text-slate-300 font-medium">Desktop App Available</span>
+          </label>
+          <label class="flex items-center space-x-2 cursor-pointer select-none">
+            <input type="checkbox" id="router-prefer-desktop" class="rounded bg-slate-800 border-slate-700 text-teal-500 focus:ring-0 w-4 h-4">
+            <span class="text-slate-300 font-medium">Prefer Desktop ($0 API)</span>
+          </label>
         </div>
 
         <!-- Evaluate Button -->
@@ -978,6 +1047,146 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       <div class="px-6 py-3 border-t border-slate-800 bg-slate-950/70 flex items-center justify-between text-xs text-slate-400">
         <span>POST /api/router/recommend</span>
         <button onclick="closeRouterModal()" class="px-4 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium transition">Đóng</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- =================================================================== -->
+  <!-- MODAL: CROSS-PLATFORM GEMINI DESKTOP WORKER CONTROL CENTER -->
+  <!-- =================================================================== -->
+  <div id="desktop-worker-modal" class="fixed inset-0 z-50 hidden flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md">
+    <div class="relative w-full max-w-5xl max-h-[92vh] bg-slate-900 border border-teal-500/40 rounded-2xl shadow-2xl flex flex-col overflow-hidden">
+      <!-- Modal Header -->
+      <div class="px-6 py-4 border-b border-slate-800 bg-slate-950/75 flex items-center justify-between gap-4">
+        <div class="flex items-center space-x-3">
+          <div class="h-9 w-9 rounded-xl bg-teal-500/15 border border-teal-500/40 flex items-center justify-center text-lg">🖥️</div>
+          <div>
+            <h3 class="text-sm font-bold text-white flex items-center gap-2 flex-wrap">
+              <span>Gemini Desktop Worker Control Center</span>
+              <span class="text-[10px] px-2 py-0.5 rounded-full bg-teal-500/20 text-teal-300 border border-teal-500/40 font-mono">$0.00 AGY API Burn</span>
+              <span id="desktop-modal-os-badge" class="text-[10px] px-2 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700 font-mono">Detecting OS...</span>
+            </h3>
+            <p class="text-xs text-slate-400">Offload non-mutating heavy synthesis &amp; second-opinion reasoning to the local Gemini Desktop App</p>
+          </div>
+        </div>
+        <div class="flex items-center space-x-2">
+          <button onclick="refreshDesktopStatus(); refreshDesktopJobs();" class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-medium flex items-center space-x-1.5 transition">
+            <span>🔄 Refresh</span>
+          </button>
+          <button onclick="closeDesktopModal()" class="text-slate-400 hover:text-white p-1.5 rounded-lg hover:bg-slate-800 transition">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
+          </button>
+        </div>
+      </div>
+
+      <!-- Scrollable Body -->
+      <div class="flex-1 overflow-y-auto p-6 space-y-5 text-xs">
+
+        <!-- Live OS & Driver Doctor Banner -->
+        <div id="desktop-doctor-banner" class="p-4 rounded-xl border border-slate-800 bg-slate-950/70 space-y-2">
+          <div class="flex items-center justify-between text-slate-300">
+            <span class="font-semibold">Loading OS &amp; Driver Doctor diagnostics (GET /api/desktop/status)...</span>
+          </div>
+        </div>
+
+        <!-- Heavy Analysis Dispatch Form -->
+        <div class="bg-slate-950/60 border border-slate-800/90 rounded-xl p-4 space-y-3">
+          <div class="flex items-center justify-between border-b border-slate-800/80 pb-2">
+            <div class="flex items-center space-x-2">
+              <span class="h-2 w-2 rounded-full bg-teal-400"></span>
+              <h4 class="font-bold text-slate-200 uppercase tracking-wider text-[11px]">Dispatch Heavy Read-Only Analysis</h4>
+            </div>
+            <span class="text-[11px] font-mono text-teal-400">POST /api/desktop/dispatch</span>
+          </div>
+
+          <div>
+            <label for="desktop-prompt" class="block text-slate-300 font-semibold mb-1">Analysis Prompt</label>
+            <textarea id="desktop-prompt" rows="4" placeholder="Paste large architecture synthesis, multi-file root-cause question, or 5-axis design critique prompt here..." class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-slate-200 font-mono text-xs focus:outline-none focus:border-teal-500"></textarea>
+          </div>
+
+          <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div>
+              <label for="desktop-task-id" class="block text-slate-300 font-semibold mb-1">Linked Task ID (Optional)</label>
+              <input type="text" id="desktop-task-id" placeholder="e.g. TASK-23" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-slate-200 font-mono focus:outline-none focus:border-teal-500">
+            </div>
+            <div>
+              <label for="desktop-driver" class="block text-slate-300 font-semibold mb-1">OS Driver</label>
+              <select id="desktop-driver" onchange="refreshDesktopStatus(this.value)" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-slate-200 font-mono focus:outline-none focus:border-teal-500">
+                <option value="auto" selected>auto (Detect Host OS)</option>
+                <option value="macos_ax">macos_ax (macOS Accessibility)</option>
+                <option value="windows_uia">windows_uia (Windows UIA)</option>
+                <option value="linux_pwa">linux_pwa (Linux X11 / Wayland PWA)</option>
+                <option value="orca">orca (Orca GUI Bridge)</option>
+                <option value="mock">mock (Deterministic CI Simulator)</option>
+              </select>
+            </div>
+            <div>
+              <label for="desktop-timeout" class="block text-slate-300 font-semibold mb-1">Timeout (sec)</label>
+              <input type="number" id="desktop-timeout" value="180" min="10" max="900" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-slate-200 font-mono focus:outline-none focus:border-teal-500">
+            </div>
+          </div>
+
+          <div class="flex flex-wrap items-center justify-between gap-3 pt-1">
+            <div class="flex flex-wrap items-center gap-4">
+              <label class="flex items-center space-x-2 cursor-pointer select-none">
+                <input type="checkbox" id="desktop-redact" checked class="rounded bg-slate-800 border-slate-700 text-teal-500 focus:ring-0 w-4 h-4">
+                <span class="text-slate-300 font-medium">Redact Secrets (Pre-Flight)</span>
+              </label>
+              <label class="flex items-center space-x-2 cursor-pointer select-none">
+                <input type="checkbox" id="desktop-strict-secrets" class="rounded bg-slate-800 border-slate-700 text-rose-500 focus:ring-0 w-4 h-4">
+                <span class="text-slate-300 font-medium">Strict Secret Block</span>
+              </label>
+              <label class="flex items-center space-x-2 cursor-pointer select-none">
+                <input type="checkbox" id="desktop-async" checked class="rounded bg-slate-800 border-slate-700 text-teal-500 focus:ring-0 w-4 h-4">
+                <span class="text-slate-300 font-medium">Async FIFO Queue</span>
+              </label>
+            </div>
+
+            <button id="desktop-dispatch-btn" onclick="dispatchDesktopJob()" class="px-4 py-2 rounded-xl bg-gradient-to-r from-teal-600 to-emerald-600 hover:from-teal-500 hover:to-emerald-500 text-white font-bold shadow-lg shadow-teal-600/20 transition flex items-center space-x-2">
+              <span>🚀 Dispatch to Gemini App</span>
+            </button>
+          </div>
+
+          <div id="desktop-dispatch-feedback" class="hidden p-3 rounded-lg border text-xs font-mono"></div>
+        </div>
+
+        <!-- Live Desktop Jobs Queue & History Table -->
+        <div class="bg-slate-950/60 border border-slate-800/90 rounded-xl overflow-hidden">
+          <div class="px-4 py-3 border-b border-slate-800/80 bg-slate-900/70 flex items-center justify-between">
+            <div class="flex items-center space-x-2">
+              <span class="h-2 w-2 rounded-full bg-teal-400"></span>
+              <h4 class="font-bold text-slate-200 uppercase tracking-wider text-[11px]">Desktop Jobs Queue &amp; Artifact History</h4>
+              <span id="desktop-jobs-count-badge" class="px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 text-[10px] font-mono">0 jobs</span>
+            </div>
+            <span class="text-[11px] font-mono text-slate-400">GET /api/desktop/jobs</span>
+          </div>
+          <div class="overflow-x-auto max-h-72">
+            <table class="w-full text-left text-xs">
+              <thead class="bg-slate-900/90 text-slate-400 uppercase tracking-wider text-[10px] font-semibold border-b border-slate-800/80 sticky top-0">
+                <tr>
+                  <th scope="col" class="py-2.5 px-3">Job / Task</th>
+                  <th scope="col" class="py-2.5 px-3">OS / Driver</th>
+                  <th scope="col" class="py-2.5 px-3">Status</th>
+                  <th scope="col" class="py-2.5 px-3">Artifact Pointer &amp; Summary Excerpt</th>
+                  <th scope="col" class="py-2.5 px-3 font-mono">Quota Saved</th>
+                  <th scope="col" class="py-2.5 px-3 text-center">Action</th>
+                </tr>
+              </thead>
+              <tbody id="desktop-jobs-tbody" class="divide-y divide-slate-800/50 text-slate-300">
+                <tr>
+                  <td colspan="6" class="py-6 text-center text-slate-500">No desktop worker jobs recorded yet.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Modal Footer -->
+      <div class="px-6 py-3 border-t border-slate-800 bg-slate-950/75 flex items-center justify-between text-xs text-slate-400">
+        <span>FIFO Single-Window Guard &middot; Clipboard Safe Restore &middot; Secret Redactor</span>
+        <button onclick="closeDesktopModal()" class="px-4 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium transition">Close</button>
       </div>
     </div>
   </div>
@@ -1050,9 +1259,15 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       metrics: {
         total: 0, pending: 0, running: 0, completed: 0, blocked: 0, cancelled: 0, active_agents: 0,
         total_input_tokens: 0, total_output_tokens: 0, total_cache_tokens: 0, grand_total_tokens: 0,
-        total_cost_usd: 0, total_cost_vnd: 0, total_saved_usd: 0, total_saved_vnd: 0, cache_rate: 0
+        total_cost_usd: 0, total_cost_vnd: 0, total_saved_usd: 0, total_saved_vnd: 0, cache_rate: 0,
+        desktop_jobs_total: 0, desktop_jobs_queued: 0, desktop_jobs_running: 0, desktop_jobs_completed: 0,
+        desktop_quota_saved_usd: 0, desktop_quota_saved_vnd: 0
       },
-      modelAnalytics: null
+      modelAnalytics: null,
+      desktopStatus: null,
+      desktopJobs: [],
+      desktopSummary: { quota_saved_usd: 0, quota_saved_vnd: 0, queue_depth: 0 },
+      routerDesktopTouched: false
     };
 
     function switchTab(tab) {
@@ -1222,6 +1437,24 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       document.getElementById('metric-saved-vnd').textContent = `~ ${formatMoneyVND(savedVnd)} saved`;
       document.getElementById('tab-cost-badge').textContent = formatMoneyUSD(costUsd);
 
+      // Desktop Offload AGY Quota Saved Telemetry
+      const desktopSavedUsd = (metrics.desktop_quota_saved_usd !== undefined) ? metrics.desktop_quota_saved_usd : (state.desktopSummary?.quota_saved_usd || 0.0);
+      const desktopSavedVnd = (metrics.desktop_quota_saved_vnd !== undefined) ? metrics.desktop_quota_saved_vnd : (state.desktopSummary?.quota_saved_vnd || 0);
+      const desktopCompleted = (metrics.desktop_jobs_completed !== undefined) ? metrics.desktop_jobs_completed : (state.desktopJobs ? state.desktopJobs.filter(j => j.status === 'completed').length : 0);
+      const elDesktopUsd = document.getElementById('metric-desktop-saved-usd');
+      const elDesktopVnd = document.getElementById('metric-desktop-saved-vnd');
+      const elDesktopJobs = document.getElementById('metric-desktop-jobs');
+      if (elDesktopUsd) elDesktopUsd.textContent = formatMoneyUSD(desktopSavedUsd);
+      if (elDesktopVnd) elDesktopVnd.textContent = `~ ${formatMoneyVND(desktopSavedVnd)} saved`;
+      if (elDesktopJobs) elDesktopJobs.textContent = `${desktopCompleted} desktop ${desktopCompleted === 1 ? 'job' : 'jobs'}`;
+
+      const elAnalyticsDeskJobs = document.getElementById('analytics-desktop-jobs-count');
+      const elAnalyticsDeskUsd = document.getElementById('analytics-desktop-saved-usd');
+      const elAnalyticsDeskVnd = document.getElementById('analytics-desktop-saved-vnd');
+      if (elAnalyticsDeskJobs) elAnalyticsDeskJobs.textContent = String(desktopCompleted);
+      if (elAnalyticsDeskUsd) elAnalyticsDeskUsd.textContent = formatMoneyUSD(desktopSavedUsd);
+      if (elAnalyticsDeskVnd) elAnalyticsDeskVnd.textContent = `~ ${formatMoneyVND(desktopSavedVnd)}`;
+
       // Historical tab header cards
       const histCostUsd = document.getElementById('hist-total-cost-usd');
       if (histCostUsd) {
@@ -1321,6 +1554,15 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           <span class="px-2 py-0.5 rounded text-[11px] font-mono border bg-amber-950/40 text-amber-300 border-amber-500/40 flex items-center gap-1 inline-flex">
             <span class="text-[9px] text-amber-400">⚡</span>
             <span>Gemini 3.8 Flash</span>
+          </span>
+        `;
+      } else if (m.includes('desktop')) {
+        badge = `
+          <span class="px-2 py-0.5 rounded text-[11px] font-mono border bg-teal-950/60 text-teal-300 border-teal-500/40 flex items-center gap-1.5 inline-flex shadow-sm shadow-teal-500/10">
+            <span class="w-1.5 h-1.5 rounded-full bg-teal-400"></span>
+            <span>🖥️</span>
+            <span class="font-bold">Gemini Desktop App</span>
+            <span class="text-[9px] px-1 rounded bg-teal-500/20 text-teal-200 border border-teal-500/30">$0</span>
           </span>
         `;
       } else {
@@ -1781,7 +2023,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       Object.values(state.tasks).forEach(t => {
         const rawM = (t.model || '').toLowerCase();
         let canon = 'gemini-4-argon';
-        if (rawM.includes('carbon')) canon = 'gemini-4-carbon';
+        if (rawM.includes('desktop')) canon = 'gemini-desktop-app';
+        else if (rawM.includes('carbon')) canon = 'gemini-4-carbon';
         else if (rawM.includes('argon') || rawM.includes('pro')) canon = 'gemini-4-argon';
         else if (rawM.includes('hydrogen')) canon = 'gemini-4-hydrogen';
         else if (rawM.includes('flash-lite') || rawM.includes('lite')) canon = 'gemini-3.8-flash-lite';
@@ -1812,11 +2055,21 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
       const totalSpendUsd = Number(Object.values(stats).reduce((acc, s) => acc + s.cost_usd, 0).toFixed(4));
       const totalSpendVnd = Object.values(stats).reduce((acc, s) => acc + s.cost_vnd, 0);
+      const completedDesktop = (state.desktopJobs || []).filter(j => j.status === 'completed');
+      const desktopJobsCount = completedDesktop.length;
+      const desktopSavedUsd = Number(completedDesktop.reduce((acc, j) => acc + (j.estimated_saved_usd || 0), 0).toFixed(4)) || (state.desktopSummary?.quota_saved_usd || 0);
+      const desktopSavedVnd = completedDesktop.reduce((acc, j) => acc + (j.estimated_saved_vnd || 0), 0) || (state.desktopSummary?.quota_saved_vnd || 0);
 
       renderModelAnalyticsView({
         status: 'ok',
         models: stats,
-        summary: { total_spend_usd: totalSpendUsd, total_spend_vnd: totalSpendVnd }
+        summary: {
+          total_spend_usd: totalSpendUsd,
+          total_spend_vnd: totalSpendVnd,
+          desktop_jobs_count: desktopJobsCount,
+          desktop_saved_usd: desktopSavedUsd,
+          desktop_saved_vnd: desktopSavedVnd
+        }
       });
     }
 
@@ -1899,6 +2152,16 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const totalSpend = summary.total_spend_usd || 0.0;
       document.getElementById('spend-dist-summary').textContent = `Total Spend: ${formatMoneyUSD(totalSpend)} (~${formatMoneyVND(summary.total_spend_vnd || 0)})`;
 
+      const deskJobsCount = summary.desktop_jobs_count !== undefined ? summary.desktop_jobs_count : (state.metrics?.desktop_jobs_completed || 0);
+      const deskSavedUsd = summary.desktop_saved_usd !== undefined ? summary.desktop_saved_usd : (state.desktopSummary?.quota_saved_usd || state.metrics?.desktop_quota_saved_usd || 0);
+      const deskSavedVnd = summary.desktop_saved_vnd !== undefined ? summary.desktop_saved_vnd : (state.desktopSummary?.quota_saved_vnd || state.metrics?.desktop_quota_saved_vnd || 0);
+      const elDeskCnt = document.getElementById('analytics-desktop-jobs-count');
+      const elDeskUsd = document.getElementById('analytics-desktop-saved-usd');
+      const elDeskVnd = document.getElementById('analytics-desktop-saved-vnd');
+      if (elDeskCnt) elDeskCnt.textContent = String(deskJobsCount);
+      if (elDeskUsd) elDeskUsd.textContent = formatMoneyUSD(deskSavedUsd);
+      if (elDeskVnd) elDeskVnd.textContent = `~ ${formatMoneyVND(deskSavedVnd)}`;
+
       const cSpend = (models['gemini-4-carbon']?.cost_usd || 0);
       const aSpend = (models['gemini-4-argon']?.cost_usd || 0);
       const hSpend = (models['gemini-4-hydrogen']?.cost_usd || 0);
@@ -1975,6 +2238,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           if (modelFilter === 'hydrogen' && !m.includes('hydrogen')) return false;
           if (modelFilter === 'flash' && (!m.includes('flash') || m.includes('lite'))) return false;
           if (modelFilter === 'lite' && !m.includes('lite')) return false;
+          if (modelFilter === 'desktop' && !m.includes('desktop')) return false;
         }
         if (effortFilter !== 'all') {
           const eff = (t.reasoning_effort || '').toLowerCase();
@@ -2180,6 +2444,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     function openRouterModal() {
       const modal = document.getElementById('router-modal');
       if (modal) modal.classList.remove('hidden');
+      const availEl = document.getElementById('router-desktop-available');
+      if (availEl && !state.routerDesktopTouched && state.desktopStatus) {
+        availEl.checked = Boolean(state.desktopStatus.ready);
+      }
     }
 
     function closeRouterModal() {
@@ -2195,6 +2463,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const security = document.getElementById('router-security').checked;
       const budget = document.getElementById('router-budget').value;
       const retries = parseInt(document.getElementById('router-retries')?.value || '0', 10);
+      const readOnly = Boolean(document.getElementById('router-read-only')?.checked);
+      const desktopAvail = Boolean(document.getElementById('router-desktop-available')?.checked);
+      const preferDesktop = Boolean(document.getElementById('router-prefer-desktop')?.checked);
 
       const payload = {
         agent_type: persona,
@@ -2203,7 +2474,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         file_count: files,
         has_security_impact: security,
         budget_mode: budget,
-        retry_count: retries
+        retry_count: retries,
+        read_only: readOnly,
+        desktop_available: desktopAvail,
+        prefer_desktop: preferDesktop
       };
 
       fetch('/api/router/recommend', {
@@ -2233,6 +2507,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const scopeLower = (p.scope || '').toLowerCase();
       const budget = (p.budget_mode || 'balanced').toLowerCase().trim();
       const retries = Math.max(0, parseInt(p.retry_count || 0, 10));
+      const readOnly = Boolean(p.read_only);
+      const desktopAvail = Boolean(p.desktop_available);
+      const preferDesktop = Boolean(p.prefer_desktop);
+      const fileCount = parseInt(p.file_count ?? 0, 10);
 
       let model = 'gemini-4-hydrogen';
       let effort = null;
@@ -2250,6 +2528,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         || comp === 'critical'
         || ((agent === 'security-auditor' || agent === 'debugger') && (comp === 'high' || comp === 'critical'))
         || ['vulnerability', 'cve', 'penetration', 'auth', 'crypto', 'owasp', 'rbac', 'jwt', 'migration'].some(k => scopeLower.includes(k))
+      );
+
+      const desktopEligibleAgent = (
+        ['spec-engineer', 'task-planner', 'code-reviewer'].includes(agent)
+        || (['scout', 'codebase-researcher', 'doc-generator', 'debugger'].includes(agent) && readOnly)
       );
 
       if (isSecurityTask) {
@@ -2271,6 +2554,23 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         costTier = '$$$$';
         fallback = 'gemini-4-argon';
         cbMeta = { status: 'tripped', retries: retries, escalated_from: 'gemini-4-hydrogen' };
+      }
+      // =========================================================================
+      // RULE 1.5: DESKTOP OFFLOAD GATE (Zero-API-Cost Heavy Read-Only Synthesis)
+      // =========================================================================
+      else if (
+        (budget === 'hybrid_desktop' || budget === 'offload_heavy_to_desktop' || preferDesktop)
+        && desktopAvail
+        && (fileCount === 0 || readOnly)
+        && desktopEligibleAgent
+        && (comp === 'high' || comp === 'critical' || budget === 'offload_heavy_to_desktop' || preferDesktop)
+      ) {
+        model = 'gemini-desktop-app';
+        effort = null;
+        tier = 'external_desktop';
+        rationale = 'Heavy non-mutating synthesis offloaded to local Gemini Desktop App ($0.00 AGY API token spend).';
+        costTier = '$0';
+        fallback = 'gemini-4-argon';
       }
       // =========================================================================
       // RULE 3: ARCHITECTURE, SPECIFICATION & 5-AXIS CODE REVIEW
@@ -2513,13 +2813,17 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         .then(() => {
           state.tasks = {};
           state.logs = [];
+          state.desktopJobs = [];
+          state.desktopSummary = { quota_saved_usd: 0, quota_saved_vnd: 0, queue_depth: 0 };
           renderTasksTable();
           renderHistoryTable();
           if (currentTaskView === 'dag') renderDagView();
           clearLogConsole();
-          renderMetrics({ total: 0, pending: 0, running: 0, completed: 0, blocked: 0, cancelled: 0, active_agents: 0 });
+          renderMetrics({ total: 0, pending: 0, running: 0, completed: 0, blocked: 0, cancelled: 0, active_agents: 0, desktop_jobs_completed: 0, desktop_quota_saved_usd: 0, desktop_quota_saved_vnd: 0 });
           updatePipelineStages();
           fallbackModelAnalytics();
+          renderDesktopJobsTable();
+          refreshDesktopStatus();
         });
     }
 
@@ -2600,13 +2904,42 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       evtSource.addEventListener('reset_event', (e) => {
         state.tasks = {};
         state.logs = [];
+        state.desktopJobs = [];
+        state.desktopSummary = { quota_saved_usd: 0, quota_saved_vnd: 0, queue_depth: 0 };
         renderTasksTable();
         renderHistoryTable();
         if (currentTaskView === 'dag') renderDagView();
         clearLogConsole();
-        renderMetrics({ total: 0, pending: 0, running: 0, completed: 0, blocked: 0, cancelled: 0, active_agents: 0 });
+        renderMetrics({ total: 0, pending: 0, running: 0, completed: 0, blocked: 0, cancelled: 0, active_agents: 0, desktop_jobs_completed: 0, desktop_quota_saved_usd: 0, desktop_quota_saved_vnd: 0 });
         updatePipelineStages();
         fallbackModelAnalytics();
+        renderDesktopJobsTable();
+        refreshDesktopStatus();
+      });
+
+      ['desktop_job_queued', 'desktop_job_started', 'desktop_job_completed', 'desktop_job_failed', 'desktop_job_cancelled'].forEach(evtName => {
+        evtSource.addEventListener(evtName, (e) => {
+          try {
+            const payload = JSON.parse(e.data || '{}');
+            const job = payload.job || payload;
+            if (job && job.job_id) {
+              const idx = state.desktopJobs.findIndex(j => j.job_id === job.job_id);
+              if (idx >= 0) {
+                state.desktopJobs[idx] = job;
+              } else {
+                state.desktopJobs.unshift(job);
+              }
+              renderDesktopJobsTable();
+            }
+            if (payload.metrics) {
+              state.metrics = payload.metrics;
+              renderMetrics(state.metrics);
+            }
+          } catch (err) {}
+          refreshDesktopStatus();
+          refreshDesktopJobs();
+          if (currentTab === 'analytics') refreshModelAnalytics();
+        });
       });
 
       // Periodic state sync fallback (4s)
@@ -2844,10 +3177,381 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       }
     }
 
+    // ---------------------------------------------------------------------------
+    // Cross-Platform Gemini Desktop Worker Bridge Logic
+    // ---------------------------------------------------------------------------
+    let desktopPollTimer = null;
+
+    function getDesktopOsMeta(osPlatform) {
+      const os = (osPlatform || '').toLowerCase();
+      if (os === 'darwin' || os === 'macos') return { icon: '🍎', label: 'macOS', display: '🍎 macOS' };
+      if (os === 'win32' || os === 'windows') return { icon: '🪟', label: 'Windows', display: '🪟 Windows' };
+      if (os === 'linux') return { icon: '🐧', label: 'Linux', display: '🐧 Linux' };
+      return { icon: '🖥️', label: osPlatform || 'Desktop', display: `🖥️ ${osPlatform || 'Desktop'}` };
+    }
+
+    function getDesktopJobStatusBadge(status) {
+      switch ((status || '').toLowerCase()) {
+        case 'completed':
+          return '<span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">COMPLETED</span>';
+        case 'running':
+          return '<span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-teal-500/20 text-teal-300 border border-teal-500/40 animate-pulse">RUNNING</span>';
+        case 'queued':
+          return '<span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">QUEUED</span>';
+        case 'cancelled':
+          return '<span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-700/60 text-slate-300 border border-slate-600">CANCELLED</span>';
+        case 'timed_out':
+          return '<span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40">TIMED OUT</span>';
+        case 'rejected_secrets':
+          return '<span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-500/20 text-rose-300 border border-rose-500/40">SECRET BLOCKED</span>';
+        case 'failed':
+        default:
+          return `<span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-500/20 text-rose-300 border border-rose-500/30">${escapeHtml((status || 'FAILED').toUpperCase())}</span>`;
+      }
+    }
+
+    function updateDesktopStatusPill(statusPayload) {
+      const pill = document.getElementById('desktop-status-pill');
+      const dot = document.getElementById('desktop-pill-dot');
+      const label = document.getElementById('desktop-pill-label');
+      const modalBadge = document.getElementById('desktop-modal-os-badge');
+      if (!pill || !dot || !label) return;
+
+      const d = (statusPayload && statusPayload.desktop) ? statusPayload.desktop : statusPayload;
+      if (!d) {
+        dot.className = 'h-2 w-2 rounded-full bg-rose-400';
+        label.textContent = '🖥️ Desktop Offline';
+        if (modalBadge) modalBadge.textContent = 'Offline';
+        return;
+      }
+
+      const osMeta = getDesktopOsMeta(d.os_platform);
+      const qDepth = statusPayload.queue_depth !== undefined ? statusPayload.queue_depth : (d.queue_depth || 0);
+      const isBusy = Boolean(d.lock_busy || statusPayload.active_job || qDepth > 0);
+      const isMock = (d.driver_name || '').toLowerCase() === 'mock';
+
+      let appStateText = 'Offline';
+      if (isBusy) {
+        appStateText = qDepth > 0 ? `Busy (${qDepth} queued)` : 'Running Job...';
+        dot.className = 'h-2 w-2 rounded-full bg-amber-400 pulse-slow';
+        pill.className = 'px-3 py-1.5 rounded-lg bg-amber-950/50 hover:bg-amber-900/60 text-amber-200 border border-amber-500/40 text-xs font-semibold flex items-center space-x-2 transition shadow-sm';
+      } else if (d.ready) {
+        appStateText = isMock ? 'Mock Ready' : `${d.app_name || 'Gemini.app'} Ready`;
+        dot.className = 'h-2 w-2 rounded-full bg-teal-400';
+        pill.className = 'px-3 py-1.5 rounded-lg bg-teal-950/50 hover:bg-teal-900/60 text-teal-200 border border-teal-500/40 text-xs font-semibold flex items-center space-x-2 transition shadow-sm shadow-teal-500/10';
+      } else {
+        appStateText = d.app_detected ? 'Action Needed' : 'Not Detected';
+        dot.className = 'h-2 w-2 rounded-full bg-rose-400';
+        pill.className = 'px-3 py-1.5 rounded-lg bg-rose-950/40 hover:bg-rose-900/50 text-rose-200 border border-rose-500/40 text-xs font-semibold flex items-center space-x-2 transition shadow-sm';
+      }
+
+      label.textContent = `${osMeta.icon} ${osMeta.label} · ${appStateText}`;
+      if (modalBadge) {
+        modalBadge.textContent = `${osMeta.icon} ${osMeta.label} (${d.driver_name || 'auto'})`;
+      }
+    }
+
+    function renderDesktopDoctorBanner(data) {
+      const banner = document.getElementById('desktop-doctor-banner');
+      if (!banner) return;
+      if (!data || !data.desktop) {
+        banner.className = 'p-4 rounded-xl border border-rose-500/40 bg-rose-950/20 space-y-2';
+        banner.innerHTML = `<div class="text-rose-300 font-semibold">Desktop Worker API unavailable (/api/desktop/status). Ensure server is running with desktop_worker bridge enabled.</div>`;
+        return;
+      }
+
+      const d = data.desktop;
+      const osMeta = getDesktopOsMeta(d.os_platform);
+      const borderStyle = d.ready ? 'border-teal-500/40 bg-teal-950/20' : 'border-amber-500/40 bg-amber-950/20';
+      banner.className = `p-4 rounded-xl border ${borderStyle} space-y-3`;
+
+      const permEntries = Object.entries(d.permissions || {}).map(([k, v]) => {
+        const ok = v === 'granted' || v === 'ok';
+        const cls = ok ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30' : 'bg-rose-500/15 text-rose-300 border-rose-500/30';
+        return `<span class="px-2 py-0.5 rounded text-[10px] font-mono border ${cls}">${escapeHtml(k)}: ${escapeHtml(v)}</span>`;
+      }).join('');
+
+      const backendsHtml = (d.available_backends || []).map(b =>
+        `<span class="px-1.5 py-0.5 rounded text-[10px] font-mono bg-slate-800 text-slate-300 border border-slate-700">${escapeHtml(b)}</span>`
+      ).join('');
+
+      const warningsHtml = (d.warnings || []).length > 0
+        ? `<div class="text-[11px] text-amber-300 space-y-1 pt-1 border-t border-slate-800/70">${d.warnings.map(w => `<div>⚠️ ${escapeHtml(w)}</div>`).join('')}</div>`
+        : '';
+
+      const remediationHtml = (d.remediation_steps || []).length > 0
+        ? `<div class="text-[11px] text-slate-300 bg-slate-900/80 p-2.5 rounded-lg border border-slate-800 space-y-1"><div class="font-bold text-amber-300">Remediation Steps:</div>${d.remediation_steps.map(s => `<div>&bull; ${escapeHtml(s)}</div>`).join('')}</div>`
+        : '';
+
+      banner.innerHTML = `
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <div class="flex items-center space-x-2 flex-wrap">
+            <span class="text-base">${osMeta.icon}</span>
+            <span class="font-bold text-white text-xs">${escapeHtml(osMeta.label)} &middot; Driver: <span class="font-mono text-teal-300">${escapeHtml(d.driver_name)}</span></span>
+            <span class="px-2 py-0.5 rounded-full text-[10px] font-bold ${d.ready ? 'bg-teal-500/20 text-teal-300 border border-teal-500/40' : 'bg-amber-500/20 text-amber-300 border border-amber-500/40'}">${d.ready ? 'READY' : 'NOT READY'}</span>
+            <span class="px-2 py-0.5 rounded-full text-[10px] font-mono bg-slate-800 text-slate-300 border border-slate-700">Queue: ${Number(data.queue_depth ?? d.queue_depth ?? 0)} | Lock: ${d.lock_busy ? 'BUSY' : 'FREE'}</span>
+          </div>
+          <div class="text-[11px] font-mono text-teal-300 font-bold">
+            Quota Saved: ${formatMoneyUSD(data.quota_saved_usd || 0)} (~${formatMoneyVND(data.quota_saved_vnd || 0)})
+          </div>
+        </div>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px] text-slate-300 font-mono bg-slate-950/60 p-2.5 rounded-lg border border-slate-800/80">
+          <div><span class="text-slate-500">App:</span> ${escapeHtml(d.app_name || 'Not detected')} ${d.app_version ? `v${escapeHtml(d.app_version)}` : ''}</div>
+          <div><span class="text-slate-500">Bundle ID:</span> ${escapeHtml(d.bundle_id || '-')}</div>
+          <div class="sm:col-span-2 truncate" title="${escapeHtml(d.app_path || '')}"><span class="text-slate-500">Path:</span> ${escapeHtml(d.app_path || '-')}</div>
+        </div>
+        <div class="flex flex-wrap items-center gap-1.5">
+          ${permEntries}
+          ${backendsHtml}
+        </div>
+        ${warningsHtml}
+        ${remediationHtml}
+      `;
+    }
+
+    function refreshDesktopStatus(driverOverride) {
+      const driver = driverOverride || document.getElementById('desktop-driver')?.value || 'auto';
+      return fetch(`/api/desktop/status?driver=${encodeURIComponent(driver)}`)
+        .then(r => {
+          if (!r.ok) throw new Error('Desktop status unavailable');
+          return r.json();
+        })
+        .then(data => {
+          if (data && data.desktop) {
+            state.desktopStatus = data.desktop;
+            state.desktopSummary = {
+              quota_saved_usd: data.quota_saved_usd || 0,
+              quota_saved_vnd: data.quota_saved_vnd || 0,
+              queue_depth: data.queue_depth || 0
+            };
+            updateDesktopStatusPill(data);
+            renderDesktopDoctorBanner(data);
+            renderMetrics(state.metrics);
+          }
+        })
+        .catch(() => {
+          updateDesktopStatusPill(null);
+          renderDesktopDoctorBanner(null);
+        });
+    }
+
+    function refreshDesktopJobs() {
+      return fetch('/api/desktop/jobs?limit=50')
+        .then(r => {
+          if (!r.ok) throw new Error('Desktop jobs unavailable');
+          return r.json();
+        })
+        .then(data => {
+          if (data && Array.isArray(data.jobs)) {
+            state.desktopJobs = data.jobs;
+            if (data.summary) {
+              state.desktopSummary = {
+                ...state.desktopSummary,
+                ...data.summary
+              };
+            }
+            renderDesktopJobsTable();
+            renderMetrics(state.metrics);
+          }
+        })
+        .catch(() => {});
+    }
+
+    function renderDesktopJobsTable() {
+      const tbody = document.getElementById('desktop-jobs-tbody');
+      const countBadge = document.getElementById('desktop-jobs-count-badge');
+      const jobs = state.desktopJobs || [];
+      if (countBadge) countBadge.textContent = `${jobs.length} ${jobs.length === 1 ? 'job' : 'jobs'}`;
+      if (!tbody) return;
+
+      if (jobs.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="6" class="py-6 text-center text-slate-500">No desktop worker jobs recorded yet.</td></tr>';
+        return;
+      }
+
+      tbody.innerHTML = jobs.map(j => {
+        const osMeta = getDesktopOsMeta(j.os_platform);
+        const canCancel = j.status === 'queued' || j.status === 'running';
+        const redactionNote = (j.redaction_count || 0) > 0
+          ? `<span class="px-1.5 py-0.2 rounded text-[9px] font-mono bg-amber-500/15 text-amber-300 border border-amber-500/30">🛡️ ${Number(j.redaction_count)} redacted</span>`
+          : '';
+        const artifactHtml = j.artifact_path
+          ? `<div class="font-mono text-[10px] text-teal-300 truncate max-w-md" title="${escapeHtml(j.artifact_path)}">📄 ${escapeHtml(j.artifact_path)}</div>`
+          : '';
+        const excerptHtml = j.summary_excerpt
+          ? `<div class="text-[11px] text-slate-300 mt-0.5 line-clamp-2 whitespace-pre-wrap">${escapeHtml(j.summary_excerpt)}</div>`
+          : (j.prompt_preview ? `<div class="text-[11px] text-slate-500 mt-0.5 truncate max-w-md">${escapeHtml(j.prompt_preview)}</div>` : '');
+        const errorHtml = j.error_message
+          ? `<div class="text-[10px] font-mono text-rose-300 mt-0.5">❌ ${escapeHtml(j.error_message)}</div>`
+          : '';
+
+        const cancelBtnHtml = canCancel
+          ? `<button type="button" data-cancel-job-id="${escapeHtml(j.job_id)}" class="px-2.5 py-1 rounded-lg bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/40 font-bold text-[10px] transition">Cancel</button>`
+          : `<span class="text-[10px] text-slate-500 font-mono">${j.duration_ms ? `${Number(j.duration_ms)}ms` : '-'}</span>`;
+
+        return `
+          <tr class="hover:bg-slate-900/60 transition align-top">
+            <td class="py-2.5 px-3 font-mono">
+              <div class="font-bold text-white">${escapeHtml(j.job_id)}</div>
+              ${j.task_id ? `<div class="text-[10px] text-indigo-300">${escapeHtml(j.task_id)}</div>` : ''}
+            </td>
+            <td class="py-2.5 px-3 font-mono text-[11px]">
+              <div>${osMeta.icon} ${escapeHtml(j.os_platform || '-')}</div>
+              <div class="text-[10px] text-slate-400">${escapeHtml(j.driver_name || '-')}</div>
+            </td>
+            <td class="py-2.5 px-3">
+              <div class="flex flex-col items-start gap-1">
+                ${getDesktopJobStatusBadge(j.status)}
+                ${redactionNote}
+              </div>
+            </td>
+            <td class="py-2.5 px-3 max-w-md">
+              ${artifactHtml}
+              ${excerptHtml}
+              ${errorHtml}
+            </td>
+            <td class="py-2.5 px-3 font-mono whitespace-nowrap">
+              <div class="text-teal-300 font-bold">${formatMoneyUSD(j.estimated_saved_usd || 0)}</div>
+              <div class="text-[10px] text-slate-400">~${formatMoneyVND(j.estimated_saved_vnd || 0)}</div>
+            </td>
+            <td class="py-2.5 px-3 text-center">${cancelBtnHtml}</td>
+          </tr>
+        `;
+      }).join('');
+    }
+
+    function openDesktopModal() {
+      const modal = document.getElementById('desktop-worker-modal');
+      if (!modal) return;
+      modal.classList.remove('hidden');
+      refreshDesktopStatus();
+      refreshDesktopJobs();
+      if (desktopPollTimer) clearInterval(desktopPollTimer);
+      desktopPollTimer = setInterval(() => {
+        refreshDesktopStatus();
+        refreshDesktopJobs();
+      }, 3000);
+    }
+
+    function closeDesktopModal() {
+      const modal = document.getElementById('desktop-worker-modal');
+      if (modal) modal.classList.add('hidden');
+      if (desktopPollTimer) {
+        clearInterval(desktopPollTimer);
+        desktopPollTimer = null;
+      }
+    }
+
+    function dispatchDesktopJob() {
+      const promptEl = document.getElementById('desktop-prompt');
+      const taskEl = document.getElementById('desktop-task-id');
+      const driverEl = document.getElementById('desktop-driver');
+      const timeoutEl = document.getElementById('desktop-timeout');
+      const redactEl = document.getElementById('desktop-redact');
+      const strictEl = document.getElementById('desktop-strict-secrets');
+      const asyncEl = document.getElementById('desktop-async');
+      const btn = document.getElementById('desktop-dispatch-btn');
+      const feedback = document.getElementById('desktop-dispatch-feedback');
+
+      const prompt = (promptEl?.value || '').trim();
+      if (!prompt) {
+        if (feedback) {
+          feedback.className = 'p-3 rounded-lg border border-rose-500/40 bg-rose-950/30 text-rose-300 text-xs font-mono';
+          feedback.textContent = 'Please enter a non-empty prompt before dispatching.';
+          feedback.classList.remove('hidden');
+        }
+        return;
+      }
+
+      const payload = {
+        prompt: prompt,
+        driver: driverEl?.value || 'auto',
+        timeout_sec: parseInt(timeoutEl?.value || '180', 10),
+        redact_secrets: Boolean(redactEl?.checked),
+        strict_secrets: Boolean(strictEl?.checked),
+        async_mode: Boolean(asyncEl?.checked)
+      };
+      const taskId = (taskEl?.value || '').trim();
+      if (taskId) payload.task_id = taskId;
+
+      if (btn) {
+        btn.disabled = true;
+        btn.classList.add('opacity-60');
+      }
+      if (feedback) {
+        feedback.className = 'p-3 rounded-lg border border-teal-500/30 bg-teal-950/20 text-teal-200 text-xs font-mono';
+        feedback.textContent = 'Dispatching job to Gemini Desktop Worker...';
+        feedback.classList.remove('hidden');
+      }
+
+      fetch('/api/desktop/dispatch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      })
+      .then(async res => {
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        return data;
+      })
+      .then(data => {
+        const job = data.job || {};
+        if (feedback) {
+          const ok = job.status === 'completed' || job.status === 'queued' || data.status === 'queued';
+          feedback.className = ok
+            ? 'p-3 rounded-lg border border-emerald-500/40 bg-emerald-950/30 text-emerald-300 text-xs font-mono'
+            : 'p-3 rounded-lg border border-amber-500/40 bg-amber-950/30 text-amber-300 text-xs font-mono';
+          feedback.innerHTML = `Job <span class="font-bold">${escapeHtml(job.job_id || 'submitted')}</span> &rarr; status: <span class="font-bold">${escapeHtml(job.status || data.status || 'ok')}</span>${job.artifact_path ? ` | Artifact: ${escapeHtml(job.artifact_path)}` : ''}${job.error_message ? ` | ${escapeHtml(job.error_message)}` : ''}`;
+        }
+        refreshDesktopStatus();
+        refreshDesktopJobs();
+      })
+      .catch(err => {
+        if (feedback) {
+          feedback.className = 'p-3 rounded-lg border border-rose-500/40 bg-rose-950/30 text-rose-300 text-xs font-mono';
+          feedback.textContent = `Dispatch failed: ${err.message || err}`;
+        }
+      })
+      .finally(() => {
+        if (btn) {
+          btn.disabled = false;
+          btn.classList.remove('opacity-60');
+        }
+      });
+    }
+
+    function cancelDesktopJob(jobId) {
+      if (!jobId) return;
+      fetch('/api/desktop/cancel', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ job_id: jobId })
+      })
+      .then(r => r.json())
+      .then(() => {
+        refreshDesktopStatus();
+        refreshDesktopJobs();
+      })
+      .catch(err => alert('Failed to cancel desktop job: ' + err));
+    }
+
+    document.addEventListener('click', (e) => {
+      const cancelBtn = e.target.closest('[data-cancel-job-id]');
+      if (cancelBtn) {
+        const jobId = cancelBtn.getAttribute('data-cancel-job-id');
+        if (jobId) cancelDesktopJob(jobId);
+      }
+    });
+
+    document.getElementById('router-desktop-available')?.addEventListener('change', () => {
+      state.routerDesktopTouched = true;
+    });
+
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') {
         closeAgentLiveModal();
         closeRouterModal();
+        closeDesktopModal();
       }
     });
 
@@ -2860,6 +3564,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     window.addEventListener('DOMContentLoaded', () => {
       initPipeline();
       connectSSE();
+      refreshDesktopStatus();
+      refreshDesktopJobs();
     });
   </script>
 </body>

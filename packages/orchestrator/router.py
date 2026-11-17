@@ -13,13 +13,17 @@ from typing import Any
 
 try:
     from .models import (
+        EXTERNAL_WORKERS,
         MODEL_REGISTRY,
         PRICING_TABLE,
         USD_TO_VND_RATE,
         VALID_REASONING_EFFORTS,
         compute_cost,
+        compute_desktop_quota_saved,
         extract_model_and_effort,
+        get_all_models_catalog,
         get_model_metadata,
+        is_external_worker,
         normalize_model_name,
         resolve_model_id,
         validate_reasoning_effort,
@@ -27,26 +31,34 @@ try:
 except ImportError:
     try:
         from models import (
+            EXTERNAL_WORKERS,
             MODEL_REGISTRY,
             PRICING_TABLE,
             USD_TO_VND_RATE,
             VALID_REASONING_EFFORTS,
             compute_cost,
+            compute_desktop_quota_saved,
             extract_model_and_effort,
+            get_all_models_catalog,
             get_model_metadata,
+            is_external_worker,
             normalize_model_name,
             resolve_model_id,
             validate_reasoning_effort,
         )
     except ImportError:
         from packages.orchestrator.models import (
+            EXTERNAL_WORKERS,
             MODEL_REGISTRY,
             PRICING_TABLE,
             USD_TO_VND_RATE,
             VALID_REASONING_EFFORTS,
             compute_cost,
+            compute_desktop_quota_saved,
             extract_model_and_effort,
+            get_all_models_catalog,
             get_model_metadata,
+            is_external_worker,
             normalize_model_name,
             resolve_model_id,
             validate_reasoning_effort,
@@ -61,10 +73,15 @@ def recommend_model(
     has_security_impact: bool = False,
     budget_mode: str = "balanced",
     retry_count: int = 0,
+    desktop_available: bool = False,
+    read_only: bool = False,
+    prefer_desktop: bool = False,
 ) -> dict:
     """
-    5-Tier Smart Router recommending optimal model, reasoning effort, and fallback.
-    Supports budget_mode: 'balanced', 'speed_first', 'latency_sensitive', 'quality_first', 'cost_saving'.
+    5-Tier + External Desktop Bridge Smart Router recommending optimal model,
+    reasoning effort, and fallback.
+    Supports budget_mode: 'balanced', 'speed_first', 'latency_sensitive',
+    'quality_first', 'cost_saving', 'hybrid_desktop', 'offload_heavy_to_desktop'.
     Supports retry_count for Fast-Retry & Escalation Circuit Breaker.
     """
     agent = (agent_type or "").lower().strip()
@@ -72,10 +89,11 @@ def recommend_model(
     scope_lower = (scope or "").lower()
     budget = (budget_mode or "balanced").lower().strip()
     retries = max(0, int(retry_count or 0))
+    files = max(0, int(file_count or 0))
 
     # =========================================================================
     # RULE 1: STRICT SECURITY & FRONTIER GUARDRAIL (Zero-Downgrade Invariant)
-    # Checked FIRST regardless of budget_mode (even speed_first / cost_saving)
+    # Checked FIRST regardless of budget_mode (even speed_first / cost_saving / hybrid_desktop)
     # =========================================================================
     is_security_task = (
         has_security_impact
@@ -120,6 +138,43 @@ def recommend_model(
         }
 
     # =========================================================================
+    # RULE 1.5: DESKTOP BRIDGE OFFLOAD GATE (Zero-API-Cost Heavy Synthesis)
+    # Evaluated AFTER Rule 1 (Security Guardrail) & Rule 2 (Circuit Breaker)
+    # Code-mutating workers (builder, test-engineer, ui-builder, frontend-engineer)
+    # never match and stay on the API fleet (Rule 4 -> Gemini 4 Hydrogen).
+    # =========================================================================
+    desktop_mode_requested = budget in ("hybrid_desktop", "offload_heavy_to_desktop") or bool(prefer_desktop)
+    desktop_eligible_agent = (
+        agent in ("spec-engineer", "task-planner", "code-reviewer")
+        or (agent in ("scout", "codebase-researcher", "doc-generator", "debugger") and bool(read_only))
+    )
+    if (
+        desktop_mode_requested
+        and bool(desktop_available)
+        and (files == 0 or bool(read_only))
+        and desktop_eligible_agent
+        and (comp in ("high", "critical") or budget == "offload_heavy_to_desktop" or bool(prefer_desktop))
+    ):
+        return {
+            "status": "ok",
+            "recommendation": {
+                "model": "gemini-desktop-app",
+                "reasoning_effort": None,
+                "tier": "external_desktop",
+                "execution_mode": "desktop_bridge",
+                "rationale": "Heavy non-mutating synthesis offloaded to local Gemini Desktop App ($0.00 AGY API token spend).",
+                "estimated_cost_tier": "$0",
+                "fallback_model": "gemini-4-argon",
+            },
+        }
+
+    desktop_fallback_note = (
+        " (Desktop bridge unavailable; routed to API fleet.)"
+        if (desktop_mode_requested and not desktop_available and desktop_eligible_agent)
+        else ""
+    )
+
+    # =========================================================================
     # RULE 3: ARCHITECTURE, SPECIFICATION & 5-AXIS CODE REVIEW
     # =========================================================================
     if agent in ("spec-engineer", "task-planner", "code-reviewer") or comp == "high":
@@ -152,7 +207,7 @@ def recommend_model(
                 "model": model,
                 "reasoning_effort": effort,
                 "tier": tier,
-                "rationale": rationale,
+                "rationale": rationale + desktop_fallback_note,
                 "estimated_cost_tier": cost_tier,
                 "fallback_model": fallback,
             },
@@ -206,7 +261,7 @@ def recommend_model(
             "model": model,
             "reasoning_effort": effort,
             "tier": tier,
-            "rationale": rationale,
+            "rationale": rationale + desktop_fallback_note,
             "estimated_cost_tier": cost_tier,
             "fallback_model": fallback,
         }
@@ -223,7 +278,7 @@ def recommend_model(
             "model": "gemini-3.8-flash-lite",
             "reasoning_effort": None,
             "tier": "ultra_fast",
-            "rationale": "Low-complexity telemetry, doc formatting, or dead code simplification dispatched to Gemini 3.8 Flash-Lite.",
+            "rationale": "Low-complexity telemetry, doc formatting, or dead code simplification dispatched to Gemini 3.8 Flash-Lite." + desktop_fallback_note,
             "estimated_cost_tier": "$",
             "fallback_model": "gemini-3.8-flash",
         },
@@ -306,36 +361,31 @@ def evaluate_dag_ready(tasks: list[dict]) -> dict:
 evaluate_ready_tasks = evaluate_dag_ready
 
 
-def compute_model_analytics(tasks: list[dict]) -> dict:
-    """Compute per-model token consumption and financial spend breakdown."""
-    model_stats = {}
-    for canon in MODEL_REGISTRY:
-        model_stats[canon] = {
-            "task_count": 0,
-            "input_tokens": 0,
-            "output_tokens": 0,
-            "cache_tokens": 0,
-            "total_tokens": 0,
-            "cost_usd": 0.0,
-            "cost_vnd": 0,
-            "saved_usd": 0.0,
-            "saved_vnd": 0,
-        }
+def _empty_model_stat() -> dict[str, Any]:
+    return {
+        "task_count": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_tokens": 0,
+        "total_tokens": 0,
+        "cost_usd": 0.0,
+        "cost_vnd": 0,
+        "saved_usd": 0.0,
+        "saved_vnd": 0,
+    }
+
+
+def compute_model_analytics(
+    tasks: list[dict],
+    desktop_jobs: list[dict] | None = None,
+) -> dict:
+    """Compute per-model token consumption, financial spend, and Desktop Worker quota savings breakdown."""
+    model_stats = {canon: _empty_model_stat() for canon in MODEL_REGISTRY}
 
     for t in tasks:
         canon = normalize_model_name(t.get("model"))
         if canon not in model_stats:
-            model_stats[canon] = {
-                "task_count": 0,
-                "input_tokens": 0,
-                "output_tokens": 0,
-                "cache_tokens": 0,
-                "total_tokens": 0,
-                "cost_usd": 0.0,
-                "cost_vnd": 0,
-                "saved_usd": 0.0,
-                "saved_vnd": 0,
-            }
+            model_stats[canon] = _empty_model_stat()
 
         tokens = t.get("tokens") or {
             "input": t.get("input_tokens", 0),
@@ -362,6 +412,44 @@ def compute_model_analytics(tasks: list[dict]) -> dict:
         s["cost_vnd"] += cost.get("vnd", 0)
         s["saved_usd"] += cost.get("saved_usd", 0.0)
         s["saved_vnd"] += cost.get("saved_vnd", 0)
+
+    dj_list = list(desktop_jobs or [])
+    desktop_jobs_count = len(dj_list)
+    desktop_completed_count = 0
+    desktop_saved_usd = 0.0
+    desktop_saved_vnd = 0
+
+    if dj_list:
+        if "gemini-desktop-app" not in model_stats:
+            model_stats["gemini-desktop-app"] = _empty_model_stat()
+        ds = model_stats["gemini-desktop-app"]
+        for job in dj_list:
+            ds["task_count"] += 1
+            j_status = str(job.get("status") or "completed").lower()
+            prompt_chars = max(0, int(job.get("prompt_chars") or 0))
+            output_chars = max(0, int(job.get("output_chars") or job.get("raw_char_count") or 0))
+            est_in = (prompt_chars + 3) // 4
+            est_out = (output_chars + 3) // 4 if j_status == "completed" else 0
+            ds["input_tokens"] += est_in
+            ds["output_tokens"] += est_out
+            ds["total_tokens"] += est_in + est_out
+            if j_status == "completed":
+                desktop_completed_count += 1
+                j_saved_usd = float(job.get("estimated_saved_usd") or 0.0)
+                if j_saved_usd == 0.0 and (prompt_chars > 0 or output_chars > 0):
+                    quota = compute_desktop_quota_saved(prompt_chars, output_chars)
+                    j_saved_usd = quota["saved_usd"]
+                    j_saved_vnd = quota["saved_vnd"]
+                else:
+                    j_saved_vnd = (
+                        int(job["estimated_saved_vnd"])
+                        if job.get("estimated_saved_vnd") is not None
+                        else round(j_saved_usd * USD_TO_VND_RATE)
+                    )
+                desktop_saved_usd += j_saved_usd
+                desktop_saved_vnd += j_saved_vnd
+                ds["saved_usd"] += j_saved_usd
+                ds["saved_vnd"] += j_saved_vnd
 
     # Format numbers and calculate hit rates
     for canon, s in model_stats.items():
@@ -399,6 +487,10 @@ def compute_model_analytics(tasks: list[dict]) -> dict:
             "total_saved_vnd": total_saved_vnd,
             "most_used_model": most_used,
             "highest_cost_model": highest_cost,
+            "desktop_jobs_count": desktop_jobs_count,
+            "desktop_completed_count": desktop_completed_count,
+            "desktop_saved_usd": round(desktop_saved_usd, 4),
+            "desktop_saved_vnd": desktop_saved_vnd,
         },
     }
 
@@ -408,10 +500,12 @@ def generate_audit_report(
     logs: list[dict],
     metrics: dict,
     format: str = "markdown",
+    desktop_jobs: list[dict] | None = None,
 ) -> str | dict[str, Any]:
     """Generate mission audit report in Markdown or structured JSON."""
-    analytics = compute_model_analytics(tasks)
+    analytics = compute_model_analytics(tasks, desktop_jobs=desktop_jobs)
     now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    dj_list = list(desktop_jobs or [])
 
     if (format or "").lower() == "json":
         return {
@@ -420,6 +514,8 @@ def generate_audit_report(
             "metrics": metrics,
             "model_analytics": analytics,
             "tasks": tasks,
+            "desktop_jobs": dj_list,
+            "desktop_jobs_count": len(dj_list),
             "logs_count": len(logs),
         }
 
@@ -429,8 +525,10 @@ def generate_audit_report(
     lines.append(
         f"**Generated:** `{now_iso}` | **Total Tasks:** `{metrics.get('total', len(tasks))}` | **Completed:** `{metrics.get('completed', 0)}`"
     )
+    desktop_saved_usd = analytics["summary"]["desktop_saved_usd"] or metrics.get("desktop_quota_saved_usd", 0.0)
+    desktop_saved_vnd = analytics["summary"]["desktop_saved_vnd"] or metrics.get("desktop_quota_saved_vnd", 0)
     lines.append(
-        f"**Total Spend:** `${metrics.get('total_cost_usd', 0.0):.4f}` ({metrics.get('total_cost_vnd', 0):,} VND) | **Cache Savings:** `${metrics.get('total_saved_usd', 0.0):.4f}` ({metrics.get('total_saved_vnd', 0):,} VND)"
+        f"**Total Spend:** `${metrics.get('total_cost_usd', 0.0):.4f}` ({metrics.get('total_cost_vnd', 0):,} VND) | **Cache Savings:** `${metrics.get('total_saved_usd', 0.0):.4f}` ({metrics.get('total_saved_vnd', 0):,} VND) | **Desktop Offload Quota Saved:** `${desktop_saved_usd:.4f}` ({desktop_saved_vnd:,} VND)"
     )
     lines.append("")
     lines.append("## 1. Per-Model Consumption & Financial Ledger")
@@ -471,6 +569,18 @@ def generate_audit_report(
             f"| `{t.get('task_id')}` | `{t.get('agent_type')}` | `{t.get('model')}` | `{effort_str}` | `{t.get('complexity')}` | `{t.get('status')}` | {t.get('progress')}% | ${usd_val:.4f} | {deps_str} | {t.get('scope', '')} |"
         )
     lines.append("")
+    if dj_list:
+        lines.append("## 2b. Gemini Desktop Worker Offload Ledger")
+        lines.append("")
+        lines.append(
+            "| Job ID | Task ID | Driver | OS | Status | Duration (ms) | Redactions | Est. Quota Saved (USD) | Artifact |"
+        )
+        lines.append("|---|---|---|---|---|---|---|---|---|")
+        for job in dj_list:
+            lines.append(
+                f"| `{job.get('job_id')}` | `{job.get('task_id') or '-'}` | `{job.get('driver_name')}` | `{job.get('os_platform')}` | `{job.get('status')}` | {job.get('duration_ms', 0)} | {job.get('redaction_count', 0)} | ${float(job.get('estimated_saved_usd') or 0.0):.4f} | `{job.get('artifact_path') or '-'}` |"
+            )
+        lines.append("")
     lines.append("## 3. Mission Verification & Compliance Signatures")
     lines.append("- **Architecture & Spec Signoff**: Verified clean DAG, zero circular dependencies.")
     lines.append("- **Security & Policy Audit**: Verified compliance with zero external dependencies and least-privilege token access.")

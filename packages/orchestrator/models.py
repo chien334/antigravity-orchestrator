@@ -132,6 +132,43 @@ MODEL_REGISTRY: dict[str, dict] = {
     },
 }
 
+# External Zero-API-Spend Desktop Worker Catalog (kept separate from 5-tier MODEL_REGISTRY)
+EXTERNAL_WORKERS: dict[str, dict] = {
+    "gemini-desktop-app": {
+        "canonical_name": "gemini-desktop-app",
+        "aliases": [
+            "desktop",
+            "gemini-app",
+            "gemini-desktop",
+            "gemini-desktop-bridge",
+            "gui-worker",
+            "desktop-worker",
+            "gemini-macos-app",
+            "gemini-windows-app",
+        ],
+        "display_name": "Gemini Desktop App",
+        "tier": "external_desktop",
+        "execution_mode": "desktop_bridge",
+        "description": (
+            "Cross-platform local Gemini Desktop GUI worker (macOS/Windows/Linux) "
+            "for zero-API-cost deep synthesis and second-opinion reasoning."
+        ),
+        "rates": {"in": 0.0, "out": 0.0, "cache": 0.0},
+        "baseline_comparison_model": "gemini-4-carbon",
+        "supported_reasoning_efforts": [],
+        "default_reasoning_effort": None,
+        "max_context_tokens": 1_048_576,
+        "ui_badge": {
+            "bg": "bg-teal-950/60",
+            "border": "border-teal-500/40",
+            "text": "text-teal-300",
+            "dot": "bg-teal-400",
+            "label": "Gemini Desktop App",
+        },
+        "target_personas": ["spec-engineer", "code-reviewer", "debugger", "task-planner"],
+    }
+}
+
 # Compatibility PRICING_TABLE
 PRICING_TABLE: dict[str, dict] = {
     "carbon": MODEL_REGISTRY["gemini-4-carbon"]["rates"],
@@ -158,23 +195,39 @@ PRICING_TABLE: dict[str, dict] = {
     "flash-lite": MODEL_REGISTRY["gemini-3.8-flash-lite"]["rates"],
     "gemini-flash-lite": MODEL_REGISTRY["gemini-3.8-flash-lite"]["rates"],
     "gemini-3.8-flash-lite": MODEL_REGISTRY["gemini-3.8-flash-lite"]["rates"],
+    "gemini-desktop-app": EXTERNAL_WORKERS["gemini-desktop-app"]["rates"],
+    "desktop": EXTERNAL_WORKERS["gemini-desktop-app"]["rates"],
+    "gemini-app": EXTERNAL_WORKERS["gemini-desktop-app"]["rates"],
+    "gemini-desktop": EXTERNAL_WORKERS["gemini-desktop-app"]["rates"],
+    "gemini-desktop-bridge": EXTERNAL_WORKERS["gemini-desktop-app"]["rates"],
+    "gui-worker": EXTERNAL_WORKERS["gemini-desktop-app"]["rates"],
+    "desktop-worker": EXTERNAL_WORKERS["gemini-desktop-app"]["rates"],
+    "gemini-macos-app": EXTERNAL_WORKERS["gemini-desktop-app"]["rates"],
+    "gemini-windows-app": EXTERNAL_WORKERS["gemini-desktop-app"]["rates"],
     "default": MODEL_REGISTRY["gemini-4-argon"]["rates"],
 }
 
+
+def get_all_models_catalog() -> dict[str, dict]:
+    """Return combined catalog containing both 5-tier API models and external workers."""
+    return {**MODEL_REGISTRY, **EXTERNAL_WORKERS}
+
+
 def normalize_model_name(name: str | None) -> str:
-    """Resolve aliases or raw model strings to canonical model name."""
+    """Resolve aliases or raw model strings to canonical model or external worker name."""
     if not name:
         return "gemini-4-argon"
     raw = str(name).strip().lower()
+    catalog = get_all_models_catalog()
 
     # 1. Exact match on canonical key or alias
-    for canon, data in MODEL_REGISTRY.items():
+    for canon, data in catalog.items():
         if raw == canon or raw in [a.lower() for a in data.get("aliases", [])]:
             return canon
 
     # 2. Substring match, sorting longest patterns first to prevent 'flash' matching 'flash-lite'
     patterns: list[tuple[str, str]] = []
-    for canon, data in MODEL_REGISTRY.items():
+    for canon, data in catalog.items():
         patterns.append((canon, canon))
         for alias in data.get("aliases", []):
             patterns.append((alias.lower(), canon))
@@ -186,8 +239,17 @@ def normalize_model_name(name: str | None) -> str:
 
     return "gemini-4-argon"
 
+
 # Alias per contract specification
 resolve_model_id = normalize_model_name
+
+
+def is_external_worker(name: str | None) -> bool:
+    """Return True if the model identifier resolves to an external worker (e.g. gemini-desktop-app)."""
+    if not name:
+        return False
+    return normalize_model_name(name) in EXTERNAL_WORKERS
+
 
 def extract_model_and_effort(name: str | None, effort: str | None = None) -> tuple[str, str | None]:
     """
@@ -199,12 +261,13 @@ def extract_model_and_effort(name: str | None, effort: str | None = None) -> tup
 
     raw = str(name).strip().lower()
     inferred_effort = effort
+    catalog = get_all_models_catalog()
 
     # Check for suffix effort patterns: -low, -medium, -high, -xhigh
     for suffix in ["-xhigh", "-high", "-medium", "-low"]:
         if raw.endswith(suffix):
             cand_canon = normalize_model_name(raw[: -len(suffix)])
-            if cand_canon in MODEL_REGISTRY:
+            if cand_canon in catalog:
                 eff = suffix.lstrip("-")
                 if not inferred_effort:
                     inferred_effort = eff
@@ -213,10 +276,12 @@ def extract_model_and_effort(name: str | None, effort: str | None = None) -> tup
     canon = normalize_model_name(raw)
     return canon, inferred_effort
 
+
 def compute_cost(model: str | None, in_tok: int, out_tok: int, cache_tok: int) -> dict:
     """Calculate actual cost and cache savings in USD and VND."""
     canon = normalize_model_name(model)
-    rates = MODEL_REGISTRY[canon]["rates"]
+    catalog = get_all_models_catalog()
+    rates = catalog[canon]["rates"]
 
     in_val = int(in_tok or 0)
     out_val = int(out_tok or 0)
@@ -241,10 +306,34 @@ def compute_cost(model: str | None, in_tok: int, out_tok: int, cache_tok: int) -
         "rates": rates,
     }
 
+
+def compute_desktop_quota_saved(
+    input_chars: int,
+    output_chars: int,
+    baseline_model: str = "gemini-4-carbon",
+) -> dict:
+    """Estimate equivalent API spend saved (USD & VND) by offloading to Gemini Desktop App."""
+    est_in = (max(0, int(input_chars or 0)) + 3) // 4
+    est_out = (max(0, int(output_chars or 0)) + 3) // 4
+    canon_base = normalize_model_name(baseline_model)
+    rates = MODEL_REGISTRY.get(canon_base, MODEL_REGISTRY["gemini-4-carbon"])["rates"]
+    saved_usd = round((est_in / 1_000_000.0) * rates["in"] + (est_out / 1_000_000.0) * rates["out"], 4)
+    saved_vnd = round(saved_usd * USD_TO_VND_RATE)
+    return {
+        "est_input_tokens": est_in,
+        "est_output_tokens": est_out,
+        "est_total_tokens": est_in + est_out,
+        "baseline_model": canon_base,
+        "saved_usd": saved_usd,
+        "saved_vnd": saved_vnd,
+    }
+
+
 def get_model_metadata(model: str | None) -> dict:
-    """Return model configuration and metadata for given model identifier."""
+    """Return model configuration and metadata for given model or external worker identifier."""
     canon = normalize_model_name(model)
-    return MODEL_REGISTRY[canon]
+    return get_all_models_catalog()[canon]
+
 
 def validate_reasoning_effort(model: str | None, effort: str | None, clamp: bool = False) -> tuple[bool, str | None]:
     """
@@ -262,7 +351,7 @@ def validate_reasoning_effort(model: str | None, effort: str | None, clamp: bool
         return False, None
 
     canon = normalize_model_name(model)
-    supported = MODEL_REGISTRY[canon].get("supported_reasoning_efforts", [])
+    supported = get_all_models_catalog()[canon].get("supported_reasoning_efforts", [])
 
     if clean_effort in supported:
         return True, clean_effort

@@ -11,9 +11,18 @@ import os
 import sys
 from typing import Any, Dict, List, Optional, Union
 import urllib.error
+import urllib.parse
 import urllib.request
 
 DEFAULT_BASE_URL = os.environ.get("ORCHESTRATOR_URL", "http://localhost:8484").rstrip("/")
+
+
+def _normalize_desktop_driver(driver: Optional[str]) -> str:
+    """Normalize driver aliases (e.g. linux_x11 -> linux_pwa) while preserving defaults."""
+    val = (driver or "auto").strip()
+    if val == "linux_x11":
+        return "linux_pwa"
+    return val
 
 
 class OrchestratorClient:
@@ -22,29 +31,57 @@ class OrchestratorClient:
     def __init__(self, base_url: Optional[str] = None):
         self.base_url = (base_url or DEFAULT_BASE_URL).rstrip("/")
 
-    def _post(self, path: str, payload: dict) -> dict:
+    def _request(
+        self,
+        method: str,
+        path: str,
+        payload: Optional[dict] = None,
+        timeout: int = 10,
+    ) -> dict:
         url = f"{self.base_url}{path}"
-        data = json.dumps(payload).encode("utf-8")
+        data = None
+        headers = {}
+        if payload is not None:
+            data = json.dumps(payload).encode("utf-8")
+            headers["Content-Type"] = "application/json"
+
         req = urllib.request.Request(
             url,
             data=data,
-            headers={"Content-Type": "application/json"},
-            method="POST",
+            headers=headers,
+            method=method.upper(),
         )
         try:
-            with urllib.request.urlopen(req, timeout=10) as response:
-                return json.loads(response.read().decode("utf-8"))
-        except urllib.error.URLError as e:
+            with urllib.request.urlopen(req, timeout=timeout) as response:
+                raw = response.read().decode("utf-8")
+                try:
+                    return json.loads(raw)
+                except json.JSONDecodeError as je:
+                    return {"error": f"Invalid JSON response from {url}: {je}"}
+        except urllib.error.HTTPError as e:
+            err_body = ""
+            try:
+                err_body = e.read().decode("utf-8", errors="replace")
+            except Exception:
+                pass
+            if err_body:
+                try:
+                    parsed = json.loads(err_body)
+                    if isinstance(parsed, dict):
+                        if "error" not in parsed:
+                            parsed["error"] = parsed.get("message") or f"HTTP {e.code} from {url}"
+                        return parsed
+                except json.JSONDecodeError:
+                    pass
+            return {"error": f"HTTP {e.code} from {url}: {err_body or e.reason}"}
+        except (urllib.error.URLError, TimeoutError, OSError) as e:
             return {"error": f"Failed to connect to Orchestrator at {url}: {e}"}
 
-    def _get(self, path: str) -> dict:
-        url = f"{self.base_url}{path}"
-        req = urllib.request.Request(url, method="GET")
-        try:
-            with urllib.request.urlopen(req, timeout=10) as response:
-                return json.loads(response.read().decode("utf-8"))
-        except urllib.error.URLError as e:
-            return {"error": f"Failed to connect to Orchestrator at {url}: {e}"}
+    def _post(self, path: str, payload: dict, timeout: int = 10) -> dict:
+        return self._request("POST", path, payload=payload, timeout=timeout)
+
+    def _get(self, path: str, timeout: int = 10) -> dict:
+        return self._request("GET", path, payload=None, timeout=timeout)
 
     def update_task(
         self,
@@ -141,13 +178,19 @@ class OrchestratorClient:
         has_security_impact: bool = False,
         budget_mode: str = "balanced",
         retry_count: int = 0,
+        desktop_available: Optional[bool] = None,
+        read_only: bool = False,
+        prefer_desktop: bool = False,
         **kwargs,
     ) -> dict:
         """Call POST /api/router/recommend to dynamically recommend model and reasoning effort."""
         files = kwargs.get("files", file_count)
         sec_impact = kwargs.get("security_impact", has_security_impact)
         retries = kwargs.get("retries", retry_count)
-        payload = {
+        desk_avail = kwargs.get("desktop_available", desktop_available)
+        ro = kwargs.get("read_only", read_only)
+        pref_desk = kwargs.get("prefer_desktop", prefer_desktop)
+        payload: dict[str, Any] = {
             "agent_type": agent_type,
             "complexity": complexity,
             "scope": scope,
@@ -156,6 +199,12 @@ class OrchestratorClient:
             "budget_mode": budget_mode,
             "retry_count": retries,
         }
+        if desk_avail is not None:
+            payload["desktop_available"] = bool(desk_avail)
+        if ro:
+            payload["read_only"] = True
+        if pref_desk:
+            payload["prefer_desktop"] = True
         return self._post("/api/router/recommend", payload)
 
     def recommend(
@@ -167,12 +216,18 @@ class OrchestratorClient:
         security_impact: bool = False,
         budget_mode: str = "balanced",
         retry_count: int = 0,
+        desktop_available: Optional[bool] = None,
+        read_only: bool = False,
+        prefer_desktop: bool = False,
         **kwargs,
     ) -> dict:
         """Alias for recommend_model matching plan specification."""
-        file_count = kwargs.get("file_count", files)
-        has_sec = kwargs.get("has_security_impact", security_impact)
-        retries = kwargs.get("retries", retry_count)
+        file_count = kwargs.pop("file_count", files)
+        has_sec = kwargs.pop("has_security_impact", security_impact)
+        retries = kwargs.pop("retries", retry_count)
+        desk_avail = kwargs.pop("desktop_available", desktop_available)
+        ro = kwargs.pop("read_only", read_only)
+        pref_desk = kwargs.pop("prefer_desktop", prefer_desktop)
         return self.recommend_model(
             agent_type=agent_type,
             complexity=complexity,
@@ -181,6 +236,9 @@ class OrchestratorClient:
             has_security_impact=has_sec,
             budget_mode=budget_mode,
             retry_count=retries,
+            desktop_available=desk_avail,
+            read_only=ro,
+            prefer_desktop=pref_desk,
             **kwargs,
         )
 
@@ -238,6 +296,87 @@ class OrchestratorClient:
                 return {"error": f"Failed to write audit report to {target_path}: {e}"}
 
         return data
+
+    def desktop_status(
+        self,
+        driver: str = "auto",
+        target_os: str = "auto",
+        app_path: Optional[str] = None,
+        os_override: Optional[str] = None,
+    ) -> dict:
+        """Probe cross-platform Gemini Desktop App readiness and driver health (GET /api/desktop/status)."""
+        eff_driver = _normalize_desktop_driver(driver)
+        eff_os = (os_override if os_override is not None else target_os) or "auto"
+        params: dict[str, str] = {
+            "driver": eff_driver,
+            "target_os": eff_os,
+        }
+        if app_path:
+            params["app_path"] = app_path
+        query = urllib.parse.urlencode(params)
+        return self._get(f"/api/desktop/status?{query}", timeout=15)
+
+    def desktop_dispatch(
+        self,
+        prompt: str,
+        task_id: Optional[str] = None,
+        driver: str = "auto",
+        timeout_sec: int = 180,
+        output_path: Optional[str] = None,
+        redact_secrets: bool = True,
+        strict_secrets: bool = False,
+        restore_clipboard: bool = True,
+        new_chat: bool = True,
+        async_mode: bool = False,
+        target_os: str = "auto",
+        app_path: Optional[str] = None,
+        metadata: Optional[dict] = None,
+        job_id: Optional[str] = None,
+    ) -> dict:
+        """Dispatch a bounded read-only prompt to the local Gemini Desktop Worker (POST /api/desktop/dispatch)."""
+        payload: dict[str, Any] = {
+            "prompt": prompt,
+            "driver": _normalize_desktop_driver(driver),
+            "target_os": target_os or "auto",
+            "timeout_sec": int(timeout_sec),
+            "redact_secrets": bool(redact_secrets),
+            "strict_secrets": bool(strict_secrets),
+            "restore_clipboard": bool(restore_clipboard),
+            "new_chat": bool(new_chat),
+            "async_mode": bool(async_mode),
+        }
+        if task_id is not None:
+            payload["task_id"] = task_id
+        if output_path is not None:
+            payload["output_path"] = output_path
+        if app_path is not None:
+            payload["app_path"] = app_path
+        if metadata is not None:
+            payload["metadata"] = metadata
+        if job_id is not None:
+            payload["job_id"] = job_id
+
+        req_timeout = 15 if async_mode else max(30, int(timeout_sec) + 20)
+        return self._post("/api/desktop/dispatch", payload, timeout=req_timeout)
+
+    def desktop_jobs(
+        self,
+        job_id: Optional[str] = None,
+        status: Optional[str] = None,
+        limit: int = 50,
+    ) -> dict:
+        """List queued, running, or completed desktop worker jobs (GET /api/desktop/jobs)."""
+        params: dict[str, Any] = {"limit": int(limit)}
+        if job_id:
+            params["job_id"] = job_id
+        if status:
+            params["status"] = status
+        query = urllib.parse.urlencode(params)
+        return self._get(f"/api/desktop/jobs?{query}")
+
+    def desktop_cancel(self, job_id: str) -> dict:
+        """Cancel a queued or running desktop worker job (POST /api/desktop/cancel)."""
+        return self._post("/api/desktop/cancel", {"job_id": job_id})
 
 
 def auto_detect_tokens_and_conv(conv_id=None, in_tok=None, out_tok=None, cache_tok=None):
@@ -415,8 +554,17 @@ def main():
         "--budget-mode",
         type=str,
         default="balanced",
-        choices=["balanced", "quality_first", "speed_first", "latency_sensitive", "cost_saving"],
-        help="Routing optimization mode (balanced, quality_first, speed_first, latency_sensitive, cost_saving, default: balanced)",
+        choices=[
+            "balanced",
+            "quality_first",
+            "speed_first",
+            "latency_sensitive",
+            "cost_saving",
+            "cost_first",
+            "hybrid_desktop",
+            "offload_heavy_to_desktop",
+        ],
+        help="Routing optimization mode (balanced, quality_first, speed_first, latency_sensitive, cost_saving, cost_first, hybrid_desktop, offload_heavy_to_desktop, default: balanced)",
     )
     recommend_parser.add_argument(
         "--retry-count",
@@ -425,6 +573,21 @@ def main():
         type=int,
         default=0,
         help="Prior failure retry count for Circuit Breaker escalation (default: 0)",
+    )
+    recommend_parser.add_argument(
+        "--desktop-available",
+        action="store_true",
+        help="Indicate local Gemini Desktop App bridge is ready for offload",
+    )
+    recommend_parser.add_argument(
+        "--read-only",
+        action="store_true",
+        help="Indicate task is strictly non-mutating / read-only",
+    )
+    recommend_parser.add_argument(
+        "--prefer-desktop",
+        action="store_true",
+        help="Prefer offloading eligible non-mutating synthesis to Gemini Desktop App",
     )
     recommend_parser.add_argument("--json", action="store_true", help="Output raw JSON response")
     recommend_parser.add_argument(
@@ -484,6 +647,121 @@ def main():
         type=str,
         default=None,
         help="Output file path to save report (writes to stdout if omitted)",
+    )
+
+    # desktop-status / desktop-doctor
+    desktop_status_parser = subparsers.add_parser(
+        "desktop-status",
+        aliases=["desktop-doctor"],
+        help="Check cross-platform Gemini Desktop App readiness, permissions, and active driver",
+    )
+    desktop_status_parser.add_argument(
+        "--driver",
+        type=str,
+        default="auto",
+        choices=["auto", "macos_ax", "orca", "windows_uia", "linux_pwa", "linux_x11", "mock"],
+        help="Desktop automation driver to probe (default: auto)",
+    )
+    desktop_status_parser.add_argument(
+        "--target-os",
+        "--os",
+        dest="target_os",
+        type=str,
+        default="auto",
+        choices=["auto", "darwin", "win32", "linux"],
+        help="Target OS platform override for diagnostics (default: auto)",
+    )
+    desktop_status_parser.add_argument(
+        "--app-path",
+        type=str,
+        default=None,
+        help="Explicit path to Gemini Desktop App bundle or executable",
+    )
+    desktop_status_parser.add_argument("--json", action="store_true", help="Output raw JSON response")
+    desktop_status_parser.add_argument(
+        "--format",
+        choices=["json", "text"],
+        default="json",
+        help="Output format (json, text, default: json)",
+    )
+
+    # desktop-dispatch / desktop-ask
+    desktop_dispatch_parser = subparsers.add_parser(
+        "desktop-dispatch",
+        aliases=["desktop-ask"],
+        help="Dispatch a bounded read-only analysis task to the local Gemini Desktop App",
+    )
+    desktop_dispatch_parser.add_argument("--prompt", type=str, default=None, help="Prompt text to send")
+    desktop_dispatch_parser.add_argument("--prompt-file", type=str, default=None, help="Path to Markdown/text file containing prompt")
+    desktop_dispatch_parser.add_argument(
+        "--context-file",
+        action="append",
+        default=None,
+        help="Optional context file path(s) to append to the prompt",
+    )
+    desktop_dispatch_parser.add_argument("--task", "--task-id", dest="task", type=str, default=None, help="Optional Orchestrator task ID")
+    desktop_dispatch_parser.add_argument("--agent", type=str, default=None, help="Optional requesting agent persona metadata")
+    desktop_dispatch_parser.add_argument(
+        "--driver",
+        type=str,
+        default="auto",
+        choices=["auto", "macos_ax", "orca", "windows_uia", "linux_pwa", "linux_x11", "mock"],
+        help="Desktop automation driver (default: auto)",
+    )
+    desktop_dispatch_parser.add_argument(
+        "--target-os",
+        "--os",
+        dest="target_os",
+        type=str,
+        default="auto",
+        choices=["auto", "darwin", "win32", "linux"],
+        help="Target OS override (default: auto)",
+    )
+    desktop_dispatch_parser.add_argument("--app-path", type=str, default=None, help="Explicit Gemini app path")
+    desktop_dispatch_parser.add_argument("--timeout", type=int, default=180, help="Job timeout in seconds (default: 180)")
+    desktop_dispatch_parser.add_argument("--output", "--out", dest="output", type=str, default=None, help="Optional output Markdown artifact path inside docs/reports/")
+    desktop_dispatch_parser.add_argument("--no-redact", action="store_true", help="Disable pre-flight secret redaction")
+    desktop_dispatch_parser.add_argument("--strict-secrets", action="store_true", help="Reject job if any secret pattern is detected")
+    desktop_dispatch_parser.add_argument("--no-restore-clipboard", action="store_true", help="Do not restore prior OS clipboard after paste")
+    desktop_dispatch_parser.add_argument("--no-new-chat", action="store_true", help="Reuse active chat instead of opening a new chat")
+    desktop_dispatch_parser.add_argument("--async", dest="async_mode", action="store_true", help="Queue job asynchronously and return immediately")
+    desktop_dispatch_parser.add_argument("--json", action="store_true", help="Output raw JSON response")
+    desktop_dispatch_parser.add_argument(
+        "--format",
+        choices=["json", "text"],
+        default="json",
+        help="Output format (json, text, default: json)",
+    )
+
+    # desktop-jobs
+    desktop_jobs_parser = subparsers.add_parser(
+        "desktop-jobs",
+        help="List queued, running, and completed Gemini Desktop Worker jobs",
+    )
+    desktop_jobs_parser.add_argument("--job-id", type=str, default=None, help="Filter by specific desktop job ID")
+    desktop_jobs_parser.add_argument("--status", type=str, default=None, help="Filter by job status (queued, running, completed, failed, timed_out, cancelled, rejected_secrets)")
+    desktop_jobs_parser.add_argument("--limit", type=int, default=50, help="Maximum number of jobs to return (default: 50)")
+    desktop_jobs_parser.add_argument("--json", action="store_true", help="Output raw JSON response")
+    desktop_jobs_parser.add_argument(
+        "--format",
+        choices=["json", "text"],
+        default="json",
+        help="Output format (json, text, default: json)",
+    )
+
+    # desktop-cancel
+    desktop_cancel_parser = subparsers.add_parser(
+        "desktop-cancel",
+        help="Cancel a queued or running Gemini Desktop Worker job",
+    )
+    desktop_cancel_parser.add_argument("pos_job_id", nargs="?", metavar="job_id", default=None, help="Desktop job ID to cancel")
+    desktop_cancel_parser.add_argument("--job-id", dest="job_id", type=str, default=None, help="Desktop job ID to cancel")
+    desktop_cancel_parser.add_argument("--json", action="store_true", help="Output raw JSON response")
+    desktop_cancel_parser.add_argument(
+        "--format",
+        choices=["json", "text"],
+        default="json",
+        help="Output format (json, text, default: json)",
     )
 
     args = parser.parse_args()
@@ -561,6 +839,14 @@ def main():
                 rate_str = f"${rates.get('in', 0):.3f} / ${rates.get('out', 0):.2f} / ${rates.get('cache', 0):.4f}"
                 efforts = ", ".join(m_data.get("supported_reasoning_efforts", [])) or "None"
                 print(f"{m_id:<24} {m_data.get('tier', ''):<18} {rate_str:<32} {efforts:<26}")
+            external_workers = res.get("external_workers", {})
+            if external_workers:
+                print("\n=== External Workers ===")
+                for w_id, w_data in external_workers.items():
+                    rates = w_data.get("rates", {})
+                    rate_str = f"${rates.get('in', 0):.2f} / ${rates.get('out', 0):.2f} / ${rates.get('cache', 0):.2f}"
+                    mode = w_data.get("execution_mode", "desktop_bridge")
+                    print(f"{w_id:<24} {w_data.get('tier', 'external_desktop'):<18} {rate_str:<32} mode={mode}")
         else:
             print(json.dumps(res, indent=2))
 
@@ -573,6 +859,9 @@ def main():
             has_security_impact=args.security_impact,
             budget_mode=args.budget_mode,
             retry_count=args.retry_count,
+            desktop_available=True if args.desktop_available else None,
+            read_only=args.read_only,
+            prefer_desktop=args.prefer_desktop,
         )
         if "error" in res:
             print(json.dumps(res, indent=2))
@@ -583,6 +872,8 @@ def main():
             if rec.get("reasoning_effort"):
                 print(f"Reasoning Effort:  {rec.get('reasoning_effort')}")
             print(f"Tier:              {rec.get('tier', 'unknown')}")
+            if rec.get("execution_mode"):
+                print(f"Execution Mode:    {rec.get('execution_mode')}")
             print(f"Cost Tier:         {rec.get('estimated_cost_tier', '-')}")
             print(f"Fallback Model:    {rec.get('fallback_model', '-')}")
             if rec.get("circuit_breaker"):
@@ -648,6 +939,153 @@ def main():
                 print(res)
         else:
             print(f"Audit report successfully exported to {args.output}")
+
+    elif args.command in ("desktop-status", "desktop-doctor"):
+        res = client.desktop_status(
+            driver=args.driver,
+            target_os=args.target_os,
+            app_path=args.app_path,
+        )
+        if "error" in res:
+            print(json.dumps(res, indent=2))
+            sys.exit(1)
+        if args.format == "text" and not args.json:
+            d = res.get("desktop", res)
+            print("=== Gemini Desktop Worker Status ===")
+            print(f"OS Platform:   {d.get('os_platform', '-')}")
+            print(f"Active Driver: {d.get('driver_name', '-')}")
+            print(f"Ready:         {d.get('ready', False)}")
+            print(f"App Detected:  {d.get('app_detected', False)}")
+            print(f"App Name:      {d.get('app_name') or '-'}")
+            print(f"App Path:      {d.get('app_path') or '-'}")
+            print(f"Bundle ID:     {d.get('bundle_id') or '-'}")
+            print(f"App Version:   {d.get('app_version') or '-'}")
+            print(f"App Running:   {d.get('app_running', False)}")
+            perms = d.get("permissions") or {}
+            perm_str = ", ".join(f"{k}={v}" for k, v in perms.items()) if perms else "-"
+            print(f"Permissions:   {perm_str}")
+            print(f"Queue Depth:   {res.get('queue_depth', d.get('queue_depth', 0))}")
+            print(f"Lock Busy:     {d.get('lock_busy', False)}")
+            print(f"Quota Saved:   ${res.get('quota_saved_usd', 0.0):.4f} ({res.get('quota_saved_vnd', 0):,} VND)")
+            if d.get("warnings"):
+                print("Warnings:")
+                for w in d["warnings"]:
+                    print(f"  - {w}")
+            if d.get("remediation_steps"):
+                print("Setup / Remediation Hints:")
+                for step in d["remediation_steps"]:
+                    print(f"  * {step}")
+        else:
+            print(json.dumps(res, indent=2))
+
+    elif args.command in ("desktop-dispatch", "desktop-ask"):
+        parts: list[str] = []
+        if args.prompt:
+            parts.append(args.prompt)
+        if args.prompt_file:
+            try:
+                with open(args.prompt_file, "r", encoding="utf-8") as f:
+                    parts.append(f.read())
+            except Exception as e:
+                print(json.dumps({"error": f"Failed to read --prompt-file '{args.prompt_file}': {e}"}, indent=2))
+                sys.exit(1)
+        if args.context_file:
+            for ctx_path in args.context_file:
+                try:
+                    with open(ctx_path, "r", encoding="utf-8") as f:
+                        parts.append(f"--- CONTEXT FILE: {ctx_path} ---\n{f.read()}")
+                except Exception as e:
+                    print(json.dumps({"error": f"Failed to read --context-file '{ctx_path}': {e}"}, indent=2))
+                    sys.exit(1)
+
+        full_prompt = "\n\n".join(p for p in parts if p and p.strip())
+        if not full_prompt.strip():
+            print(json.dumps({"error": "Must provide --prompt, --prompt-file, or --context-file"}, indent=2))
+            sys.exit(2)
+
+        metadata = {"agent_type": args.agent} if args.agent else None
+        res = client.desktop_dispatch(
+            prompt=full_prompt,
+            task_id=args.task,
+            driver=args.driver,
+            timeout_sec=args.timeout,
+            output_path=args.output,
+            redact_secrets=not args.no_redact,
+            strict_secrets=args.strict_secrets,
+            restore_clipboard=not args.no_restore_clipboard,
+            new_chat=not args.no_new_chat,
+            async_mode=args.async_mode,
+            target_os=args.target_os,
+            app_path=args.app_path,
+            metadata=metadata,
+        )
+        if "error" in res:
+            print(json.dumps(res, indent=2))
+            sys.exit(1)
+        if args.format == "text" and not args.json:
+            job = res.get("job", res)
+            print("=== Desktop Worker Dispatch ===")
+            print(f"Job ID:            {job.get('job_id', '-')}")
+            print(f"Status:            {job.get('status', res.get('status', '-'))}")
+            print(f"Driver / OS:       {job.get('driver_used') or job.get('driver_name', '-')} ({job.get('os_platform', '-')})")
+            print(f"Artifact Path:     {job.get('artifact_path') or '-'}")
+            print(f"Duration:          {job.get('duration_ms', 0)} ms")
+            saved_usd = job.get("estimated_saved_usd", 0.0)
+            saved_vnd = job.get("estimated_saved_vnd", 0)
+            print(f"AGY Quota Saved:   ${saved_usd:.4f} ({saved_vnd:,} VND)")
+            redactions = job.get("redactions") or {}
+            red_count = sum(redactions.values()) if isinstance(redactions, dict) else job.get("redaction_count", 0)
+            print(f"Redactions:        {red_count}")
+            if job.get("error") or job.get("error_message"):
+                print(f"Error:             {job.get('error') or job.get('error_message')}")
+            if job.get("summary_excerpt"):
+                print(f"\n--- Summary Excerpt ---\n{job['summary_excerpt']}")
+        else:
+            print(json.dumps(res, indent=2))
+
+    elif args.command == "desktop-jobs":
+        res = client.desktop_jobs(
+            job_id=args.job_id,
+            status=args.status,
+            limit=args.limit,
+        )
+        if "error" in res:
+            print(json.dumps(res, indent=2))
+            sys.exit(1)
+        if args.format == "text" and not args.json:
+            summary = res.get("summary", {})
+            jobs = res.get("jobs", [])
+            print(f"=== Desktop Jobs ({len(jobs)}) ===")
+            if summary:
+                print(
+                    f"Total: {summary.get('total', len(jobs))} | "
+                    f"Completed: {summary.get('completed', 0)} | "
+                    f"Total Saved: ${summary.get('total_saved_usd', 0.0):.4f}"
+                )
+            for j in jobs:
+                print(
+                    f"  [{j.get('job_id', '-')}] status={j.get('status', '-')} "
+                    f"driver={j.get('driver_name', '-')} task={j.get('task_id') or '-'} "
+                    f"saved=${j.get('estimated_saved_usd', 0.0):.4f} "
+                    f"artifact={j.get('artifact_path') or '-'}"
+                )
+        else:
+            print(json.dumps(res, indent=2))
+
+    elif args.command == "desktop-cancel":
+        target_job_id = args.job_id or args.pos_job_id
+        if not target_job_id:
+            print(json.dumps({"error": "Missing job_id: provide --job-id or positional job_id"}, indent=2))
+            sys.exit(2)
+        res = client.desktop_cancel(job_id=target_job_id)
+        if "error" in res:
+            print(json.dumps(res, indent=2))
+            sys.exit(1)
+        if args.format == "text" and not args.json:
+            job = res.get("job", res)
+            print(f"Cancelled desktop job {job.get('job_id', target_job_id)}: status={job.get('status', 'cancelled')}")
+        else:
+            print(json.dumps(res, indent=2))
 
 
 if __name__ == "__main__":

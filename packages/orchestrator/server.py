@@ -7,18 +7,30 @@ financial token cost computation, historical audit reporting, and agent kill con
 
 import argparse
 import datetime
+import hmac
 import json
 import os
 import queue
+import re
+import sqlite3
 import sys
 import threading
 import time
-import sqlite3
+import uuid
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, urlparse
+from pathlib import Path
+from urllib.parse import parse_qs, unquote, urlparse
 
 DEFAULT_PORT = int(os.environ.get("ORCHESTRATOR_PORT", "8484"))
+DEFAULT_HOST = os.environ.get("ORCHESTRATOR_HOST", "127.0.0.1")
+MAX_JSON_BODY_BYTES = 2 * 1024 * 1024  # 2 MB cap
+LOOPBACK_IPS = frozenset({"127.0.0.1", "::1", "::ffff:127.0.0.1"})
+_LOOPBACK_ORIGIN_RE = re.compile(
+    r"^https?://(?:localhost|127\.0\.0\.1|\[::1\])(?::\d{1,5})?$",
+    re.IGNORECASE,
+)
+_ALLOWED_ARTIFACT_EXTENSIONS = frozenset({".md", ".json", ".txt"})
 DEFAULT_DB_PATH = os.environ.get(
     "ORCHESTRATOR_DB",
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "orchestrator.db")
@@ -29,13 +41,17 @@ DEFAULT_DB_PATH = os.environ.get(
 # ---------------------------------------------------------------------------
 try:
     from models import (
+        EXTERNAL_WORKERS,
         MODEL_REGISTRY,
         PRICING_TABLE,
         USD_TO_VND_RATE,
         VALID_REASONING_EFFORTS,
         compute_cost,
+        compute_desktop_quota_saved,
         extract_model_and_effort,
+        get_all_models_catalog,
         get_model_metadata,
+        is_external_worker,
         normalize_model_name,
         resolve_model_id,
         validate_reasoning_effort,
@@ -50,13 +66,17 @@ try:
 except ImportError:
     try:
         from packages.orchestrator.models import (
+            EXTERNAL_WORKERS,
             MODEL_REGISTRY,
             PRICING_TABLE,
             USD_TO_VND_RATE,
             VALID_REASONING_EFFORTS,
             compute_cost,
+            compute_desktop_quota_saved,
             extract_model_and_effort,
+            get_all_models_catalog,
             get_model_metadata,
+            is_external_worker,
             normalize_model_name,
             resolve_model_id,
             validate_reasoning_effort,
@@ -70,13 +90,17 @@ except ImportError:
         )
     except ImportError:
         from .models import (
+            EXTERNAL_WORKERS,
             MODEL_REGISTRY,
             PRICING_TABLE,
             USD_TO_VND_RATE,
             VALID_REASONING_EFFORTS,
             compute_cost,
+            compute_desktop_quota_saved,
             extract_model_and_effort,
+            get_all_models_catalog,
             get_model_metadata,
+            is_external_worker,
             normalize_model_name,
             resolve_model_id,
             validate_reasoning_effort,
@@ -89,6 +113,153 @@ except ImportError:
             generate_audit_report,
         )
 
+# ---------------------------------------------------------------------------
+# Resilient Desktop Worker Imports (Parallel Builder Decoupling)
+# ---------------------------------------------------------------------------
+DESKTOP_WORKER_AVAILABLE = False
+DEFAULT_MAX_PROMPT_CHARS = 150_000
+DEFAULT_TIMEOUT_SEC = 180
+SUPPORTED_DRIVERS = ("auto", "macos_ax", "orca", "windows_uia", "linux_pwa", "mock")
+VALID_JOB_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{1,63}$")
+DesktopDriverStatus = None
+DesktopJobRequest = None
+DesktopJobResult = None
+DesktopWorkerManager = None
+detect_desktop_environment = None
+redact_secrets = None
+validate_app_path = None
+
+
+def _load_desktop_worker_symbols() -> bool:
+    """Attempt dual-path import of desktop_worker module safely."""
+    global DESKTOP_WORKER_AVAILABLE
+    global DEFAULT_MAX_PROMPT_CHARS, DEFAULT_TIMEOUT_SEC, SUPPORTED_DRIVERS, VALID_JOB_ID_RE
+    global DesktopDriverStatus, DesktopJobRequest, DesktopJobResult, DesktopWorkerManager
+    global detect_desktop_environment, redact_secrets, validate_app_path
+
+    for mod_name in ("desktop_worker", "packages.orchestrator.desktop_worker"):
+        try:
+            mod = __import__(mod_name, fromlist=["*"])
+            DEFAULT_MAX_PROMPT_CHARS = getattr(mod, "DEFAULT_MAX_PROMPT_CHARS", 150_000)
+            DEFAULT_TIMEOUT_SEC = getattr(mod, "DEFAULT_TIMEOUT_SEC", 180)
+            SUPPORTED_DRIVERS = getattr(mod, "SUPPORTED_DRIVERS", SUPPORTED_DRIVERS)
+            VALID_JOB_ID_RE = getattr(mod, "VALID_JOB_ID_RE", VALID_JOB_ID_RE)
+            DesktopDriverStatus = getattr(mod, "DesktopDriverStatus", None)
+            DesktopJobRequest = getattr(mod, "DesktopJobRequest", None)
+            DesktopJobResult = getattr(mod, "DesktopJobResult", None)
+            DesktopWorkerManager = getattr(mod, "DesktopWorkerManager", None)
+            detect_desktop_environment = getattr(mod, "detect_desktop_environment", None)
+            redact_secrets = getattr(mod, "redact_secrets", None)
+            validate_app_path = getattr(mod, "validate_app_path", None)
+            DESKTOP_WORKER_AVAILABLE = DesktopWorkerManager is not None
+            if DESKTOP_WORKER_AVAILABLE:
+                return True
+        except ImportError:
+            continue
+
+    if __package__:
+        try:
+            from . import desktop_worker as mod  # type: ignore
+            DEFAULT_MAX_PROMPT_CHARS = getattr(mod, "DEFAULT_MAX_PROMPT_CHARS", 150_000)
+            DEFAULT_TIMEOUT_SEC = getattr(mod, "DEFAULT_TIMEOUT_SEC", 180)
+            SUPPORTED_DRIVERS = getattr(mod, "SUPPORTED_DRIVERS", SUPPORTED_DRIVERS)
+            VALID_JOB_ID_RE = getattr(mod, "VALID_JOB_ID_RE", VALID_JOB_ID_RE)
+            DesktopDriverStatus = getattr(mod, "DesktopDriverStatus", None)
+            DesktopJobRequest = getattr(mod, "DesktopJobRequest", None)
+            DesktopJobResult = getattr(mod, "DesktopJobResult", None)
+            DesktopWorkerManager = getattr(mod, "DesktopWorkerManager", None)
+            detect_desktop_environment = getattr(mod, "detect_desktop_environment", None)
+            redact_secrets = getattr(mod, "redact_secrets", None)
+            validate_app_path = getattr(mod, "validate_app_path", None)
+            DESKTOP_WORKER_AVAILABLE = DesktopWorkerManager is not None
+            if DESKTOP_WORKER_AVAILABLE:
+                return True
+        except ImportError:
+            pass
+
+    return False
+
+
+_load_desktop_worker_symbols()
+
+_FALLBACK_SECRET_PATTERNS: list[tuple[str, re.Pattern[str], str]] = [
+    ("google_api_key", re.compile(r"AIza[0-9A-Za-z\-_]{35}"), "[REDACTED:GOOGLE_API_KEY]"),
+    ("openai_anthropic_key", re.compile(r"sk-(?:proj-|ant-)?[A-Za-z0-9\-_]{20,}"), "[REDACTED:LLM_API_KEY]"),
+    ("github_token", re.compile(r"gh[pousr]_[A-Za-z0-9]{30,}"), "[REDACTED:GITHUB_TOKEN]"),
+    ("aws_access_key", re.compile(r"AKIA[0-9A-Z]{16}"), "[REDACTED:AWS_ACCESS_KEY]"),
+    ("jwt_token", re.compile(r"eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}"), "[REDACTED:JWT]"),
+    ("private_key_pem", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]+?-----END [A-Z ]*PRIVATE KEY-----"), "[REDACTED:PRIVATE_KEY]"),
+    ("dsn_credentials", re.compile(r"(postgresql|postgres|mysql|mongodb|redis)(?:\+[a-z]+)?://[^:\s/@]+:[^@\s]+@"), r"\1://[REDACTED_USER:PASS]@"),
+    ("bearer_or_secret_kv", re.compile(r"(?i)(?:authorization:\s*bearer\s+\S+|bearer\s+[A-Za-z0-9_\-.=+/]{16,}|[\"']?(?:api_key|apiKey|secret|client_secret|password|passwd|access_token|refresh_token|auth_token|token)[\"']?\s*[=:]\s*[\"']?[A-Za-z0-9_.\-+/=]{12,}[\"']?)"), "[REDACTED:CREDENTIAL]"),
+]
+
+
+def _is_desktop_path(path: str) -> bool:
+    return path == "/api/desktop" or path.startswith("/api/desktop/")
+
+
+def _is_loopback_origin(origin: str) -> bool:
+    if not origin or not isinstance(origin, str):
+        return False
+    cand = origin.strip()
+    if not _LOOPBACK_ORIGIN_RE.match(cand):
+        return False
+    parsed = urlparse(cand)
+    try:
+        port = parsed.port
+    except ValueError:
+        return False
+    if port is not None and not (1 <= port <= 65535):
+        return False
+    return parsed.hostname in ("localhost", "127.0.0.1", "::1")
+
+
+def _validate_desktop_app_path(app_path: str, target_os: str = "auto") -> str:
+    if not DESKTOP_WORKER_AVAILABLE:
+        _load_desktop_worker_symbols()
+    if validate_app_path is None:
+        raise ValueError("app_path validation is unavailable; custom app_path rejected")
+    return validate_app_path(app_path, target_os)
+
+
+def _get_workspace_root() -> Path:
+    """Resolve workspace/repository root cleanly across package and installed layouts."""
+    env_ws = os.environ.get("ORCHESTRATOR_WORKSPACE") or os.environ.get("WORKSPACE_ROOT")
+    if env_ws:
+        return Path(os.path.realpath(env_ws))
+    pkg_parent = Path(__file__).resolve().parent.parent
+    if pkg_parent.name in ("packages", "tools"):
+        return Path(os.path.realpath(str(pkg_parent.parent)))
+    return Path(os.path.realpath(str(Path.cwd())))
+
+
+def _validate_output_path(output_path: str | None) -> str | None:
+    """Validate optional output_path stays strictly within <workspace_root>/docs/reports."""
+    if output_path is None or str(output_path).strip() == "":
+        return None
+    raw_str = str(output_path).strip()
+    if "\x00" in raw_str:
+        raise ValueError("Invalid output_path: null byte is not allowed")
+
+    ws_root = _get_workspace_root()
+    ws_reports_dir = Path(os.path.realpath(str(ws_root / "docs" / "reports")))
+
+    raw_path = Path(raw_str).expanduser()
+    if raw_path.is_absolute():
+        resolved = Path(os.path.realpath(str(raw_path)))
+    else:
+        resolved = Path(os.path.realpath(str(ws_root / raw_path)))
+
+    if not resolved.is_relative_to(ws_reports_dir) or resolved == ws_reports_dir:
+        raise ValueError("Invalid output_path: path traversal outside docs/reports rejected")
+    if resolved.suffix.lower() not in _ALLOWED_ARTIFACT_EXTENSIONS:
+        raise ValueError(
+            f"Invalid output_path extension {resolved.suffix!r}: must be .md, .json, or .txt"
+        )
+    if resolved.exists() and resolved.is_dir():
+        raise ValueError("Invalid output_path: target cannot be a directory")
+    return str(resolved)
+
 
 # ---------------------------------------------------------------------------
 # State Store (SQLite-backed)
@@ -100,8 +271,18 @@ class StateStore:
         self._lock = threading.Lock()
         self.subscribers = set()  # set of queue.Queue
         self._processed_steps = {}  # conv_id -> last processed step
+        self._desktop_queue = queue.Queue()
+        self._desktop_cancel_events = {}  # job_id -> threading.Event
+        self._desktop_done_events = {}    # job_id -> threading.Event
+        self._desktop_requests = {}       # job_id -> DesktopJobRequest or dict
+        self._desktop_redactions = {}     # job_id -> dict[str, int]
+        self._desktop_active_job_id = None
+        self._desktop_manager = None
+        self._desktop_manager_lock_dir = None
+        self._desktop_manager_reports_root = None
         self._init_db()
         self._start_token_auditor()
+        self._start_desktop_worker()
 
     def _start_token_auditor(self):
         """Background daemon: automatically audits tokens and streams live agent activities from transcripts."""
@@ -250,6 +431,11 @@ class StateStore:
             conn.execute("ALTER TABLE tasks ADD COLUMN reasoning_effort TEXT DEFAULT NULL")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_model ON tasks(model)")
 
+        cur.execute("PRAGMA table_info(desktop_jobs)")
+        dj_cols = [row["name"] for row in cur.fetchall()]
+        if dj_cols and "estimated_saved_vnd" not in dj_cols:
+            conn.execute("ALTER TABLE desktop_jobs ADD COLUMN estimated_saved_vnd INTEGER NOT NULL DEFAULT 0")
+
     def _init_db(self):
         with self._lock:
             conn = self._get_connection()
@@ -287,10 +473,37 @@ class StateStore:
                             message TEXT NOT NULL
                         )
                     """)
+                    conn.execute("""
+                        CREATE TABLE IF NOT EXISTS desktop_jobs (
+                            job_id TEXT PRIMARY KEY,
+                            task_id TEXT,
+                            status TEXT NOT NULL,
+                            os_platform TEXT NOT NULL,
+                            driver_name TEXT NOT NULL,
+                            app_path TEXT,
+                            prompt_chars INTEGER NOT NULL DEFAULT 0,
+                            prompt_preview TEXT,
+                            redaction_count INTEGER NOT NULL DEFAULT 0,
+                            redactions_json TEXT,
+                            artifact_path TEXT,
+                            summary_excerpt TEXT,
+                            output_chars INTEGER NOT NULL DEFAULT 0,
+                            duration_ms INTEGER NOT NULL DEFAULT 0,
+                            estimated_saved_usd REAL NOT NULL DEFAULT 0.0,
+                            estimated_saved_vnd INTEGER NOT NULL DEFAULT 0,
+                            clipboard_restored INTEGER NOT NULL DEFAULT 1,
+                            error_message TEXT,
+                            created_at TEXT NOT NULL,
+                            started_at TEXT,
+                            completed_at TEXT
+                        )
+                    """)
                     conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status)")
                     conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_group ON tasks(parallel_group)")
                     conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_model ON tasks(model)")
                     conn.execute("CREATE INDEX IF NOT EXISTS idx_logs_id ON logs(id DESC)")
+                    conn.execute("CREATE INDEX IF NOT EXISTS idx_desktop_jobs_status ON desktop_jobs(status)")
+                    conn.execute("CREATE INDEX IF NOT EXISTS idx_desktop_jobs_created ON desktop_jobs(created_at DESC)")
                     self._migrate_db(conn)
             finally:
                 conn.close()
@@ -335,6 +548,52 @@ class StateStore:
             "updated_at": row["updated_at"],
         }
 
+    def _row_to_desktop_job(self, row):
+        redactions_raw = row["redactions_json"]
+        redactions = {}
+        if redactions_raw:
+            try:
+                redactions = json.loads(redactions_raw)
+            except Exception:
+                redactions = {}
+
+        est_usd = float(row["estimated_saved_usd"] or 0.0)
+        if "estimated_saved_vnd" in row.keys() and row["estimated_saved_vnd"] is not None:
+            est_vnd = int(row["estimated_saved_vnd"])
+        else:
+            est_vnd = round(est_usd * USD_TO_VND_RATE)
+
+        out_chars = int(row["output_chars"] or 0)
+        driver_name = row["driver_name"]
+        err_msg = row["error_message"]
+
+        return {
+            "job_id": row["job_id"],
+            "task_id": row["task_id"],
+            "status": row["status"],
+            "os_platform": row["os_platform"],
+            "driver_name": driver_name,
+            "driver_used": driver_name,
+            "app_path": row["app_path"],
+            "prompt_chars": int(row["prompt_chars"] or 0),
+            "prompt_preview": row["prompt_preview"] or "",
+            "redaction_count": int(row["redaction_count"] or 0),
+            "redactions": redactions,
+            "artifact_path": row["artifact_path"],
+            "summary_excerpt": row["summary_excerpt"] or "",
+            "output_chars": out_chars,
+            "raw_char_count": out_chars,
+            "duration_ms": int(row["duration_ms"] or 0),
+            "estimated_saved_usd": round(est_usd, 4),
+            "estimated_saved_vnd": est_vnd,
+            "clipboard_restored": bool(row["clipboard_restored"]),
+            "error_message": err_msg,
+            "error": err_msg,
+            "created_at": row["created_at"],
+            "started_at": row["started_at"],
+            "completed_at": row["completed_at"],
+        }
+
     def _calculate_metrics_conn(self, conn):
         cur = conn.cursor()
         cur.execute("SELECT * FROM tasks")
@@ -367,6 +626,36 @@ class StateStore:
         total_saved_usd = round(sum(t.get("cost", {}).get("saved_usd", 0.0) for t in tasks), 4)
         total_saved_vnd = sum(t.get("cost", {}).get("saved_vnd", 0) for t in tasks)
 
+        # Desktop Worker offload telemetry aggregates
+        desktop_jobs_total = 0
+        desktop_jobs_queued = 0
+        desktop_jobs_running = 0
+        desktop_jobs_completed = 0
+        desktop_quota_saved_usd = 0.0
+        desktop_quota_saved_vnd = 0
+        try:
+            cur.execute("SELECT status, estimated_saved_usd, estimated_saved_vnd FROM desktop_jobs")
+            dj_rows = cur.fetchall()
+            desktop_jobs_total = len(dj_rows)
+            desktop_jobs_queued = sum(1 for r in dj_rows if r["status"] == "queued")
+            desktop_jobs_running = sum(1 for r in dj_rows if r["status"] == "running")
+            desktop_jobs_completed = sum(1 for r in dj_rows if r["status"] == "completed")
+            desktop_quota_saved_usd = round(
+                sum(float(r["estimated_saved_usd"] or 0.0) for r in dj_rows if r["status"] == "completed"),
+                4,
+            )
+            desktop_quota_saved_vnd = sum(
+                int(
+                    r["estimated_saved_vnd"]
+                    if "estimated_saved_vnd" in r.keys() and r["estimated_saved_vnd"] is not None
+                    else round(float(r["estimated_saved_usd"] or 0.0) * USD_TO_VND_RATE)
+                )
+                for r in dj_rows
+                if r["status"] == "completed"
+            )
+        except sqlite3.OperationalError:
+            pass
+
         return {
             "total": total,
             "pending": pending,
@@ -386,6 +675,13 @@ class StateStore:
             "total_cost_vnd": total_cost_vnd,
             "total_saved_usd": total_saved_usd,
             "total_saved_vnd": total_saved_vnd,
+            "desktop_jobs_total": desktop_jobs_total,
+            "desktop_jobs_queued": desktop_jobs_queued,
+            "desktop_jobs_running": desktop_jobs_running,
+            "desktop_jobs_completed": desktop_jobs_completed,
+            "desktop_quota_saved_usd": desktop_quota_saved_usd,
+            "desktop_quota_saved_vnd": desktop_quota_saved_vnd,
+            "agy_quota_saved_usd": desktop_quota_saved_usd,
         }
 
     def upsert_task(
@@ -749,6 +1045,685 @@ class StateStore:
             "activities": activities[-1000:]
         }
 
+    def _get_desktop_manager(self):
+        """Lazily initialize or refresh DesktopWorkerManager aligned with current db_path and workspace."""
+        if not DESKTOP_WORKER_AVAILABLE:
+            _load_desktop_worker_symbols()
+        if DesktopWorkerManager is None:
+            return None
+        ws_root = _get_workspace_root()
+        reports_root = Path(os.path.realpath(str(ws_root / "docs" / "reports")))
+        artifacts_dir = Path(os.path.realpath(str(reports_root / "desktop_worker")))
+        db_dir = str(Path(self.db_path).resolve().parent)
+        lock_path = Path(db_dir) / "agy_desktop_worker.lock"
+        if (
+            self._desktop_manager is None
+            or self._desktop_manager_lock_dir != db_dir
+            or getattr(self, "_desktop_manager_reports_root", None) != str(reports_root)
+        ):
+            self._desktop_manager = DesktopWorkerManager(
+                artifacts_dir=artifacts_dir,
+                lock_path=lock_path,
+                reports_root=reports_root,
+                workspace_root=ws_root,
+            )
+            self._desktop_manager_lock_dir = db_dir
+            self._desktop_manager_reports_root = str(reports_root)
+        return self._desktop_manager
+
+    @staticmethod
+    def _scrub_prompt(prompt: str, strict: bool = False, redact: bool = True) -> tuple[str, dict[str, int], bool]:
+        """Run SecretRedactor pre-flight scan using desktop_worker or stdlib fallback."""
+        if not DESKTOP_WORKER_AVAILABLE:
+            _load_desktop_worker_symbols()
+        if redact_secrets is not None:
+            return redact_secrets(prompt, strict=strict, redact=redact)
+
+        counts: dict[str, int] = {}
+        sanitized = prompt
+        total_found = 0
+        for name, pattern, repl in _FALLBACK_SECRET_PATTERNS:
+            matches = pattern.findall(sanitized)
+            if matches:
+                cnt = len(matches)
+                counts[name] = cnt
+                total_found += cnt
+                if redact:
+                    sanitized = pattern.sub(repl, sanitized)
+        blocked = bool(strict and total_found > 0)
+        return sanitized, counts, blocked
+
+    def _start_desktop_worker(self):
+        """Start single-window FIFO background worker draining desktop_jobs sequentially."""
+        t = threading.Thread(target=self._desktop_worker_loop, daemon=True)
+        t.start()
+
+    def _desktop_worker_loop(self):
+        while True:
+            job_id = self._desktop_queue.get()
+            try:
+                if job_id:
+                    self._process_desktop_job(job_id)
+            except Exception:
+                pass
+            finally:
+                self._desktop_queue.task_done()
+
+    def _process_desktop_job(self, job_id: str):
+        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        with self._lock:
+            cancel_ev = self._desktop_cancel_events.get(job_id)
+            done_ev = self._desktop_done_events.get(job_id)
+            req_obj = self._desktop_requests.get(job_id)
+            pre_redactions = dict(self._desktop_redactions.get(job_id) or {})
+
+            conn = self._get_connection()
+            try:
+                cur = conn.cursor()
+                cur.execute("SELECT * FROM desktop_jobs WHERE job_id = ?", (job_id,))
+                row = cur.fetchone()
+                if not row:
+                    if done_ev:
+                        done_ev.set()
+                    self._desktop_cancel_events.pop(job_id, None)
+                    self._desktop_done_events.pop(job_id, None)
+                    self._desktop_requests.pop(job_id, None)
+                    self._desktop_redactions.pop(job_id, None)
+                    return
+
+                if row["status"] == "cancelled" or (cancel_ev is not None and cancel_ev.is_set()):
+                    already_cancelled = row["status"] == "cancelled"
+                    if not already_cancelled:
+                        with conn:
+                            conn.execute(
+                                "UPDATE desktop_jobs SET status = 'cancelled', completed_at = ?, error_message = COALESCE(error_message, 'Cancelled before execution') WHERE job_id = ?",
+                                (now, job_id),
+                            )
+                    cur.execute("SELECT * FROM desktop_jobs WHERE job_id = ?", (job_id,))
+                    cancelled_row = cur.fetchone()
+                    cancelled_job = self._row_to_desktop_job(cancelled_row) if cancelled_row else None
+                    metrics = self._calculate_metrics_conn(conn)
+                    if done_ev:
+                        done_ev.set()
+                    self._desktop_cancel_events.pop(job_id, None)
+                    self._desktop_done_events.pop(job_id, None)
+                    self._desktop_requests.pop(job_id, None)
+                    self._desktop_redactions.pop(job_id, None)
+                    skip_exec = True
+                else:
+                    already_cancelled = False
+                    skip_exec = False
+                    with conn:
+                        conn.execute(
+                            "UPDATE desktop_jobs SET status = 'running', started_at = ? WHERE job_id = ?",
+                            (now, job_id),
+                        )
+                    self._desktop_active_job_id = job_id
+                    cur.execute("SELECT * FROM desktop_jobs WHERE job_id = ?", (job_id,))
+                    running_job = self._row_to_desktop_job(cur.fetchone())
+                    metrics = self._calculate_metrics_conn(conn)
+            finally:
+                conn.close()
+
+        if skip_exec:
+            if cancelled_job and not already_cancelled:
+                self.broadcast("desktop_job_cancelled", {"job": cancelled_job, "metrics": metrics})
+            return
+
+        self.broadcast("desktop_job_started", {"job": running_job, "metrics": metrics})
+
+        exec_result = None
+        exec_error = None
+        try:
+            manager = self._get_desktop_manager()
+            if manager is None or req_obj is None:
+                raise RuntimeError("desktop_worker module is not available")
+            exec_result = manager.execute_job(req_obj, cancel_event=cancel_ev)
+        except Exception as exc:
+            exec_error = str(exc)
+
+        done_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        should_broadcast = False
+        sse_event = "desktop_job_failed"
+        final_job = None
+
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cur = conn.cursor()
+                cur.execute("SELECT * FROM desktop_jobs WHERE job_id = ?", (job_id,))
+                row = cur.fetchone()
+                if row:
+                    row_already_cancelled = row["status"] == "cancelled"
+                    was_cancelled = (
+                        row_already_cancelled
+                        or (cancel_ev is not None and cancel_ev.is_set())
+                        or (exec_result is not None and exec_result.status == "cancelled")
+                    )
+                    if was_cancelled:
+                        final_status = "cancelled"
+                        err_msg = row["error_message"] or (exec_result.error if exec_result else None) or "Cancelled by user"
+                        sse_event = "desktop_job_cancelled"
+                        should_broadcast = not row_already_cancelled
+                    elif exec_error is not None:
+                        final_status = "failed"
+                        err_msg = exec_error
+                        sse_event = "desktop_job_failed"
+                        should_broadcast = True
+                    else:
+                        final_status = exec_result.status
+                        err_msg = exec_result.error
+                        sse_event = "desktop_job_completed" if final_status == "completed" else "desktop_job_failed"
+                        should_broadcast = True
+
+                    merged_redactions = dict(pre_redactions)
+                    if exec_result is not None and exec_result.redactions:
+                        for k, v in exec_result.redactions.items():
+                            merged_redactions[k] = max(int(merged_redactions.get(k, 0)), int(v or 0))
+                    redaction_count = sum(int(v) for v in merged_redactions.values())
+
+                    os_platform = exec_result.os_platform if exec_result is not None else row["os_platform"]
+                    driver_name = exec_result.driver_used if exec_result is not None else row["driver_name"]
+                    artifact_path = exec_result.artifact_path if exec_result is not None else row["artifact_path"]
+                    summary_excerpt = exec_result.summary_excerpt if exec_result is not None else (row["summary_excerpt"] or "")
+                    output_chars = int(exec_result.raw_char_count or 0) if exec_result is not None else 0
+                    duration_ms = int(exec_result.duration_ms or 0) if exec_result is not None else 0
+                    clipboard_restored = 1 if (exec_result.clipboard_restored if exec_result is not None else True) else 0
+
+                    if final_status == "completed" and exec_result is not None:
+                        saved_usd = float(getattr(exec_result, "estimated_saved_usd", 0.0) or 0.0)
+                        saved_vnd = int(getattr(exec_result, "estimated_saved_vnd", 0) or 0)
+                        if saved_usd == 0.0 or saved_vnd == 0:
+                            quota = compute_desktop_quota_saved(
+                                int(row["prompt_chars"] or 0),
+                                output_chars or len(summary_excerpt or ""),
+                            )
+                            if saved_usd == 0.0:
+                                saved_usd = quota["saved_usd"]
+                            if saved_vnd == 0:
+                                saved_vnd = quota["saved_vnd"]
+                    else:
+                        saved_usd = 0.0
+                        saved_vnd = 0
+
+                    completed_ts = row["completed_at"] or done_at
+                    with conn:
+                        conn.execute(
+                            """
+                            UPDATE desktop_jobs SET
+                                status = ?,
+                                os_platform = ?,
+                                driver_name = ?,
+                                redaction_count = ?,
+                                redactions_json = ?,
+                                artifact_path = ?,
+                                summary_excerpt = ?,
+                                output_chars = ?,
+                                duration_ms = ?,
+                                estimated_saved_usd = ?,
+                                estimated_saved_vnd = ?,
+                                clipboard_restored = ?,
+                                error_message = ?,
+                                completed_at = ?
+                            WHERE job_id = ?
+                            """,
+                            (
+                                final_status,
+                                os_platform,
+                                driver_name,
+                                redaction_count,
+                                json.dumps(merged_redactions),
+                                artifact_path,
+                                summary_excerpt,
+                                output_chars,
+                                duration_ms,
+                                round(saved_usd, 4),
+                                int(saved_vnd),
+                                clipboard_restored,
+                                err_msg,
+                                completed_ts,
+                                job_id,
+                            ),
+                        )
+                    cur.execute("SELECT * FROM desktop_jobs WHERE job_id = ?", (job_id,))
+                    updated_row = cur.fetchone()
+                    final_job = self._row_to_desktop_job(updated_row) if updated_row else None
+                    metrics = self._calculate_metrics_conn(conn)
+            finally:
+                conn.close()
+
+            if self._desktop_active_job_id == job_id:
+                self._desktop_active_job_id = None
+            if done_ev:
+                done_ev.set()
+            self._desktop_cancel_events.pop(job_id, None)
+            self._desktop_done_events.pop(job_id, None)
+            self._desktop_requests.pop(job_id, None)
+            self._desktop_redactions.pop(job_id, None)
+
+        if should_broadcast and final_job is not None:
+            self.broadcast(sse_event, {"job": final_job, "metrics": metrics})
+
+    def get_desktop_status(self, driver: str = "auto", target_os: str = "auto", app_path: str | None = None) -> dict:
+        norm_target_os = str(target_os or "auto").strip().lower()
+        if norm_target_os not in ("auto", "darwin", "win32", "linux"):
+            raise ValueError(f"Invalid target_os '{target_os}'")
+        clean_app_path: str | None = None
+        if app_path is not None and str(app_path).strip() != "":
+            if not isinstance(app_path, str):
+                raise ValueError("app_path must be a string")
+            clean_app_path = _validate_desktop_app_path(app_path.strip(), norm_target_os)
+
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cur = conn.cursor()
+                cur.execute("SELECT * FROM desktop_jobs WHERE status = 'running' ORDER BY started_at DESC LIMIT 1")
+                active_row = cur.fetchone()
+                active_job = self._row_to_desktop_job(active_row) if active_row else None
+                metrics = self._calculate_metrics_conn(conn)
+                queue_depth = metrics.get("desktop_jobs_queued", 0)
+                quota_usd = metrics.get("desktop_quota_saved_usd", 0.0)
+                quota_vnd = metrics.get("desktop_quota_saved_vnd", 0)
+            finally:
+                conn.close()
+
+        manager = self._get_desktop_manager()
+        if manager is not None:
+            status_dict = manager.get_status(
+                driver=driver,
+                target_os=norm_target_os,
+                app_path=clean_app_path,
+                queue_depth=queue_depth,
+            ).to_dict()
+        elif detect_desktop_environment is not None:
+            status_dict = detect_desktop_environment(
+                driver=driver,
+                target_os=norm_target_os,
+                app_path=clean_app_path,
+            ).to_dict()
+            status_dict["queue_depth"] = queue_depth
+        else:
+            status_dict = {
+                "os_platform": sys.platform if norm_target_os == "auto" else norm_target_os,
+                "driver_name": driver,
+                "ready": False,
+                "app_detected": False,
+                "app_name": None,
+                "app_path": clean_app_path,
+                "bundle_id": None,
+                "app_version": None,
+                "app_running": False,
+                "available_backends": [],
+                "permissions": {},
+                "queue_depth": queue_depth,
+                "lock_busy": False,
+                "warnings": ["desktop_worker module is not available"],
+                "remediation_steps": ["Ensure packages/orchestrator/desktop_worker.py is installed."],
+            }
+
+        return {
+            "status": "ok",
+            "desktop": status_dict,
+            "quota_saved_usd": quota_usd,
+            "quota_saved_vnd": quota_vnd,
+            "agy_quota_saved_usd": quota_usd,
+            "active_job": active_job,
+            "queue_depth": queue_depth,
+        }
+
+    def enqueue_desktop_job(self, payload: dict) -> tuple[dict, bool, bool]:
+        """Validate, scrub secrets, persist queued job, and dispatch sync or async."""
+        if not isinstance(payload, dict):
+            raise ValueError("JSON object body is required")
+
+        prompt = payload.get("prompt")
+        if not isinstance(prompt, str) or not prompt.strip():
+            raise ValueError("prompt is required and must be a non-empty string")
+        if len(prompt) > DEFAULT_MAX_PROMPT_CHARS:
+            raise ValueError(f"prompt exceeds maximum allowed length of {DEFAULT_MAX_PROMPT_CHARS} chars")
+
+        driver = str(payload.get("driver") or "auto").strip().lower()
+        if driver not in SUPPORTED_DRIVERS:
+            raise ValueError(f"Invalid driver '{driver}'. Must be one of: {', '.join(SUPPORTED_DRIVERS)}")
+
+        target_os = str(payload.get("target_os") or "auto").strip().lower()
+        if target_os not in ("auto", "darwin", "win32", "linux"):
+            raise ValueError(f"Invalid target_os '{target_os}'")
+
+        raw_job_id = payload.get("job_id")
+        if raw_job_id is not None and str(raw_job_id).strip() != "":
+            job_id = str(raw_job_id).strip()
+            if not VALID_JOB_ID_RE.match(job_id):
+                raise ValueError("Invalid job_id format: must match ^[A-Za-z0-9][A-Za-z0-9._-]{1,63}$")
+        else:
+            ts_part = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d-%H%M%S")
+            job_id = f"dsk-{ts_part}-{uuid.uuid4().hex[:6]}"
+
+        try:
+            timeout_sec = int(payload.get("timeout_sec", DEFAULT_TIMEOUT_SEC) if payload.get("timeout_sec") is not None else DEFAULT_TIMEOUT_SEC)
+        except (TypeError, ValueError):
+            raise ValueError("timeout_sec must be an integer")
+        if timeout_sec < 1 or timeout_sec > 1800:
+            raise ValueError("timeout_sec must be between 1 and 1800")
+
+        try:
+            poll_interval_ms = int(payload.get("poll_interval_ms", 750) if payload.get("poll_interval_ms") is not None else 750)
+        except (TypeError, ValueError):
+            raise ValueError("poll_interval_ms must be an integer")
+        if poll_interval_ms < 10 or poll_interval_ms > 10000:
+            raise ValueError("poll_interval_ms must be between 10 and 10000")
+
+        validated_output_path = _validate_output_path(payload.get("output_path"))
+
+        redact_flag = bool(payload.get("redact_secrets", True))
+        strict_flag = bool(payload.get("strict_secrets", False))
+        restore_clipboard = bool(payload.get("restore_clipboard", True))
+        restore_focus = bool(payload.get("restore_focus", False))
+        new_chat = bool(payload.get("new_chat", True))
+        async_mode = True if payload.get("async_mode") is None else bool(payload.get("async_mode"))
+
+        task_id = str(payload["task_id"]).strip() if payload.get("task_id") else None
+        raw_app_path = payload.get("app_path")
+        app_path: str | None = None
+        if raw_app_path is not None and str(raw_app_path).strip() != "":
+            if not isinstance(raw_app_path, str):
+                raise ValueError("app_path must be a string")
+            app_path = _validate_desktop_app_path(raw_app_path.strip(), target_os)
+        raw_meta = payload.get("metadata")
+        clean_metadata = {str(k): str(v) for k, v in raw_meta.items()} if isinstance(raw_meta, dict) else {}
+
+        # Always redact preview stored in SQLite so raw secrets are never persisted
+        preview_scrubbed, _, _ = self._scrub_prompt(prompt, strict=False, redact=True)
+        prompt_preview = preview_scrubbed[:200]
+
+        sanitized_prompt, redactions, blocked_by_strict = self._scrub_prompt(
+            prompt, strict=strict_flag, redact=redact_flag
+        )
+        redaction_count = sum(int(v) for v in redactions.values())
+        os_platform = sys.platform if target_os == "auto" else target_os
+        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+        if blocked_by_strict:
+            err_msg = "Rejected by strict_secrets policy: secret pattern(s) detected in prompt."
+            with self._lock:
+                conn = self._get_connection()
+                try:
+                    cur = conn.cursor()
+                    cur.execute("SELECT job_id FROM desktop_jobs WHERE job_id = ?", (job_id,))
+                    if cur.fetchone():
+                        raise ValueError(f"Duplicate job_id '{job_id}'")
+                    with conn:
+                        conn.execute(
+                            """
+                            INSERT INTO desktop_jobs (
+                                job_id, task_id, status, os_platform, driver_name, app_path,
+                                prompt_chars, prompt_preview, redaction_count, redactions_json,
+                                artifact_path, summary_excerpt, output_chars, duration_ms,
+                                estimated_saved_usd, estimated_saved_vnd, clipboard_restored,
+                                error_message, created_at, started_at, completed_at
+                            ) VALUES (?, ?, 'rejected_secrets', ?, ?, ?, ?, ?, ?, ?, NULL, '', 0, 0, 0.0, 0, 1, ?, ?, NULL, ?)
+                            """,
+                            (
+                                job_id,
+                                task_id,
+                                os_platform,
+                                driver,
+                                app_path,
+                                len(prompt),
+                                prompt_preview,
+                                redaction_count,
+                                json.dumps(redactions),
+                                err_msg,
+                                now,
+                                now,
+                            ),
+                        )
+                    cur.execute("SELECT * FROM desktop_jobs WHERE job_id = ?", (job_id,))
+                    rejected_job = self._row_to_desktop_job(cur.fetchone())
+                    metrics = self._calculate_metrics_conn(conn)
+                finally:
+                    conn.close()
+
+            self.append_log(
+                task_id or job_id,
+                "desktop-worker",
+                "warn",
+                f"Desktop job {job_id} rejected by strict_secrets ({redaction_count} secret match(es): {redactions})",
+            )
+            self.broadcast("desktop_job_failed", {"job": rejected_job, "metrics": metrics})
+            return rejected_job, async_mode, True
+
+        # Ensure DesktopWorkerManager symbols loaded so we can construct DesktopJobRequest
+        self._get_desktop_manager()
+        if DesktopJobRequest is not None:
+            req_obj = DesktopJobRequest(
+                job_id=job_id,
+                prompt=sanitized_prompt,
+                task_id=task_id,
+                driver=driver,
+                target_os=target_os,
+                app_path=app_path,
+                timeout_sec=timeout_sec,
+                poll_interval_ms=poll_interval_ms,
+                output_path=validated_output_path,
+                redact_secrets=redact_flag,
+                strict_secrets=strict_flag,
+                restore_clipboard=restore_clipboard,
+                restore_focus=restore_focus,
+                new_chat=new_chat,
+                metadata=clean_metadata,
+            )
+        else:
+            req_obj = None
+
+        cancel_event = threading.Event()
+        done_event = threading.Event()
+
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cur = conn.cursor()
+                cur.execute("SELECT job_id FROM desktop_jobs WHERE job_id = ?", (job_id,))
+                if cur.fetchone():
+                    raise ValueError(f"Duplicate job_id '{job_id}'")
+                with conn:
+                    conn.execute(
+                        """
+                        INSERT INTO desktop_jobs (
+                            job_id, task_id, status, os_platform, driver_name, app_path,
+                            prompt_chars, prompt_preview, redaction_count, redactions_json,
+                            artifact_path, summary_excerpt, output_chars, duration_ms,
+                            estimated_saved_usd, estimated_saved_vnd, clipboard_restored,
+                            error_message, created_at, started_at, completed_at
+                        ) VALUES (?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, NULL, '', 0, 0, 0.0, 0, 1, NULL, ?, NULL, NULL)
+                        """,
+                        (
+                            job_id,
+                            task_id,
+                            os_platform,
+                            driver,
+                            app_path,
+                            len(prompt),
+                            prompt_preview,
+                            redaction_count,
+                            json.dumps(redactions),
+                            now,
+                        ),
+                    )
+                cur.execute("SELECT * FROM desktop_jobs WHERE job_id = ?", (job_id,))
+                queued_job = self._row_to_desktop_job(cur.fetchone())
+                metrics = self._calculate_metrics_conn(conn)
+            finally:
+                conn.close()
+
+            self._desktop_cancel_events[job_id] = cancel_event
+            self._desktop_done_events[job_id] = done_event
+            self._desktop_requests[job_id] = req_obj
+            self._desktop_redactions[job_id] = redactions
+
+        if not redact_flag:
+            self.append_log(
+                task_id or job_id,
+                "desktop-worker",
+                "warn",
+                f"Desktop job {job_id} dispatched with redact_secrets=False",
+            )
+        elif redaction_count > 0:
+            self.append_log(
+                task_id or job_id,
+                "desktop-worker",
+                "warn",
+                f"SecretRedactor scrubbed {redaction_count} secret(s) prior to Desktop dispatch for {job_id}: {redactions}",
+            )
+
+        self.broadcast("desktop_job_queued", {"job": queued_job, "metrics": metrics})
+        self._desktop_queue.put(job_id)
+
+        if not async_mode:
+            done_event.wait(timeout=timeout_sec + 15)
+            final_job = self.get_desktop_job(job_id) or queued_job
+            return final_job, False, False
+
+        return queued_job, True, False
+
+    def list_desktop_jobs(
+        self,
+        job_id: str | None = None,
+        status: str | None = None,
+        limit: int = 50,
+    ) -> list[dict]:
+        safe_limit = max(1, min(1000, int(limit or 50)))
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cur = conn.cursor()
+                clauses = []
+                params: list = []
+                if job_id:
+                    clauses.append("job_id = ?")
+                    params.append(job_id)
+                if status and status.lower() != "all":
+                    clauses.append("status = ?")
+                    params.append(status.lower())
+                where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+                params.append(safe_limit)
+                cur.execute(
+                    f"SELECT * FROM desktop_jobs {where_sql} ORDER BY created_at DESC, rowid DESC LIMIT ?",
+                    tuple(params),
+                )
+                return [self._row_to_desktop_job(r) for r in cur.fetchall()]
+            finally:
+                conn.close()
+
+    def get_desktop_jobs_response(
+        self,
+        job_id: str | None = None,
+        status: str | None = None,
+        limit: int = 50,
+    ) -> dict:
+        jobs = self.list_desktop_jobs(job_id=job_id, status=status, limit=limit)
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cur = conn.cursor()
+                cur.execute("SELECT status, estimated_saved_usd, estimated_saved_vnd FROM desktop_jobs")
+                all_rows = cur.fetchall()
+            finally:
+                conn.close()
+
+        total = len(all_rows)
+        queued = sum(1 for r in all_rows if r["status"] == "queued")
+        running = sum(1 for r in all_rows if r["status"] == "running")
+        completed = sum(1 for r in all_rows if r["status"] == "completed")
+        failed = sum(1 for r in all_rows if r["status"] in ("failed", "timed_out", "rejected_secrets"))
+        cancelled = sum(1 for r in all_rows if r["status"] == "cancelled")
+        total_saved_usd = round(
+            sum(float(r["estimated_saved_usd"] or 0.0) for r in all_rows if r["status"] == "completed"),
+            4,
+        )
+        total_saved_vnd = sum(
+            int(
+                r["estimated_saved_vnd"]
+                if "estimated_saved_vnd" in r.keys() and r["estimated_saved_vnd"] is not None
+                else round(float(r["estimated_saved_usd"] or 0.0) * USD_TO_VND_RATE)
+            )
+            for r in all_rows
+            if r["status"] == "completed"
+        )
+        return {
+            "status": "ok",
+            "jobs": jobs,
+            "summary": {
+                "total": total,
+                "queued": queued,
+                "running": running,
+                "completed": completed,
+                "failed": failed,
+                "cancelled": cancelled,
+                "total_saved_usd": total_saved_usd,
+                "total_saved_vnd": total_saved_vnd,
+            },
+        }
+
+    def get_desktop_job(self, job_id: str) -> dict | None:
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cur = conn.cursor()
+                cur.execute("SELECT * FROM desktop_jobs WHERE job_id = ?", (job_id,))
+                row = cur.fetchone()
+                return self._row_to_desktop_job(row) if row else None
+            finally:
+                conn.close()
+
+    def cancel_desktop_job(self, job_id: str) -> dict | None:
+        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        transitioned = False
+        agent_task_id = None
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cur = conn.cursor()
+                cur.execute("SELECT * FROM desktop_jobs WHERE job_id = ?", (job_id,))
+                row = cur.fetchone()
+                if not row:
+                    return None
+
+                cancel_ev = self._desktop_cancel_events.get(job_id)
+                if cancel_ev is not None:
+                    cancel_ev.set()
+
+                prev_status = row["status"]
+                agent_task_id = row["task_id"]
+                if prev_status in ("queued", "running"):
+                    transitioned = True
+                    with conn:
+                        conn.execute(
+                            "UPDATE desktop_jobs SET status = 'cancelled', completed_at = COALESCE(completed_at, ?), error_message = COALESCE(error_message, 'Cancelled by user') WHERE job_id = ?",
+                            (now, job_id),
+                        )
+                    if prev_status == "queued":
+                        done_ev = self._desktop_done_events.get(job_id)
+                        if done_ev is not None:
+                            done_ev.set()
+
+                cur.execute("SELECT * FROM desktop_jobs WHERE job_id = ?", (job_id,))
+                job_dict = self._row_to_desktop_job(cur.fetchone())
+                metrics = self._calculate_metrics_conn(conn)
+            finally:
+                conn.close()
+
+        if transitioned:
+            self.append_log(
+                agent_task_id or job_id,
+                "desktop-worker",
+                "warn",
+                f"Desktop job {job_id} cancelled by user (was {prev_status}).",
+            )
+            self.broadcast("desktop_job_cancelled", {"job": job_dict, "metrics": metrics})
+        return job_dict
+
     def get_state(self):
         with self._lock:
             conn = self._get_connection()
@@ -762,22 +1737,52 @@ class StateStore:
                 log_rows = cur.fetchall()
                 logs = [dict(r) for r in reversed(log_rows)]
 
+                cur.execute("SELECT * FROM desktop_jobs ORDER BY created_at DESC, rowid DESC LIMIT 50")
+                desktop_rows = cur.fetchall()
+                desktop_jobs = [self._row_to_desktop_job(r) for r in desktop_rows]
+
                 metrics = self._calculate_metrics_conn(conn)
                 return {
                     "tasks": tasks,
                     "logs": logs,
                     "metrics": metrics,
+                    "desktop_jobs": desktop_jobs,
+                    "desktop": {
+                        "jobs_total": metrics["desktop_jobs_total"],
+                        "jobs_queued": metrics["desktop_jobs_queued"],
+                        "jobs_running": metrics["desktop_jobs_running"],
+                        "jobs_completed": metrics["desktop_jobs_completed"],
+                        "queue_depth": metrics["desktop_jobs_queued"],
+                        "active_job_id": self._desktop_active_job_id,
+                        "agy_quota_saved_usd": metrics["desktop_quota_saved_usd"],
+                        "agy_quota_saved_vnd": metrics["desktop_quota_saved_vnd"],
+                    },
                 }
             finally:
                 conn.close()
 
     def reset(self):
         with self._lock:
+            for ev in list(self._desktop_cancel_events.values()):
+                ev.set()
+            for ev in list(self._desktop_done_events.values()):
+                ev.set()
+            while True:
+                try:
+                    self._desktop_queue.get_nowait()
+                    self._desktop_queue.task_done()
+                except queue.Empty:
+                    break
+            self._desktop_requests.clear()
+            self._desktop_redactions.clear()
+            self._desktop_active_job_id = None
+
             conn = self._get_connection()
             try:
                 with conn:
                     conn.execute("DELETE FROM tasks")
                     conn.execute("DELETE FROM logs")
+                    conn.execute("DELETE FROM desktop_jobs")
                 metrics = self._calculate_metrics_conn(conn)
             finally:
                 conn.close()
@@ -2422,10 +3427,107 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         pass
 
-    def _set_cors_headers(self):
+    def _set_cors_headers(self, request_path: str | None = None):
+        raw_path = request_path if request_path is not None else urlparse(getattr(self, "path", "")).path
+        if _is_desktop_path(raw_path):
+            origin = (self.headers.get("Origin") or "").strip()
+            if origin and _is_loopback_origin(origin):
+                self.send_header("Access-Control-Allow-Origin", origin)
+                self.send_header("Vary", "Origin")
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+            return
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+
+    def _check_desktop_access(self) -> bool:
+        client_ip = (self.client_address[0] if self.client_address else "") or ""
+        expected_token = os.environ.get("ORCHESTRATOR_DESKTOP_TOKEN", "").strip()
+        auth_header = (self.headers.get("Authorization") or "").strip()
+        token_ok = False
+        if expected_token and auth_header.lower().startswith("bearer "):
+            supplied = auth_header[7:].strip()
+            token_ok = hmac.compare_digest(supplied, expected_token)
+
+        if client_ip not in LOOPBACK_IPS and not token_ok:
+            self.close_connection = True
+            self._send_json(
+                HTTPStatus.FORBIDDEN,
+                {"error": "Desktop endpoints require loopback client IP or valid ORCHESTRATOR_DESKTOP_TOKEN"},
+            )
+            return False
+
+        origin = (self.headers.get("Origin") or "").strip()
+        if origin and not _is_loopback_origin(origin) and not token_ok:
+            self.close_connection = True
+            self._send_json(
+                HTTPStatus.FORBIDDEN,
+                {"error": "Cross-origin requests to desktop endpoints are restricted to loopback origins"},
+            )
+            return False
+        return True
+
+    def _require_json_content_type(self) -> bool:
+        raw_ct = (self.headers.get("Content-Type") or "").strip()
+        media_type = raw_ct.split(";", 1)[0].strip().lower()
+        if media_type != "application/json":
+            self.close_connection = True
+            self._send_json(
+                HTTPStatus.UNSUPPORTED_MEDIA_TYPE,
+                {"error": "Content-Type header must be application/json"},
+            )
+            return False
+        return True
+
+    def _read_json_body(self, max_bytes: int = MAX_JSON_BODY_BYTES) -> dict | None:
+        raw_len = self.headers.get("Content-Length")
+        if raw_len is None or raw_len.strip() == "":
+            content_length = 0
+        else:
+            try:
+                content_length = int(raw_len.strip())
+            except ValueError:
+                self.close_connection = True
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": "Invalid Content-Length header"})
+                return None
+
+        if content_length < 0:
+            self.close_connection = True
+            self._send_json(HTTPStatus.BAD_REQUEST, {"error": "Invalid negative Content-Length"})
+            return None
+        if content_length > max_bytes:
+            self.close_connection = True
+            self._send_json(
+                HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+                {"error": f"Request body exceeds maximum allowed size ({max_bytes} bytes)"},
+            )
+            return None
+
+        post_body = self.rfile.read(content_length) if content_length > 0 else b"{}"
+        try:
+            decoded = post_body.decode("utf-8") if post_body else "{}"
+            payload = json.loads(decoded) if decoded else {}
+        except UnicodeDecodeError:
+            self._send_json(HTTPStatus.BAD_REQUEST, {"error": "Request body must be valid UTF-8"})
+            return None
+        except json.JSONDecodeError:
+            self._send_json(HTTPStatus.BAD_REQUEST, {"error": "Invalid JSON body"})
+            return None
+
+        if not isinstance(payload, dict):
+            self._send_json(HTTPStatus.BAD_REQUEST, {"error": "JSON object body is required"})
+            return None
+        return payload
+
+    def _send_json(self, status, data):
+        body = json.dumps(data).encode("utf-8")
+        self.send_response(status)
+        self._set_cors_headers()
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
     def do_OPTIONS(self):
         self.send_response(HTTPStatus.NO_CONTENT)
@@ -2448,55 +3550,100 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
 
         if path == "/api/state":
             data = GLOBAL_STORE.get_state()
-            body = json.dumps(data).encode("utf-8")
-            self.send_response(HTTPStatus.OK)
-            self._set_cors_headers()
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
+            self._send_json(HTTPStatus.OK, data)
             return
 
         if path == "/api/models":
-            data = {"status": "ok", "models": MODEL_REGISTRY}
-            body = json.dumps(data).encode("utf-8")
-            self.send_response(HTTPStatus.OK)
-            self._set_cors_headers()
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
+            data = {
+                "status": "ok",
+                "models": MODEL_REGISTRY,
+                "external_workers": EXTERNAL_WORKERS,
+            }
+            self._send_json(HTTPStatus.OK, data)
+            return
+
+        if path == "/api/desktop/status":
+            if not self._check_desktop_access():
+                return
+            qs = parse_qs(parsed.query)
+            driver = (qs.get("driver", ["auto"])[0] or "auto").strip().lower()
+            if driver not in SUPPORTED_DRIVERS:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": f"Invalid driver '{driver}'"})
+                return
+            target_os = (qs.get("target_os", ["auto"])[0] or "auto").strip().lower()
+            if target_os not in ("auto", "darwin", "win32", "linux"):
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": f"Invalid target_os '{target_os}'"})
+                return
+            raw_app_path = qs.get("app_path", [None])[0]
+            app_path = str(raw_app_path).strip() if raw_app_path is not None and str(raw_app_path).strip() != "" else None
+            if app_path is not None and os.environ.get("ORCHESTRATOR_ALLOW_CUSTOM_APP_PATH") != "1":
+                self._send_json(
+                    HTTPStatus.FORBIDDEN,
+                    {"error": "Custom app_path over HTTP is disabled; set ORCHESTRATOR_ALLOW_CUSTOM_APP_PATH=1 to allow validated paths"},
+                )
+                return
+            try:
+                data = GLOBAL_STORE.get_desktop_status(driver=driver, target_os=target_os, app_path=app_path)
+            except ValueError as exc:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+                return
+            self._send_json(HTTPStatus.OK, data)
+            return
+
+        if path in ("/api/desktop/jobs", "/api/desktop/jobs/"):
+            if not self._check_desktop_access():
+                return
+            qs = parse_qs(parsed.query)
+            job_id = qs.get("job_id", [None])[0]
+            status_filter = qs.get("status", [None])[0]
+            limit_raw = qs.get("limit", ["50"])[0]
+            try:
+                limit = int(limit_raw)
+            except (TypeError, ValueError):
+                limit = 50
+            data = GLOBAL_STORE.get_desktop_jobs_response(job_id=job_id, status=status_filter, limit=limit)
+            self._send_json(HTTPStatus.OK, data)
+            return
+
+        if path.startswith("/api/desktop/jobs/"):
+            if not self._check_desktop_access():
+                return
+            raw_id = unquote(path[len("/api/desktop/jobs/"):]).strip("/")
+            if not raw_id or "/" in raw_id:
+                self._send_json(HTTPStatus.NOT_FOUND, {"error": "Not Found"})
+                return
+            job = GLOBAL_STORE.get_desktop_job(raw_id)
+            if not job:
+                self._send_json(HTTPStatus.NOT_FOUND, {"error": "Desktop job not found"})
+                return
+            self._send_json(HTTPStatus.OK, {"status": "ok", "job": job})
             return
 
         if path == "/api/dag/ready":
             state = GLOBAL_STORE.get_state()
             data = evaluate_dag_ready(state["tasks"])
-            body = json.dumps(data).encode("utf-8")
-            self.send_response(HTTPStatus.OK)
-            self._set_cors_headers()
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
+            self._send_json(HTTPStatus.OK, data)
             return
 
         if path == "/api/analytics/models":
             state = GLOBAL_STORE.get_state()
-            data = compute_model_analytics(state["tasks"])
-            body = json.dumps(data).encode("utf-8")
-            self.send_response(HTTPStatus.OK)
-            self._set_cors_headers()
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
+            desktop_jobs = GLOBAL_STORE.list_desktop_jobs(limit=1000)
+            data = compute_model_analytics(state["tasks"], desktop_jobs=desktop_jobs)
+            self._send_json(HTTPStatus.OK, data)
             return
 
         if path == "/api/audit/export":
             qs = parse_qs(parsed.query)
             fmt = qs.get("format", ["markdown"])[0].lower()
             state = GLOBAL_STORE.get_state()
-            report = generate_audit_report(state["tasks"], state["logs"], state["metrics"], format=fmt)
+            desktop_jobs = GLOBAL_STORE.list_desktop_jobs(limit=1000)
+            report = generate_audit_report(
+                state["tasks"],
+                state["logs"],
+                state["metrics"],
+                format=fmt,
+                desktop_jobs=desktop_jobs,
+            )
             self.send_response(HTTPStatus.OK)
             self._set_cors_headers()
             if fmt == "json":
@@ -2523,13 +3670,7 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
                 return
 
             data = GLOBAL_STORE.get_task_transcript(task_id)
-            body = json.dumps(data).encode("utf-8")
-            self.send_response(HTTPStatus.OK)
-            self._set_cors_headers()
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
+            self._send_json(HTTPStatus.OK, data)
             return
 
         if path == "/events":
@@ -2572,17 +3713,63 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path
 
-        content_length = int(self.headers.get("Content-Length", 0))
-        post_body = self.rfile.read(content_length) if content_length > 0 else b"{}"
+        if _is_desktop_path(path):
+            if not self._check_desktop_access():
+                return
+            if not self._require_json_content_type():
+                return
 
-        try:
-            payload = json.loads(post_body.decode("utf-8")) if post_body else {}
-        except json.JSONDecodeError:
-            self.send_response(HTTPStatus.BAD_REQUEST)
-            self._set_cors_headers()
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(b'{"error": "Invalid JSON body"}')
+        payload = self._read_json_body()
+        if payload is None:
+            return
+
+        if path == "/api/desktop/dispatch":
+            raw_app_path = payload.get("app_path")
+            if raw_app_path is not None and (not isinstance(raw_app_path, str) or raw_app_path.strip() != ""):
+                if os.environ.get("ORCHESTRATOR_ALLOW_CUSTOM_APP_PATH") != "1":
+                    self._send_json(
+                        HTTPStatus.FORBIDDEN,
+                        {"error": "Custom app_path over HTTP is disabled; set ORCHESTRATOR_ALLOW_CUSTOM_APP_PATH=1 to allow validated paths"},
+                    )
+                    return
+            try:
+                job, is_async, was_rejected_secrets = GLOBAL_STORE.enqueue_desktop_job(payload)
+            except ValueError as exc:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+                return
+
+            if was_rejected_secrets or job.get("status") == "rejected_secrets":
+                self._send_json(HTTPStatus.OK, {"status": "rejected_secrets", "job": job})
+                return
+            if is_async:
+                self._send_json(HTTPStatus.ACCEPTED, {"status": "queued", "job": job})
+                return
+            res_status = "ok" if job.get("status") == "completed" else "error"
+            self._send_json(HTTPStatus.OK, {"status": res_status, "job": job})
+            return
+
+        if path == "/api/desktop/cancel":
+            job_id = payload.get("job_id") if isinstance(payload, dict) else None
+            if not job_id or not str(job_id).strip():
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": "job_id is required"})
+                return
+            job = GLOBAL_STORE.cancel_desktop_job(str(job_id).strip())
+            if not job:
+                self._send_json(HTTPStatus.NOT_FOUND, {"error": "Desktop job not found"})
+                return
+            self._send_json(HTTPStatus.OK, {"status": "ok", "job": job})
+            return
+
+        if path.startswith("/api/desktop/jobs/") and path.endswith("/cancel"):
+            raw_id = unquote(path[len("/api/desktop/jobs/"):-len("/cancel")]).strip("/")
+            if not raw_id or "/" in raw_id:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": "job_id is required"})
+                return
+            job = GLOBAL_STORE.cancel_desktop_job(raw_id)
+            if not job:
+                self._send_json(HTTPStatus.NOT_FOUND, {"error": "Desktop job not found"})
+                return
+            self._send_json(HTTPStatus.OK, {"status": "ok", "job": job})
             return
 
         if path == "/api/tasks":
@@ -2628,13 +3815,7 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
                 cache_tokens=cache_tokens,
             )
 
-            res = json.dumps({"status": "ok", "task": task}).encode("utf-8")
-            self.send_response(HTTPStatus.OK)
-            self._set_cors_headers()
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(res)))
-            self.end_headers()
-            self.wfile.write(res)
+            self._send_json(HTTPStatus.OK, {"status": "ok", "task": task})
             return
 
         if path == "/api/router/recommend":
@@ -2645,6 +3826,9 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
             has_security_impact = bool(payload.get("has_security_impact") or payload.get("security_impact") or False)
             budget_mode = payload.get("budget_mode", "balanced")
             retry_count = int(payload.get("retry_count") or payload.get("retries") or 0)
+            desktop_available = bool(payload.get("desktop_available", False))
+            read_only = bool(payload.get("read_only", False))
+            prefer_desktop = bool(payload.get("prefer_desktop", False))
 
             rec = recommend_model(
                 agent_type=agent_type,
@@ -2654,14 +3838,11 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
                 has_security_impact=has_security_impact,
                 budget_mode=budget_mode,
                 retry_count=retry_count,
+                desktop_available=desktop_available,
+                read_only=read_only,
+                prefer_desktop=prefer_desktop,
             )
-            res = json.dumps(rec).encode("utf-8")
-            self.send_response(HTTPStatus.OK)
-            self._set_cors_headers()
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(res)))
-            self.end_headers()
-            self.wfile.write(res)
+            self._send_json(HTTPStatus.OK, rec)
             return
 
         if path == "/api/tasks/kill":
@@ -2733,7 +3914,7 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
         self.wfile.write(b'{"error": "Not Found"}')
 
 
-def run_server(port=DEFAULT_PORT, host="0.0.0.0", db_path=None):
+def run_server(port=DEFAULT_PORT, host=DEFAULT_HOST, db_path=None):
     if db_path and db_path != GLOBAL_STORE.db_path:
         GLOBAL_STORE.db_path = db_path
         GLOBAL_STORE._init_db()
@@ -2755,7 +3936,7 @@ def run_server(port=DEFAULT_PORT, host="0.0.0.0", db_path=None):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Multi-Agent Orchestrator Real-Time Server")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT, help=f"Port number (default: {DEFAULT_PORT})")
-    parser.add_argument("--host", type=str, default="0.0.0.0", help="Host address (default: 0.0.0.0)")
+    parser.add_argument("--host", type=str, default=DEFAULT_HOST, help=f"Host address (default: {DEFAULT_HOST})")
     parser.add_argument("--db", type=str, default=DEFAULT_DB_PATH, help=f"SQLite database file path (default: {DEFAULT_DB_PATH})")
     args = parser.parse_args()
     run_server(port=args.port, host=args.host, db_path=args.db)
