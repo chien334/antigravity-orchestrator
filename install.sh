@@ -70,12 +70,12 @@ fi
 PY_VER=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}')")
 echo -e "${GREEN}[✓] Python detected: version ${PY_VER}${NC}"
 
-# Check sqlite3 standard module
-python3 -c "import sqlite3, http.server, json, threading" 2>/dev/null || {
-    echo -e "${RED}[X] Missing standard Python modules. Ensure python3-sqlite3 is installed.${NC}"
+# Check sqlite3 and desktop bridge standard modules
+python3 -c "import sqlite3, http.server, json, threading, plistlib" 2>/dev/null || {
+    echo -e "${RED}[X] Missing standard Python modules. Ensure python3-sqlite3 and stdlib modules are installed.${NC}"
     exit 1
 }
-echo -e "${GREEN}[✓] Standard library dependencies verified (sqlite3, http.server, json, threading)${NC}"
+echo -e "${GREEN}[✓] Standard library dependencies verified (sqlite3, http.server, json, threading, plistlib)${NC}"
 
 # ------------------------------------------------------------------------------
 # 3. Install Global Antigravity Configurations
@@ -97,7 +97,7 @@ for skill_dir in "$SCRIPT_DIR/packages/skills/"*; do
         cp -r "$skill_dir/"* "$GLOBAL_CONFIG_DIR/skills/$sname/"
     fi
 done
-SKILL_COUNT=$(find "$SCRIPT_DIR/packages/skills" -mindepth 1 -maxdepth 1 -type d | wc -l)
+SKILL_COUNT=$(find "$SCRIPT_DIR/packages/skills" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')
 echo -e "    -> Installed ${SKILL_COUNT} Agent Skills into: $GLOBAL_CONFIG_DIR/skills/"
 
 # Copy Workflows (Slash commands)
@@ -118,7 +118,11 @@ chmod +x "$GLOBAL_TOOLS_DIR/"*.py
 if [[ -f "$SCRIPT_DIR/packages/orchestrator/requirements.txt" ]]; then
     cp "$SCRIPT_DIR/packages/orchestrator/requirements.txt" "$GLOBAL_TOOLS_DIR/"
 fi
-echo -e "    -> Installed Orchestrator Modules: (__init__.py, models.py, router.py, dashboard.py, server.py, client.py)"
+echo -e "    -> Installed Orchestrator Modules: (__init__.py, models.py, router.py, desktop_worker.py, dashboard.py, server.py, client.py)"
+PYTHONPATH="$GLOBAL_TOOLS_DIR" python3 -c "import models, router, desktop_worker, dashboard, server, client" 2>/dev/null || {
+    echo -e "${RED}[X] Failed to verify orchestrator & desktop_worker module imports in $GLOBAL_TOOLS_DIR.${NC}"
+    exit 1
+}
 echo -e "${GREEN}[✓] Global configurations & tools installed successfully!${NC}"
 
 # ------------------------------------------------------------------------------
@@ -139,6 +143,7 @@ sync_target_workspace() {
              "$dest_dir/docs/specs" \
              "$dest_dir/docs/plans" \
              "$dest_dir/docs/reports" \
+             "$dest_dir/docs/reports/desktop_worker" \
              "$dest_dir/docs/reviews" \
              "$dest_dir/docs/security"
 
