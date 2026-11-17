@@ -15,6 +15,7 @@ Thay vì nạp toàn bộ lịch sử chat hàng nghìn dòng vào từng subage
    - ✦ **Tier 3: Gemini 4 Hydrogen** (`gemini-4-hydrogen`, `reasoning_effort: low/medium/high/xhigh`): Ngựa thồ tốc độ cao (198 tok/s, nhanh hơn 2.5x) dành cho Stage 3 (Parallel Builder) và Stage 4 (Automated Testing), tiết kiệm 95% chi phí đọc cache ($0.075 / 1M tokens).
    - ⚡ **Tier 4: Gemini 3.8 Flash** (`gemini-3.8-flash`): Dành cho triển khai số lượng lớn ở chế độ `cost_saving` và tinh gọn văn bản. Giá: $0.075 / $0.30 / $0.01875.
    - ⚡ **Tier 5: Gemini 3.8 Flash-Lite** (`gemini-3.8-flash-lite`): Dành cho telemetry micro-tier, logging nhịp tim, và linting nhanh. Giá: $0.0375 / $0.15 / $0.01.
+   - 🖥️ **External Heavy-Analysis Offload (`gemini-desktop-app` — MỚI)**: Cầu nối Gemini Desktop App cục bộ (`macos_ax` / `windows_uia` / `linux_pwa` / `mock`) cho phép offload các tác vụ phân tích chỉ đọc dung lượng lớn (`spec-engineer`, `task-planner`, `code-reviewer`, `debugger` với `read_only=True`) ở chế độ `hybrid_desktop` / `offload_heavy_to_desktop` với **$0.00 chi phí API AGY**. Tất cả chỉnh sửa mã nguồn Stage 3 vẫn chạy song song trên `gemini-4-hydrogen` (`198 tok/s`), còn kiểm toán bảo mật luôn khóa chặt trên `gemini-4-carbon`.
 4. **Mô Hình "Fast Hands, Deep Brain" & Fast-Retry Circuit Breaker:**
    - Hydrogen trinh sát và viết code thần tốc (198 tok/s); Argon định hình kiến trúc; Carbon chốt chặn an ninh mạng tối cao.
    - Nếu gặp lỗi: Hydrogen tự sửa nhanh đúng 1 lượt với mức tư duy tối đa `xhigh`. Nếu vẫn thất bại (`retry_count >= 2`), kích hoạt ngắt mạch (Circuit Breaker) tự động leo thang lên Gemini 4 Carbon (`high` effort) để chẩn đoán gốc rễ.
@@ -60,6 +61,7 @@ docs/
 ├── specs/       # Nơi lưu trữ tài liệu đặc tả (Output Stage 1 - Gemini 4 Carbon)
 ├── plans/       # Nơi lưu trữ kiến trúc kỹ thuật & Task DAG (Output Stage 2 - Gemini 4 Argon)
 ├── reports/     # Nơi lưu trữ kết quả kiểm thử tự động JSON (Output Stage 4 - Gemini 4 Hydrogen)
+│   └── desktop_worker/  # Báo cáo phân tích chỉ đọc từ Gemini Desktop App Worker ({job_id}.md)
 ├── reviews/     # Nơi lưu trữ biên bản nghiệm thu code review (Output Stage 5 - Gemini 4 Argon)
 └── security/    # Nơi lưu trữ báo cáo quét bảo mật OWASP (Output Stage 6 - Gemini 4 Carbon)
 ```
@@ -135,4 +137,18 @@ python3 packages/orchestrator/client.py update \
 
 # 5. Xuất biên bản nghiệm thu kiểm toán:
 python3 packages/orchestrator/client.py export --format markdown --out docs/reports/mission_audit_report.md
+
+# 6. Tùy chọn Hybrid Desktop Offload (tiết kiệm AGY Quota với Gemini Desktop App):
+python3 packages/orchestrator/client.py desktop-doctor --format text
+python3 packages/orchestrator/client.py recommend \
+  --agent spec-engineer \
+  --complexity high \
+  --budget-mode hybrid_desktop \
+  --desktop-available \
+  --read-only
+python3 packages/orchestrator/client.py desktop-ask \
+  --task SPEC-01 \
+  --prompt-file docs/specs/feature_brief.md \
+  --driver auto
+python3 packages/orchestrator/client.py desktop-jobs --limit 20 --format text
 ```

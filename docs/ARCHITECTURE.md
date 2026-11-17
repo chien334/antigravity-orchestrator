@@ -2,22 +2,38 @@
 
 ## 1. System Overview
 
-The **Multi-Agent Orchestrator** coordinates autonomous subagents under a bounded, **1-Agent = 1-Skill** paradigm with zero context bloat, 5-Tier Periodic Table dynamic model routing, condition-based parallel execution, Fast-Retry Circuit Breakers, and live SSE + SQLite telemetry.
+The **Multi-Agent Orchestrator** coordinates autonomous subagents under a bounded, **1-Agent = 1-Skill** paradigm with zero context bloat, 5-Tier Periodic Table dynamic model routing plus an External Heavy-Analysis Offload tier (`gemini-desktop-app`), condition-based parallel execution, Fast-Retry Circuit Breakers, and live SSE + SQLite telemetry.
 
 ```mermaid
 graph TD
-    Client[Antigravity CLI / User] -->|/orchestrator| Orchestrator[Fleet Orchestrator]
+    Client["Antigravity CLI / User"] -->|/orchestrator| Orchestrator["Fleet Orchestrator"]
     
     subgraph Routing["Smart Routing & Scheduling"]
-        Router[5-Tier Smart Model Router\nPOST /api/router/recommend]
-        ReadyQueue[DAG Ready-Queue Evaluator\nGET /api/dag/ready]
+        Router["5-Tier Smart Model Router<br/>POST /api/router/recommend<br/>(Rule 1 Security -> Rule 2 CB -> Rule 1.5 Desktop)"]
+        ReadyQueue["DAG Ready-Queue Evaluator<br/>GET /api/dag/ready"]
     end
     Orchestrator --> Router
     Orchestrator --> ReadyQueue
 
+    subgraph DesktopBridge["Cross-Platform Gemini Desktop App Worker Bridge ($0.00 API Spend)"]
+        DesktopAPI["Server Desktop Queue<br/>POST /api/desktop/dispatch<br/>FIFO + File Lock"]
+        Redactor["SecretRedactor + Split-Literal Sentinel<br/>(8 Credential Patterns + Clipboard Restore)"]
+        MacDrv["MacOSGeminiDriver<br/>com.google.GeminiMacOS<br/>googlegemini://newchat + AX"]
+        WinDrv["WindowsGeminiDriver<br/>Gemini.exe / PWA<br/>PowerShell -Sta + UIAutomation"]
+        LinDrv["LinuxGeminiDriver<br/>Chromium/Edge PWA<br/>wl-copy / xclip / xdotool"]
+        MockDrv["MockGeminiDriver<br/>Deterministic CI Simulator"]
+        DesktopArtifact["Artifact Writer<br/>docs/reports/desktop_worker/{job_id}.md"]
+    end
+
+    Router -->|"hybrid_desktop & read_only=True"| DesktopAPI
+    DesktopAPI --> Redactor
+    Redactor --> MacDrv & WinDrv & LinDrv & MockDrv
+    MacDrv & WinDrv & LinDrv & MockDrv --> DesktopArtifact
+    DesktopArtifact -->|"Compact Pointer"| Orchestrator
+
     subgraph Pipeline["6-Stage Artifact Handoff Pipeline ('Fast Hands, Deep Brain')"]
-        Spec["Stage 1: spec-engineer<br/>✦ <strong>Gemini 4 Carbon</strong> (effort: high)<br/>docs/specs/*.spec.md"]
-        Plan["Stage 2: task-planner<br/>✦ <strong>Gemini 4 Argon</strong> (effort: high)<br/>docs/plans/*.plan.md"]
+        Spec["Stage 1: spec-engineer<br/>✦ Gemini 4 Carbon (effort: high)<br/>docs/specs/*.spec.md"]
+        Plan["Stage 2: task-planner<br/>✦ Gemini 4 Argon (effort: high)<br/>docs/plans/*.plan.md"]
         
         subgraph Stage3["Stage 3: Parallel Fan-Out (BUILD-PARALLEL)"]
             FE["Worker 1: Frontend UI<br/>✦ Gemini 4 Hydrogen (198 tok/s)"]
@@ -25,13 +41,13 @@ graph TD
             DB["Worker 3: DB / Storage<br/>✦ Gemini 4 Hydrogen (198 tok/s)"]
         end
 
-        Barrier[Barrier Synchronization\nFan-In]
+        Barrier["Barrier Synchronization<br/>Fan-In"]
         Test["Stage 4: test-engineer<br/>✦ Gemini 4 Hydrogen (198 tok/s)<br/>docs/reports/*.json"]
-        CB{"Fast-Retry Circuit Breaker\n(retry_count >= 2?)"}
+        CB{"Fast-Retry Circuit Breaker<br/>(retry_count >= 2?)"}
         EscalateCarbon["Circuit Breaker Escalation<br/>✦ Gemini 4 Carbon (effort: high)"]
 
-        Review["Stage 5: code-reviewer<br/>✦ <strong>Gemini 4 Argon</strong> (effort: high)<br/>docs/reviews/*.md"]
-        Sec["Stage 6: security-auditor<br/>✦ <strong>Gemini 4 Carbon</strong> (effort: high)<br/>docs/security/*.md"]
+        Review["Stage 5: code-reviewer<br/>✦ Gemini 4 Argon (effort: high)<br/>docs/reviews/*.md"]
+        Sec["Stage 6: security-auditor<br/>✦ Gemini 4 Carbon (effort: high)<br/>docs/security/*.md"]
         Audit["Mission Audit Exporter<br/>GET /api/audit/export"]
     end
 
@@ -47,17 +63,18 @@ graph TD
     EscalateCarbon --> Barrier
     Review --> Sec
     Sec --> Audit
-    Audit --> Release[Production Release]
+    Audit --> Release["Production Release"]
 
     subgraph Telemetry["Observability & Persistence Engine"]
-        DB_Engine[(SQLite: orchestrator.db\nWAL Mode)]
-        Analytics[5-Tier Financial Ledger\nGET /api/analytics/models]
-        SSE[SSE Stream /events\n15s Ping Keepalive]
-        Dashboard[Web Dashboard UI :8484\nCyan Hydrogen + Emerald Carbon]
+        DB_Engine[("SQLite: orchestrator.db<br/>WAL Mode: tasks, logs, desktop_jobs")]
+        Analytics["5-Tier Financial Ledger + Quota Saved<br/>GET /api/analytics/models"]
+        SSE["SSE Stream /events<br/>tasks + desktop_job_*"]
+        Dashboard["Web Dashboard UI :8484<br/>Cyan Hydrogen + Emerald Carbon + Teal Desktop"]
     end
 
     Orchestrator -.->|Record Tokens & Effort| DB_Engine
     FE & BE & DB -.->|Task Updates| DB_Engine
+    DesktopAPI -.->|Job & Quota Saved| DB_Engine
     DB_Engine --> Analytics
     DB_Engine -.-> SSE
     SSE -.-> Dashboard
@@ -77,6 +94,7 @@ graph TD
 - Persistent tables:
   * `tasks`: Stores `task_id`, `agent_type`, `model`, `reasoning_effort`, `complexity`, `status`, `progress`, `scope`, `notes`, `conv_id`, `depends_on`, `parallel_group`, `input_tokens`, `output_tokens`, `cache_tokens`, `total_tokens`, `created_at`, `updated_at`.
   * `logs`: Time-series event stream capped at 1000 items with levels (`info`, `warn`, `error`, `thought`).
+  * `desktop_jobs`: Persistent FIFO queue and audit history for Desktop Worker executions (`job_id`, `task_id`, `status`, `os_platform`, `driver_name`, `app_path`, `prompt_chars`, `prompt_preview`, `redaction_count`, `redactions_json`, `artifact_path`, `summary_excerpt`, `output_chars`, `duration_ms`, `estimated_saved_usd`, `estimated_saved_vnd`, `clipboard_restored`, `error_message`, `created_at`, `started_at`, `completed_at`).
 
 ### 2.2 5-Tier Periodic Table Intelligent Model Routing Subsystem (`MODEL_REGISTRY`)
 The runtime matches task requirements against five distinct capability and financial tiers:
@@ -90,9 +108,27 @@ The runtime matches task requirements against five distinct capability and finan
 | **Tier 5: Ultra-Fast Micro-Tier** | `gemini-3.8-flash-lite` | `observability-and-instrumentation` | **$0.0375 / $0.15 / $0.01** | `None` | Micro-tier for telemetry heartbeats, linting, and doc formatting. |
 
 - **Smart Model Recommender (`recommend_model`)**:
-  - Evaluates persona, complexity (`low`, `medium`, `high`, `critical`), security impact, retry count, and budget mode (`balanced`, `speed_first`, `latency_sensitive`, `quality_first`, `cost_saving`).
-  - Strict Security Guardrail: Any task with security impact or cryptographic/auth keywords strictly forces `gemini-4-carbon` (`effort: high`).
-  - Circuit Breaker: Escalates to `gemini-4-carbon` when `retry_count >= 2`.
+  - Evaluates persona, complexity (`low`, `medium`, `high`, `critical`), security impact, retry count, `budget_mode` (`balanced`, `speed_first`, `latency_sensitive`, `quality_first`, `cost_saving`, `hybrid_desktop`, `offload_heavy_to_desktop`), `desktop_available`, `read_only`, and `prefer_desktop`.
+  - **Rule 1 (Strict Security Guardrail)**: Any task with `has_security_impact=True` or cryptographic/auth/security keywords strictly forces `gemini-4-carbon` (`effort: high`).
+  - **Rule 2 (Circuit Breaker)**: Escalates to `gemini-4-carbon` when `retry_count >= 2`.
+  - **Rule 1.5 (Desktop Offload Gate)**: Evaluated after Rule 1 & Rule 2; routes heavy non-mutating analytical personas (`spec-engineer`, `task-planner`, `code-reviewer`, or read-only `scout`/`codebase-researcher`/`doc-generator`/`debugger`) to `EXTERNAL_WORKERS["gemini-desktop-app"]` (`$0.00` AGY API spend) when `desktop_available=True` and (`file_count == 0` or `read_only=True`). File-editing Stage 3 builders always stay on `gemini-4-hydrogen`.
+
+### 2.3 Cross-Platform Gemini Desktop App Worker Bridge (`desktop_worker.py`)
+- **Stdlib-Only OS Drivers (`BaseDesktopDriver`)**:
+  * `MacOSGeminiDriver` (`macos_ax`, `darwin`): Discovers `com.google.GeminiMacOS` / `com.google.gemini` via `plistlib`, `mdfind`, and canonical `/Applications/Gemini.app` or PWA paths; verifies screen lock (`CGSSessionScreenIsLocked`) and `AXIsProcessTrustedWithOptions(null)`; opens fresh chat via `googlegemini://newchat?ext_src=app_shortcut`; injects via `pbcopy` + `Cmd+V` (with optional `orca computer` adapter & Apple Shortcuts); reads AX tree or `Cmd+Shift+C` fallback.
+  * `WindowsGeminiDriver` (`windows_uia`, `win32`): Discovers `%LOCALAPPDATA%\Programs\Gemini\Gemini.exe`, Start Menu `.lnk` / `Get-StartApps`, or Edge/Chrome PWA; executes static PowerShell (`-NoProfile -NonInteractive -Sta -ExecutionPolicy Bypass -Command -`) using `.NET System.Windows.Automation` (`UIAutomationClient`) and `System.Windows.Forms.Clipboard` with a private `0600` temp file (`AGY_DESKTOP_PROMPT_FILE`).
+  * `LinuxGeminiDriver` (`linux_pwa`, `linux`): Detects `$DISPLAY`/`$WAYLAND_DISPLAY`, Chromium/Chrome/Edge `--app=https://gemini.google.com`, `wl-copy`/`xclip`/`xsel`, and `xdotool`/`wtype`; fails gracefully on headless hosts with `--driver mock` remediation.
+  * `MockGeminiDriver` (`mock`): Zero-GUI deterministic simulator for CI/tests (`MOCK_DELAY_MS`, `[MOCK_TIMEOUT]`, `[MOCK_ERROR]`, `[MOCK_PARTIAL]`, `[MOCK_CHROME]`).
+- **Security & Correctness Invariants**:
+  * **Zero `shell=True` & Zero Prompt Interpolation**: All OS scripts are static and receive dynamic data strictly via `stdin`, `argv`, or `0600` env-referenced temp files.
+  * **Pre-Flight `SecretRedactor`**: Scrubs 8 credential categories (Google/LLM/GitHub/AWS keys, JWT, PEM private keys, DB DSNs, Bearer/KV credentials) before clipboard mutation or SQLite preview storage; `strict_secrets=True` aborts (`rejected_secrets`).
+  * **Clipboard Save/Restore Invariant**: Prior clipboard contents are restored inside `try...finally` immediately after paste (`<= 300ms`) and after fallback copy extraction.
+  * **Split-Literal Sentinel Protocol**: `SentinelEnvelope.build_prompt()` splits `"<<<AGY_DESKTOP_DONE:"` + `f"{job_id}>>>"` so echoed user prompts never trigger premature completion; completion requires busy-control absence, sentinel boundaries after `--- TASK CONTEXT ---`, and `>= 500ms` stability debounce.
+  * **Single-Window Mutex & Path Traversal Guard**: Serializes GUI access via `threading.Lock` + `fcntl.flock`/`msvcrt.locking` + FIFO queue, and restricts `output_path` strictly inside `<workspace_root>/docs/reports`.
+- **REST Endpoints, CLI & Quota Saved Accounting**:
+  * Endpoints: `GET /api/desktop/status`, `POST /api/desktop/dispatch`, `GET /api/desktop/jobs`, `GET /api/desktop/jobs/{job_id}`, `POST /api/desktop/cancel`, `POST /api/desktop/jobs/{job_id}/cancel`, plus SSE `desktop_job_*` events.
+  * CLI (`client.py`): `desktop-doctor` (`desktop-status`), `desktop-ask` (`desktop-dispatch`), `desktop-jobs`, `desktop-cancel`.
+  * Accounting: `compute_desktop_quota_saved()` estimates `ceil(chars / 4)` tokens against `gemini-4-carbon` baseline rates (`$2.00` in / `$10.00` out per 1M) as **AGY Quota Saved** (`usd` & `vnd`), while actual AGY API cost remains `$0.00`.
 
 ---
 

@@ -24,8 +24,13 @@ Phiên bản mới nâng cấp toàn diện lên **Kiến Trúc Đội Ngũ 5 T�
 - **Thực Thi Song Song (Parallel Worker Fan-Out / Fan-In)**: Hỗ trợ worker chạy đồng thời trên các phạm vi file tách biệt (`parallel_group`, `depends_on`) đảm bảo bất biến không xung đột file (**Decoupled File Scope Invariant**).
 - **Phân Tích Tài Chính 5 Tầng Model (Per-Model Financial Analytics)**: Đo lường chi tiết số token (Input, Output, Cache Read), chi phí quy đổi USD & VNĐ (tỷ giá cố định 25.400 VND/USD), và tỷ lệ trúng bộ nhớ đệm (Cache Hit Rate %) riêng biệt cho Carbon, Argon, Hydrogen, Flash, và Flash-Lite.
 - **Xuất Báo Cáo Kiểm Toán Tự Động (Mission Audit Exporter)**: Endpoint `GET /api/audit/export?format=markdown|json` và lệnh `client.py export` tạo báo cáo nghiệm thu hoàn chỉnh sau mỗi chiến dịch phát triển.
-- **Web Dashboard Thời Gian Thực (SSE & SQLite)**: Giao diện tối Dark-mode hiện đại, huy hiệu Obsidian Emerald cho Carbon, huy hiệu Electric Cyan (`#06b6d4`) cho Hydrogen, nhãn nhịp đập tư duy (`xhigh`), biểu đồ DAG trực quan bằng SVG, và modal Sandbox thử nghiệm Smart Router kèm mô phỏng Circuit Breaker.
-- **Zero Dependency Runtime**: Hoạt động hoàn toàn trên Python Standard Library (`sqlite3`, `http.server`, `urllib`, `json`, `argparse`, `threading`), không yêu cầu cài đặt thêm bất kỳ thư viện pip nào.
+- **Web Dashboard Thời Gian Thực (SSE & SQLite)**: Giao diện tối Dark-mode hiện đại, huy hiệu Obsidian Emerald cho Carbon, huy hiệu Electric Cyan (`#06b6d4`) cho Hydrogen, huy hiệu Teal cho **Gemini Desktop App**, nhãn nhịp đập tư duy (`xhigh`), biểu đồ DAG trực quan bằng SVG, modal Sandbox thử nghiệm Smart Router kèm mô phỏng Circuit Breaker, và bảng theo dõi hàng đợi **Desktop Worker + AGY Quota Saved**.
+- **Cầu Nối Gemini Desktop App Đa Nền Tảng (Cross-Platform Desktop Worker Bridge — MỚI)**: Cho phép offload các tác vụ phân tích nặng chỉ đọc (`read_only=True`: tổng hợp kiến trúc, phản biện spec, phân tích log) sang ứng dụng **Google Gemini Desktop App** cục bộ với **$0.00 chi phí API AGY** qua chế độ `hybrid_desktop` / `offload_heavy_to_desktop`:
+  - **macOS (`macos_ax`)**: Tự động phát hiện `com.google.GeminiMacOS` / `com.google.gemini` (`/Applications/Gemini.app`), mở chat mới qua deep link `googlegemini://newchat?ext_src=app_shortcut`, kiểm tra quyền Accessibility (`AXIsProcessTrustedWithOptions`), chống khóa màn hình, dán qua `pbcopy` + `Cmd+V` (kèm tùy chọn `orca computer` adapter & Apple Shortcuts).
+  - **Windows (`windows_uia`)**: Tự động tìm `Gemini.exe` (`%LOCALAPPDATA%\Programs\Gemini\Gemini.exe`, Start Menu, Edge/Chrome PWA) và điều khiển bằng PowerShell `-Sta` + `.NET UIAutomationClient` (`System.Windows.Automation`) & `System.Windows.Forms.Clipboard` thông qua file tạm riêng tư (`0600`).
+  - **Linux (`linux_pwa`) & CI (`mock`)**: Hỗ trợ Chromium/Edge PWA (`--app=https://gemini.google.com`) trên X11/Wayland (`wl-copy`/`xclip`/`xdotool`) và trình giả lập `MockGeminiDriver` cho CI/headless.
+  - **Lá Chắn Bảo Mật & Chống Cắt Xén**: `SecretRedactor` (ẩn tự động 8 loại khóa API/JWT/PEM/DSN trước khi chạm clipboard, hỗ trợ `--strict-secrets`), **Clipboard Save/Restore** (`try...finally` khôi phục clipboard gốc `<= 300ms`), **Split-Literal Sentinel Protocol** (`<<<AGY_DESKTOP_START:{job_id}>>>` / `<<<AGY_DESKTOP_DONE:{job_id}>>>` + `>= 500ms` stability debounce), khóa cửa sổ đơn (`threading.Lock` + `fcntl.flock`/`msvcrt.locking` + hàng đợi FIFO `desktop_jobs`), và xuất kết quả chuẩn hóa về `docs/reports/desktop_worker/{job_id}.md`.
+- **Zero Dependency Runtime**: Hoạt động hoàn toàn trên Python Standard Library (`sqlite3`, `http.server`, `urllib`, `json`, `argparse`, `threading`, `plistlib`), không yêu cầu cài đặt thêm bất kỳ thư viện pip nào.
 
 ---
 
@@ -44,18 +49,21 @@ antigravity-orchestrator/
 │   ├── specs/                     # Nơi lưu trữ tài liệu đặc tả (Output Stage 1)
 │   ├── plans/                     # Nơi lưu trữ kiến trúc kỹ thuật & Task DAG (Output Stage 2)
 │   ├── reports/                   # Nơi lưu trữ kết quả kiểm thử tự động JSON (Output Stage 4)
+│   │   └── desktop_worker/        # Báo cáo phân tích từ Gemini Desktop App Worker ({job_id}.md)
 │   ├── reviews/                   # Nơi lưu trữ biên bản nghiệm thu code review (Output Stage 5)
 │   └── security/                  # Nơi lưu trữ báo cáo quét bảo mật OWASP (Output Stage 6)
 ├── packages/
 │   ├── orchestrator/
-│   │   ├── models.py              # Model Registry 5 tầng, bảng giá & tính toán chi phí token
-│   │   ├── router.py              # Smart Router (speed_first, circuit breaker), DAG Ready & Audit
-│   │   ├── server.py              # Server Dashboard SSE + SQLite DB + REST API Endpoints
-│   │   ├── dashboard.py           # Single-page Web Console HTML/JS + SVG DAG Visualizer (Cyan styling)
-│   │   ├── client.py              # Python SDK & CLI điều phối telemetry (hỗ trợ xhigh, retry-count)
+│   │   ├── models.py              # Model Registry 5 tầng + EXTERNAL_WORKERS (gemini-desktop-app) & Quota Saved
+│   │   ├── router.py              # Smart Router (hybrid_desktop, speed_first, circuit breaker), DAG Ready & Audit
+│   │   ├── desktop_worker.py      # Cross-Platform Gemini Desktop App Bridge (macOS/Windows/Linux/Mock + SecretRedactor)
+│   │   ├── server.py              # Server Dashboard SSE + SQLite DB (tasks, logs, desktop_jobs) + REST API Endpoints
+│   │   ├── dashboard.py           # Single-page Web Console HTML/JS + SVG DAG + Desktop Worker Modal & Quota Saved KPI
+│   │   ├── client.py              # Python SDK & CLI điều phối telemetry + desktop-doctor/ask/jobs/cancel
 │   │   └── requirements.txt       # Zero dependency (sử dụng thư viện chuẩn Python)
-│   ├── skills/                    # Thư viện 20 Gói Agent Skills (Chuẩn 1-Agent = 1-Skill của addyosmani)
+│   ├── skills/                    # Thư viện Gói Agent Skills (Chuẩn 1-Agent = 1-Skill của addyosmani)
 │   │   ├── multi-agent-orchestrator/   # Skill trung tâm điều phối 5 tầng và theo dõi telemetry
+│   │   ├── gemini-desktop-worker/      # Skill offload tác vụ phân tích nặng sang Gemini Desktop App ($0.00 API)
 │   │   ├── spec-driven-development/    # spec-engineer: Đặc tả, user stories, acceptance criteria
 │   │   ├── planning-and-task-breakdown/# task-planner: Phân rã kiến trúc, DAG, parallel groups
 │   │   ├── api-and-interface-design/   # task-planner: Thiết kế contract, schemas, boundary types
@@ -228,23 +236,53 @@ python3 packages/orchestrator/client.py export --format markdown --out docs/repo
 python3 packages/orchestrator/client.py export --format json --out docs/reports/mission_audit_report.json
 ```
 
+### 6. Gemini Desktop App Worker Bridge (`desktop-doctor`, `desktop-ask`, `desktop-jobs`, `desktop-cancel`)
+```bash
+# 1. Kiểm tra tính sẵn sàng của Gemini Desktop App trên macOS / Windows / Linux / Mock
+python3 packages/orchestrator/client.py desktop-doctor --format text
+
+# 2. Đề xuất định tuyến Hybrid Desktop cho tác vụ phân tích chỉ đọc
+python3 packages/orchestrator/client.py recommend \
+  --agent spec-engineer \
+  --complexity high \
+  --budget-mode hybrid_desktop \
+  --desktop-available \
+  --read-only
+
+# 3. Gửi tác vụ phân tích nặng sang Gemini Desktop App ($0.00 chi phí API AGY)
+python3 packages/orchestrator/client.py desktop-ask \
+  --task SPEC-01 \
+  --prompt-file docs/specs/my_large_spec.md \
+  --driver auto \
+  --timeout 180
+
+# 4. Theo dõi hàng đợi desktop_jobs hoặc hủy job đang chạy
+python3 packages/orchestrator/client.py desktop-jobs --limit 20 --format text
+python3 packages/orchestrator/client.py desktop-cancel --job-id dsk-20261117-a1b2
+```
+
 ---
 
 ## 🌐 Danh Sách REST Endpoints
 
 | Phương thức | Đường dẫn | Chức năng | Tham số / Body |
 |---|---|---|---|
-| `GET` | `/` | Giao diện Web Console Dark-mode (Cyan & Emerald) | Không |
-| `GET` | `/events` | Luồng dữ liệu Server-Sent Events (SSE) | Không |
-| `GET` | `/api/state` | Trả về toàn bộ trạng thái tasks, logs, metrics | Không |
-| `GET` | `/api/models` | Trả về danh mục mô hình 5 tầng trong `MODEL_REGISTRY` | Không |
-| `POST` | `/api/router/recommend` | Đề xuất model, mức tư duy và trạng thái Circuit Breaker | `{"agent_type": "...", "complexity": "...", "budget_mode": "speed_first", "retry_count": 0, "has_security_impact": false}` |
+| `GET` | `/` | Giao diện Web Console Dark-mode (Cyan, Emerald & Teal Desktop Pill) | Không |
+| `GET` | `/events` | Luồng dữ liệu Server-Sent Events (SSE) gồm `desktop_job_*` | Không |
+| `GET` | `/api/state` | Trả về toàn bộ trạng thái tasks, logs, metrics (kèm `desktop_quota_saved_*`) | Không |
+| `GET` | `/api/models` | Trả về danh mục mô hình 5 tầng (`MODEL_REGISTRY`) + `external_workers` | Không |
+| `POST` | `/api/router/recommend` | Đề xuất model, mức tư duy, Circuit Breaker & `hybrid_desktop` offload | `{"agent_type": "...", "complexity": "...", "budget_mode": "hybrid_desktop", "desktop_available": true, "read_only": true}` |
+| `GET` | `/api/desktop/status` | Kiểm tra trạng thái Gemini Desktop App theo OS & quota đã tiết kiệm | `?driver=auto&target_os=auto&app_path=...` |
+| `POST` | `/api/desktop/dispatch` | Đưa job phân tích (đã scrub secrets & bọc Sentinel) vào hàng đợi Desktop | `{"prompt": "...", "task_id": "...", "driver": "auto", "redact_secrets": true, "async_mode": true}` |
+| `GET` | `/api/desktop/jobs` | Liệt kê danh sách `desktop_jobs` & tổng hợp `AGY Quota Saved` | `?job_id=...&status=...&limit=50` |
+| `GET` | `/api/desktop/jobs/{job_id}` | Truy xuất chi tiết một desktop job và con trỏ `artifact_path` | Path param `job_id` |
+| `POST` | `/api/desktop/cancel` | Hủy job desktop đang chờ hoặc đang chạy (hoặc `POST /api/desktop/jobs/{job_id}/cancel`) | `{"job_id": "..."}` |
 | `GET` | `/api/dag/ready` | Tính toán các task không bị chặn trong DAG | Không |
-| `GET` | `/api/analytics/models` | Báo cáo chi tiêu token và VNĐ theo 5 model | Không |
+| `GET` | `/api/analytics/models` | Báo cáo chi tiêu token, VNĐ theo 5 model & `desktop_saved_usd` | Không |
 | `GET` | `/api/audit/export` | Xuất biên bản kiểm toán nhiệm vụ | `?format=markdown` hoặc `?format=json` |
 | `POST` | `/api/tasks` | Tạo mới hoặc cập nhật trạng thái task | `{"task_id": "...", "status": "...", "reasoning_effort": "xhigh", ...}` |
 | `POST` | `/api/logs` | Ghi nhận một log telemetry mới | `{"task_id": "...", "level": "info", "message": "..."}` |
-| `POST` | `/api/reset` | Xóa sạch trạng thái DB và logs | Không |
+| `POST` | `/api/reset` | Xóa sạch trạng thái DB (`tasks`, `logs`, `desktop_jobs`) | Không |
 
 ---
 
