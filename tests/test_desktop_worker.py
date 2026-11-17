@@ -13,17 +13,20 @@ Safety Guarantee:
 
 from __future__ import annotations
 
+import ctypes
 from http.client import HTTPConnection
 import json
 import os
 from pathlib import Path
 import plistlib
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
 import threading
 import time
+from typing import Any
 import unittest
 from unittest import mock
 import urllib.error
@@ -148,6 +151,7 @@ class TestCrossPlatformDriversAndDiscovery(unittest.TestCase):
             poll_interval_ms=50,
             restore_clipboard=True,
             new_chat=True,
+            background=False,
         )
         framed = build_sentinel_prompt(job_id, req.prompt)
         pbcopy_calls: list[bytes] = []
@@ -234,7 +238,7 @@ class TestCrossPlatformDriversAndDiscovery(unittest.TestCase):
         """MacOSGeminiDriver restores prior clipboard inside finally block even when paste fails."""
         drv = MacOSGeminiDriver()
         job_id = "dsk-macos-err-01"
-        req = DesktopJobRequest(job_id=job_id, prompt="Test error restore", driver="macos_ax")
+        req = DesktopJobRequest(job_id=job_id, prompt="Test error restore", driver="macos_ax", background=False)
         framed = build_sentinel_prompt(job_id, req.prompt)
         pbcopy_calls: list[bytes] = []
 
@@ -269,6 +273,1332 @@ class TestCrossPlatformDriversAndDiscovery(unittest.TestCase):
                 drv.execute_prompt(framed, job_id, req, threading.Event())
 
         self.assertEqual(pbcopy_calls, [framed.encode("utf-8"), b"KEEP_ME_SAFE"])
+
+    def test_macos_driver_native_ax_bridge_and_copy_button_restore(self):
+        """MacOSGeminiDriver uses _MacOSAXBridge when live PID exists and restores clipboard after copy-button."""
+        drv = MacOSGeminiDriver()
+        job_id = "dsk-macos-native-01"
+        req = DesktopJobRequest(
+            job_id=job_id,
+            prompt="Summarize architecture",
+            driver="macos_ax",
+            timeout_sec=10,
+            poll_interval_ms=50,
+            restore_clipboard=True,
+            new_chat=True,
+            background=False,
+        )
+        framed = build_sentinel_prompt(job_id, req.prompt)
+        copied_md = (
+            f"{SentinelEnvelope.start_marker(job_id)}\n"
+            "## Executive Summary\nNative AX Markdown.\n"
+            f"{SentinelEnvelope.done_marker(job_id)}"
+        )
+        clipboard_state = {"bytes": b"USER_CLIPBOARD_ORIG"}
+        pbcopy_history: list[bytes] = []
+
+        class FakeNativeAX:
+            def __init__(self) -> None:
+                self.polls = 0
+                self.copy_pressed = False
+
+            def has_window(self, pid: int) -> bool:
+                return pid == 4242
+
+            def write_prompt_and_submit(self, pid: int, text: str) -> tuple[bool, bool]:
+                return (pid == 4242 and text == framed, True)
+
+            def poll_chat(self, pid: int) -> dict[str, Any]:
+                self.polls += 1
+                if self.polls == 1:
+                    return {"has_window": False, "busy": False, "text": "", "has_copy_button": False}
+                if self.polls == 2:
+                    return {"has_window": True, "busy": True, "text": "", "has_copy_button": False}
+                return {
+                    "has_window": True,
+                    "busy": False,
+                    "text": copied_md,
+                    "has_copy_button": True,
+                }
+
+            def press_copy_response(self, pid: int) -> bool:
+                self.copy_pressed = True
+                clipboard_state["bytes"] = copied_md.encode("utf-8")
+                return True
+
+        fake_ax = FakeNativeAX()
+
+        def fake_pbpaste() -> bytes:
+            return clipboard_state["bytes"]
+
+        def fake_pbcopy(data: bytes) -> bool:
+            pbcopy_history.append(data)
+            clipboard_state["bytes"] = data
+            return True
+
+        tick = 0.0
+
+        def fake_monotonic() -> float:
+            nonlocal tick
+            tick += 0.6
+            return tick
+
+        with mock.patch.object(MacOSGeminiDriver, "_check_screen_locked", return_value="unlocked"), \
+             mock.patch.object(MacOSGeminiDriver, "_check_accessibility", return_value="granted"), \
+             mock.patch.object(
+                 drv,
+                 "discover_app",
+                 return_value={
+                     "app_detected": True,
+                     "app_name": "Gemini",
+                     "app_path": "/Applications/Gemini.app",
+                     "bundle_id": "com.google.GeminiMacOS",
+                     "app_version": "1.144.4.1467",
+                     "app_running": True,
+                 },
+             ), \
+             mock.patch.object(MacOSGeminiDriver, "_check_orca", return_value=None), \
+             mock.patch.object(MacOSGeminiDriver, "_find_running_pid", return_value=4242), \
+             mock.patch.object(dw._MacOSAXBridge, "get_instance", return_value=fake_ax), \
+             mock.patch.object(MacOSGeminiDriver, "_pbpaste_bytes", side_effect=fake_pbpaste), \
+             mock.patch.object(MacOSGeminiDriver, "_pbcopy_bytes", side_effect=fake_pbcopy), \
+             mock.patch.object(MacOSGeminiDriver, "_run_osascript", return_value="ok"), \
+             mock.patch("desktop_worker.subprocess.run") as mock_sub_run, \
+             mock.patch("desktop_worker.time.sleep", return_value=None), \
+             mock.patch("desktop_worker.time.monotonic", side_effect=fake_monotonic):
+
+            mock_sub_run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+            raw_text, meta = drv.execute_prompt(framed, job_id, req, threading.Event())
+
+        self.assertTrue(fake_ax.copy_pressed)
+        self.assertEqual(raw_text, copied_md)
+        self.assertTrue(meta["clipboard_restored"])
+        self.assertEqual(clipboard_state["bytes"], b"USER_CLIPBOARD_ORIG")
+        self.assertEqual(pbcopy_history[0], b"")
+        self.assertEqual(pbcopy_history[-1], b"USER_CLIPBOARD_ORIG")
+
+    def test_macos_ax_bridge_find_window_ensure_mode_and_folders_cgevent(self):
+        """_MacOSAXBridge filters phantom AXApplication, toggles mode via AXSelected/AXPress, and binds Folders via non-blocking CGEvent."""
+        with tempfile.TemporaryDirectory() as tmp_ws, tempfile.TemporaryDirectory() as other_ws:
+            target_ws = os.path.realpath(tmp_ws)
+            other_dir = os.path.realpath(other_ws)
+
+            def _build_fake_bridge(nodes: dict[int, dict[str, Any]], on_cgevent_click=None):
+                bridge = dw._MacOSAXBridge.__new__(dw._MacOSAXBridge)
+                handles: dict[int, tuple[str, Any]] = {}
+                next_id = [9000]
+                press_calls: list[tuple[int, str]] = []
+                mouse_posts: list[tuple[int, float, float]] = []
+                key_posts: list[tuple[int, int, bool]] = []
+                event_meta: dict[int, dict[str, Any]] = {}
+
+                def alloc(kind: str, val: Any) -> int:
+                    next_id[0] += 1
+                    hid = next_id[0]
+                    handles[hid] = (kind, val)
+                    return hid
+
+                attr_names = (
+                    "AXWindows",
+                    "AXChildren",
+                    "AXRole",
+                    "AXSubrole",
+                    "AXIdentifier",
+                    "AXDescription",
+                    "AXTitle",
+                    "AXValue",
+                    "AXFocused",
+                    "AXEnabled",
+                    "AXSelected",
+                    "AXPosition",
+                    "AXSize",
+                    "AXFrontmost",
+                    "AXSheets",
+                    "AXPress",
+                )
+                bridge._attrs = {name: alloc("attr", name) for name in attr_names}
+                bridge._k_true = alloc("bool", True)
+
+                class FakeCF:
+                    def CFGetTypeID(self, ref: int) -> int:
+                        kind, _ = handles.get(ref, ("", None))
+                        return {"str": 1, "arr": 2, "bool": 3}.get(kind, 0)
+
+                    def CFStringGetTypeID(self) -> int:
+                        return 1
+
+                    def CFArrayGetTypeID(self) -> int:
+                        return 2
+
+                    def CFBooleanGetTypeID(self) -> int:
+                        return 3
+
+                    def CFStringCreateWithCString(self, _alloc, raw_bytes: bytes, _enc: int) -> int:
+                        return alloc("str", raw_bytes.decode("utf-8"))
+
+                    def CFStringGetLength(self, ref: int) -> int:
+                        _, val = handles[ref]
+                        return len(val)
+
+                    def CFStringGetMaximumSizeForEncoding(self, length: int, _enc: int) -> int:
+                        return length * 4 + 1
+
+                    def CFStringGetCString(self, ref: int, buf, max_bytes: int, _enc: int) -> bool:
+                        _, val = handles[ref]
+                        raw = val.encode("utf-8")[: max_bytes - 1]
+                        buf[0 : len(raw) + 1] = raw + b"\x00"
+                        return True
+
+                    def CFBooleanGetValue(self, ref: int) -> bool:
+                        _, val = handles[ref]
+                        return bool(val)
+
+                    def CFArrayGetCount(self, ref: int) -> int:
+                        _, val = handles[ref]
+                        return len(val)
+
+                    def CFArrayGetValueAtIndex(self, ref: int, idx: int) -> int:
+                        _, val = handles[ref]
+                        return int(val[idx])
+
+                    def CFRetain(self, ref: int) -> int:
+                        return ref
+
+                    def CFRelease(self, _ref: int) -> None:
+                        return None
+
+                class FakeAX:
+                    def AXUIElementCreateApplication(self, _pid: int) -> int:
+                        return 100
+
+                    def AXUIElementSetMessagingTimeout(self, _app_el: int, _timeout: float) -> int:
+                        return 0
+
+                    def AXUIElementCopyAttributeValue(self, el: int, attr_ref: int, out_ref) -> int:
+                        _, attr_name = handles[attr_ref]
+                        node = nodes.get(el, {})
+                        if attr_name not in node:
+                            return -25212
+                        val = node[attr_name]
+                        if isinstance(val, bool):
+                            out_ref._obj.value = alloc("bool", val)
+                        elif isinstance(val, str):
+                            out_ref._obj.value = alloc("str", val)
+                        elif isinstance(val, list):
+                            out_ref._obj.value = alloc("arr", val)
+                        elif isinstance(val, tuple) and len(val) == 2:
+                            out_ref._obj.value = alloc(
+                                "pos" if attr_name == "AXPosition" else "size", val
+                            )
+                        else:
+                            return -25212
+                        return 0
+
+                    def AXUIElementSetAttributeValue(self, el: int, attr_ref: int, val_ref: int) -> int:
+                        _, attr_name = handles[attr_ref]
+                        if attr_name == "AXFrontmost":
+                            return 0
+                        kind, val = handles.get(val_ref, ("", None))
+                        if el in nodes and kind in ("str", "bool"):
+                            nodes[el][attr_name] = val
+                        return 0
+
+                    def AXUIElementPerformAction(self, el: int, action_ref: int) -> int:
+                        _, act_name = handles[action_ref]
+                        press_calls.append((el, act_name))
+                        node = nodes.get(el, {})
+                        cb = node.get("_on_press")
+                        if callable(cb):
+                            cb(node)
+                        return 0
+
+                    def AXValueGetValue(self, ref: int, val_type: int, out_struct) -> bool:
+                        kind, val = handles.get(ref, ("", None))
+                        if val_type == 1 and kind == "pos":
+                            out_struct._obj.x = float(val[0])
+                            out_struct._obj.y = float(val[1])
+                            return True
+                        if val_type == 2 and kind == "size":
+                            out_struct._obj.width = float(val[0])
+                            out_struct._obj.height = float(val[1])
+                            return True
+                        return False
+
+                class FakeCG:
+                    def CGEventCreateMouseEvent(self, _src, ev_type: int, pt, _btn: int) -> int:
+                        ev_id = alloc("mouse", (ev_type, float(pt.x), float(pt.y)))
+                        event_meta[ev_id] = {"kind": "mouse", "type": ev_type, "x": float(pt.x), "y": float(pt.y)}
+                        return ev_id
+
+                    def CGEventCreateKeyboardEvent(self, _src, keycode: int, key_down: bool) -> int:
+                        ev_id = alloc("key", (int(keycode), bool(key_down)))
+                        event_meta[ev_id] = {"kind": "key", "keycode": int(keycode), "down": bool(key_down), "flags": 0}
+                        return ev_id
+
+                    def CGEventSetFlags(self, ev_id: int, flags: int) -> None:
+                        if ev_id in event_meta:
+                            event_meta[ev_id]["flags"] = int(flags)
+
+                    def CGEventPost(self, _tap: int, ev_id: int) -> None:
+                        meta = event_meta.get(ev_id)
+                        if not meta:
+                            return
+                        if meta["kind"] == "mouse":
+                            mouse_posts.append((meta["type"], meta["x"], meta["y"]))
+                            if meta["type"] == dw._MacOSAXBridge._K_CG_EVENT_LEFT_MOUSE_UP and callable(on_cgevent_click):
+                                on_cgevent_click(meta["x"], meta["y"])
+                        elif meta["kind"] == "key" and meta["down"]:
+                            key_posts.append((meta["keycode"], meta["flags"], meta["down"]))
+
+                bridge.cf = FakeCF()
+                bridge.ax = FakeAX()
+                bridge.cg = FakeCG()
+                return bridge, press_calls, mouse_posts, key_posts
+
+            # 1. Phantom AXApplication element in AXWindows must be ignored; AXWindow returned
+            nodes_phantom = {
+                100: {"AXWindows": [200, 201]},
+                200: {"AXRole": "AXApplication", "AXSubrole": "AXStandardWindow", "AXTitle": "Phantom"},
+                201: {"AXRole": "AXWindow", "AXSubrole": "AXStandardWindow", "AXTitle": "Gemini"},
+            }
+            br_ph, _, _, _ = _build_fake_bridge(nodes_phantom)
+            self.assertEqual(br_ph._find_window(100), 201)
+
+            nodes_only_phantom = {
+                100: {"AXWindows": [200]},
+                200: {"AXRole": "AXApplication", "AXSubrole": "AXStandardWindow", "AXTitle": "Phantom"},
+            }
+            br_none, _, _, _ = _build_fake_bridge(nodes_only_phantom)
+            self.assertIsNone(br_none._find_window(100))
+
+            # 2. _ensure_mode("task"): presses chat-input-mode-assign when AXSelected=False; skips when True
+            def _activate_task(node):
+                node["AXSelected"] = True
+                nodes_mode[302]["AXDescription"] = "Assign a task"
+
+            nodes_mode = {
+                100: {"AXWindows": [201]},
+                201: {"AXRole": "AXWindow", "AXSubrole": "AXStandardWindow", "AXChildren": [301, 302]},
+                301: {
+                    "AXRole": "AXButton",
+                    "AXIdentifier": "chat-input-mode-assign",
+                    "AXDescription": "Task",
+                    "AXSelected": False,
+                    "_on_press": _activate_task,
+                },
+                302: {"AXRole": "AXTextArea", "AXDescription": "Ask Gemini", "AXValue": ""},
+            }
+            br_mode, press_calls_mode, _, key_posts_mode = _build_fake_bridge(nodes_mode)
+            with mock.patch("desktop_worker.time.sleep", return_value=None):
+                self.assertTrue(br_mode._ensure_mode(4242, 201, "task"))
+            self.assertEqual(press_calls_mode, [(301, "AXPress")])
+            self.assertEqual(key_posts_mode, [])
+
+            # When already AXSelected=True, _ensure_mode skips AXPress completely
+            press_calls_mode.clear()
+            with mock.patch("desktop_worker.time.sleep", return_value=None):
+                self.assertTrue(br_mode._ensure_mode(4242, 201, "task"))
+            self.assertEqual(press_calls_mode, [])
+
+            # 3a. _attach_workspace_folder: non-blocking CGEvent on Folders -> matching AXMenuItem
+            menu_open = {"active": False, "selected_item": None}
+
+            def _on_click_match(x: float, y: float) -> None:
+                # Folders button center is (100+40/2, 200+20/2) = (120.0, 210.0)
+                if abs(x - 120.0) < 5.0 and abs(y - 210.0) < 5.0:
+                    menu_open["active"] = True
+                    nodes_attach[201]["AXChildren"] = [401, 500]
+                # Matching AXMenuItem center is (120+80/2, 250+20/2) = (160.0, 260.0)
+                elif abs(x - 160.0) < 5.0 and abs(y - 260.0) < 5.0:
+                    menu_open["selected_item"] = 501
+
+            nodes_attach = {
+                100: {"AXWindows": [201]},
+                201: {"AXRole": "AXWindow", "AXSubrole": "AXStandardWindow", "AXChildren": [401]},
+                401: {
+                    "AXRole": "AXButton",
+                    "AXDescription": "Folders",
+                    "AXTitle": "Folders",
+                    "AXPosition": (100.0, 200.0),
+                    "AXSize": (40.0, 20.0),
+                },
+                500: {"AXRole": "AXMenu", "AXChildren": [501, 502]},
+                501: {
+                    "AXRole": "AXMenuItem",
+                    "AXTitle": target_ws,
+                    "AXPosition": (120.0, 250.0),
+                    "AXSize": (80.0, 20.0),
+                },
+                502: {
+                    "AXRole": "AXMenuItem",
+                    "AXIdentifier": "performAction",
+                    "AXTitle": "Add new folder…",
+                    "AXPosition": (120.0, 280.0),
+                    "AXSize": (80.0, 20.0),
+                },
+            }
+            br_attach, press_calls_attach, mouse_posts_attach, _ = _build_fake_bridge(
+                nodes_attach, on_cgevent_click=_on_click_match
+            )
+            with mock.patch("desktop_worker.time.sleep", return_value=None):
+                attached = br_attach._attach_workspace_folder(4242, 201, target_ws, restore_clipboard=True)
+            self.assertTrue(attached)
+            self.assertTrue(menu_open["active"])
+            self.assertEqual(menu_open["selected_item"], 501)
+            # CRITICAL: Folders button (401) must NEVER receive synchronous AXPress
+            self.assertNotIn((401, "AXPress"), press_calls_attach)
+            self.assertTrue(any(abs(x - 120.0) < 1.0 and abs(y - 210.0) < 1.0 for _, x, y in mouse_posts_attach))
+
+            # 3a-ii. Scroll-container wrapper AXMenuItem (ConnectedFolderScrollMenuItem) must be skipped
+            # so the leaf folder AXMenuItem (501) is clicked instead of the container (550).
+            container_selected = {"target": None}
+
+            def _on_click_scroll(x: float, y: float) -> None:
+                if abs(x - 120.0) < 5.0 and abs(y - 210.0) < 5.0:
+                    nodes_scroll[201]["AXChildren"] = [401, 500]
+                elif abs(x - 160.0) < 5.0 and abs(y - 245.0) < 5.0:
+                    container_selected["target"] = 501
+                elif abs(x - 160.0) < 5.0 and abs(y - 265.0) < 5.0:
+                    container_selected["target"] = 550  # container midpoint -> wrong sibling!
+
+            nodes_scroll = {
+                100: {"AXWindows": [201]},
+                201: {"AXRole": "AXWindow", "AXSubrole": "AXStandardWindow", "AXChildren": [401]},
+                401: {
+                    "AXRole": "AXButton",
+                    "AXDescription": "Folders",
+                    "AXTitle": "Folders",
+                    "AXPosition": (100.0, 200.0),
+                    "AXSize": (40.0, 20.0),
+                },
+                500: {"AXRole": "AXMenu", "AXChildren": [550, 502]},
+                550: {
+                    "AXRole": "AXMenuItem",
+                    "AXChildren": [551],
+                    "AXPosition": (120.0, 235.0),
+                    "AXSize": (80.0, 60.0),
+                },
+                551: {
+                    "AXRole": "AXScrollArea",
+                    "AXChildren": [501, 503],
+                },
+                501: {
+                    "AXRole": "AXMenuItem",
+                    "AXTitle": "target_ws",
+                    "AXValue": target_ws,
+                    "AXPosition": (120.0, 235.0),
+                    "AXSize": (80.0, 20.0),
+                },
+                503: {
+                    "AXRole": "AXMenuItem",
+                    "AXTitle": "other-repo",
+                    "AXValue": "/tmp/other-repo",
+                    "AXPosition": (120.0, 275.0),
+                    "AXSize": (80.0, 20.0),
+                },
+                502: {
+                    "AXRole": "AXMenuItem",
+                    "AXIdentifier": "performAction",
+                    "AXTitle": "Add new folder…",
+                    "AXPosition": (120.0, 305.0),
+                    "AXSize": (80.0, 20.0),
+                },
+            }
+            br_scroll, _, _, _ = _build_fake_bridge(nodes_scroll, on_cgevent_click=_on_click_scroll)
+            with mock.patch("desktop_worker.time.sleep", return_value=None):
+                self.assertTrue(br_scroll._attach_workspace_folder(4242, 201, target_ws, restore_clipboard=True))
+            self.assertEqual(container_selected["target"], 501)
+
+            # 3b. _attach_workspace_folder: Add new folder… fallback when target_ws absent from popup
+            add_new_clicked = {"hit": False}
+            clip_state = {"bytes": b"ORIG_CLIP_SAFE"}
+            pbcopy_seq: list[bytes] = []
+
+            def _on_click_fallback(x: float, y: float) -> None:
+                if abs(x - 120.0) < 5.0 and abs(y - 210.0) < 5.0:
+                    nodes_fb[201]["AXChildren"] = [401, 500]
+                elif abs(x - 160.0) < 5.0 and abs(y - 290.0) < 5.0:
+                    add_new_clicked["hit"] = True
+                    nodes_fb[201]["AXSheets"] = [600]
+
+            nodes_fb = {
+                100: {"AXWindows": [201]},
+                201: {"AXRole": "AXWindow", "AXSubrole": "AXStandardWindow", "AXChildren": [401], "AXSheets": []},
+                401: {
+                    "AXRole": "AXButton",
+                    "AXDescription": "Folders",
+                    "AXPosition": (100.0, 200.0),
+                    "AXSize": (40.0, 20.0),
+                },
+                500: {"AXRole": "AXMenu", "AXChildren": [501, 502]},
+                501: {
+                    "AXRole": "AXMenuItem",
+                    "AXTitle": other_dir,
+                    "AXPosition": (120.0, 250.0),
+                    "AXSize": (80.0, 20.0),
+                },
+                502: {
+                    "AXRole": "AXMenuItem",
+                    "AXIdentifier": "performAction",
+                    "AXTitle": "Add new folder…",
+                    "AXPosition": (120.0, 280.0),
+                    "AXSize": (80.0, 20.0),
+                },
+                600: {"AXRole": "AXSheet", "AXChildren": []},
+            }
+            br_fb, press_calls_fb, _, key_posts_fb = _build_fake_bridge(
+                nodes_fb, on_cgevent_click=_on_click_fallback
+            )
+
+            def _fake_fb_pbpaste() -> bytes:
+                return clip_state["bytes"]
+
+            def _fake_fb_pbcopy(data: bytes) -> bool:
+                pbcopy_seq.append(data)
+                clip_state["bytes"] = data
+                return True
+
+            with mock.patch.object(br_fb, "_pbpaste_bytes", side_effect=_fake_fb_pbpaste), \
+                 mock.patch.object(br_fb, "_pbcopy_bytes", side_effect=_fake_fb_pbcopy), \
+                 mock.patch("desktop_worker.time.sleep", return_value=None):
+                fb_ok = br_fb._attach_workspace_folder(4242, 201, target_ws, restore_clipboard=True, background=False)
+            self.assertTrue(fb_ok)
+            self.assertTrue(add_new_clicked["hit"])
+            self.assertNotIn((401, "AXPress"), press_calls_fb)
+            # Cmd+Shift+G, Cmd+V, Return, Return
+            cmd_shift = dw._MacOSAXBridge._K_CG_EVENT_FLAG_COMMAND | dw._MacOSAXBridge._K_CG_EVENT_FLAG_SHIFT
+            self.assertIn((dw._MacOSAXBridge._KVK_ANSI_G, cmd_shift, True), key_posts_fb)
+            self.assertIn((dw._MacOSAXBridge._KVK_ANSI_V, dw._MacOSAXBridge._K_CG_EVENT_FLAG_COMMAND, True), key_posts_fb)
+            self.assertGreaterEqual(
+                sum(1 for kc, _, _ in key_posts_fb if kc == dw._MacOSAXBridge._KVK_RETURN),
+                2,
+            )
+            self.assertEqual(pbcopy_seq[0], target_ws.encode("utf-8"))
+            self.assertEqual(clip_state["bytes"], b"ORIG_CLIP_SAFE")
+
+            # 4. MacOSGeminiDriver._execute_via_native_ax sets workspace_attached=True when attach succeeds
+            drv = MacOSGeminiDriver()
+            job_id = "dsk-task-ws-01"
+            req = DesktopJobRequest(
+                job_id=job_id,
+                prompt="Inspect workspace",
+                driver="macos_ax",
+                mode="task",
+                workspace_path=target_ws,
+                timeout_sec=10,
+                poll_interval_ms=50,
+                background=False,
+            )
+            framed = build_sentinel_prompt(job_id, req.prompt, mode="task", workspace_path=target_ws)
+            done_text = (
+                f"{SentinelEnvelope.start_marker(job_id)}\n"
+                "## Executive Summary\nWorkspace analyzed.\n"
+                f"{SentinelEnvelope.done_marker(job_id)}"
+            )
+
+            class FakeTaskAX:
+                def __init__(self) -> None:
+                    self.mode_called: str | None = None
+                    self.attached_ws: str | None = None
+
+                def has_window(self, pid: int) -> bool:
+                    return True
+
+                def ensure_mode(self, pid: int, mode: str) -> bool:
+                    self.mode_called = mode
+                    return True
+
+                def attach_workspace_folder(self, pid: int, ws: str, restore_clipboard: bool = True) -> bool:
+                    self.attached_ws = ws
+                    return True
+
+                def write_prompt_and_submit(self, pid: int, text: str) -> tuple[bool, bool]:
+                    return True, True
+
+                def poll_chat(self, pid: int) -> dict[str, Any]:
+                    return {"has_window": True, "busy": False, "text": done_text, "has_copy_button": False}
+
+            fake_task_ax = FakeTaskAX()
+            tick = [0.0]
+
+            def _fake_mono() -> float:
+                tick[0] += 0.6
+                return tick[0]
+
+            with mock.patch.object(MacOSGeminiDriver, "_check_screen_locked", return_value="unlocked"), \
+                 mock.patch.object(MacOSGeminiDriver, "_check_accessibility", return_value="granted"), \
+                 mock.patch.object(
+                     drv,
+                     "discover_app",
+                     return_value={
+                         "app_detected": True,
+                         "app_name": "Gemini",
+                         "app_path": "/Applications/Gemini.app",
+                         "bundle_id": "com.google.GeminiMacOS",
+                         "app_version": "2.0",
+                         "app_running": True,
+                     },
+                 ), \
+                 mock.patch.object(MacOSGeminiDriver, "_check_orca", return_value=None), \
+                 mock.patch.object(MacOSGeminiDriver, "_find_running_pid", return_value=4242), \
+                 mock.patch.object(dw._MacOSAXBridge, "get_instance", return_value=fake_task_ax), \
+                 mock.patch.object(MacOSGeminiDriver, "_pbpaste_bytes", return_value=b"ORIG"), \
+                 mock.patch.object(MacOSGeminiDriver, "_pbcopy_bytes", return_value=True), \
+                 mock.patch("desktop_worker.subprocess.run") as mock_sub, \
+                 mock.patch("desktop_worker.time.sleep", return_value=None), \
+                 mock.patch("desktop_worker.time.monotonic", side_effect=_fake_mono):
+                mock_sub.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+                _, meta = drv.execute_prompt(framed, job_id, req, threading.Event())
+
+            self.assertEqual(fake_task_ax.mode_called, "task")
+            self.assertEqual(fake_task_ax.attached_ws, target_ws)
+            self.assertEqual(meta["mode"], "task")
+            self.assertEqual(meta["workspace_path"], target_ws)
+            self.assertTrue(meta["workspace_attached"])
+
+    def test_macos_confirmation_card_fast_fail(self):
+        """Confirmation/elicitation AX cards (ActionCardRemyConfirmationCard / AgentWaitingForInputRow) trigger immediate fast-fail."""
+        # 1. Verify _MacOSAXBridge.poll_chat detects both card identifiers
+        for card_ident in ("ActionCardRemyConfirmationCard", "AgentWaitingForInputRow"):
+            bridge = dw._MacOSAXBridge.__new__(dw._MacOSAXBridge)
+            handles: dict[int, tuple[str, Any]] = {}
+            next_id = [8000]
+
+            def _alloc(kind: str, val: Any) -> int:
+                next_id[0] += 1
+                handles[next_id[0]] = (kind, val)
+                return next_id[0]
+
+            bridge._attrs = {
+                name: _alloc("attr", name)
+                for name in ("AXWindows", "AXChildren", "AXRole", "AXSubrole", "AXIdentifier", "AXDescription", "AXTitle", "AXValue")
+            }
+            bridge._k_true = _alloc("bool", True)
+            nodes = {
+                100: {"AXWindows": [201]},
+                201: {"AXRole": "AXWindow", "AXSubrole": "AXStandardWindow", "AXChildren": [301]},
+                301: {"AXRole": "AXGroup", "AXIdentifier": f"prefix_{card_ident}_suffix", "AXChildren": []},
+            }
+
+            class _CF:
+                def CFGetTypeID(self, ref: int) -> int:
+                    return {"str": 1, "arr": 2}.get(handles.get(ref, ("", None))[0], 0)
+
+                def CFStringGetTypeID(self) -> int:
+                    return 1
+
+                def CFArrayGetTypeID(self) -> int:
+                    return 2
+
+                def CFBooleanGetTypeID(self) -> int:
+                    return 3
+
+                def CFStringGetLength(self, ref: int) -> int:
+                    return len(handles[ref][1])
+
+                def CFStringGetMaximumSizeForEncoding(self, length: int, _enc: int) -> int:
+                    return length * 4 + 1
+
+                def CFStringGetCString(self, ref: int, buf, max_bytes: int, _enc: int) -> bool:
+                    raw = handles[ref][1].encode("utf-8")[: max_bytes - 1]
+                    buf[0 : len(raw) + 1] = raw + b"\x00"
+                    return True
+
+                def CFArrayGetCount(self, ref: int) -> int:
+                    return len(handles[ref][1])
+
+                def CFArrayGetValueAtIndex(self, ref: int, idx: int) -> int:
+                    return int(handles[ref][1][idx])
+
+                def CFRetain(self, ref: int) -> int:
+                    return ref
+
+                def CFRelease(self, _ref: int) -> None:
+                    return None
+
+            class _AX:
+                def AXUIElementCreateApplication(self, _pid: int) -> int:
+                    return 100
+
+                def AXUIElementSetMessagingTimeout(self, _app: int, _t: float) -> int:
+                    return 0
+
+                def AXUIElementCopyAttributeValue(self, el: int, attr_ref: int, out_ref) -> int:
+                    attr_name = handles[attr_ref][1]
+                    node = nodes.get(el, {})
+                    if attr_name not in node:
+                        return -25212
+                    val = node[attr_name]
+                    out_ref._obj.value = _alloc("str" if isinstance(val, str) else "arr", val)
+                    return 0
+
+            bridge.cf = _CF()
+            bridge.ax = _AX()
+            bridge.cg = None
+            polled = bridge.poll_chat(4242)
+            self.assertTrue(polled["has_window"])
+            self.assertEqual(polled["confirmation_card"], card_ident)
+
+        # 1b. Verify poll_chat prefers AXDescription when SwiftUI strips sentinel tags in AXValue ('<<>>')
+        nodes["dummy_unused"] = {}
+        nodes.clear()
+        nodes.update({
+            100: {"AXWindows": [201]},
+            201: {"AXRole": "AXWindow", "AXSubrole": "AXStandardWindow", "AXChildren": [301]},
+            301: {
+                "AXRole": "AXStaticText",
+                "AXValue": "<<>>\nExecutive Summary\nAll good.\n<<>>",
+                "AXDescription": (
+                    "<<<AGY_DESKTOP_START:dsk-desc-01>>>\n"
+                    "## Executive Summary\nAll good.\n"
+                    "<<<AGY_DESKTOP_DONE:dsk-desc-01>>>"
+                ),
+            },
+        })
+        polled_desc = bridge.poll_chat(4242)
+        self.assertTrue(SentinelEnvelope.has_complete_sentinel(polled_desc["text"], "dsk-desc-01"))
+
+        # 1c. Verify poll_chat extracts Task-mode AXButton ('copy-button-copy-button') AXDescription verbatim
+        nodes.clear()
+        nodes.update({
+            100: {"AXWindows": [201]},
+            201: {"AXRole": "AXWindow", "AXSubrole": "AXStandardWindow", "AXChildren": [301, 302, 303, 304]},
+            301: {
+                "AXRole": "AXHeading",
+                "AXIdentifier": "userMessage.expandButton-userMessage.expandButton",
+                "AXDescription": "[AGY_DESKTOP_WORKER_TASK job_id=dsk-task-btn-01]\nPrompt text",
+            },
+            302: {
+                "AXRole": "AXButton",
+                "AXDescription": "Analyzed repository structure.",
+                "AXValue": "Collapsed",
+            },
+            303: {
+                "AXRole": "AXButton",
+                "AXIdentifier": "copy-button-copy-button",
+                "AXValue": "<<>>\nExecutive Summary\nTask mode works.\n<<>>",
+                "AXDescription": (
+                    "<<<AGY_DESKTOP_START:dsk-task-btn-01>>>\n"
+                    "## Executive Summary\nTask mode works.\n"
+                    "<<<AGY_DESKTOP_DONE:dsk-task-btn-01>>>"
+                ),
+            },
+            304: {
+                "AXRole": "AXButton",
+                "AXIdentifier": "copy-button",
+                "AXDescription": "Copy response",
+            },
+        })
+        polled_task_btn = bridge.poll_chat(4242)
+        self.assertTrue(polled_task_btn["has_copy_button"])
+        self.assertTrue(SentinelEnvelope.has_complete_sentinel(polled_task_btn["text"], "dsk-task-btn-01"))
+        self.assertNotIn("Prompt text", polled_task_btn["text"])
+        self.assertNotIn("Analyzed repository structure", polled_task_btn["text"])
+
+        # 2. Verify MacOSGeminiDriver fast-fails on first poll without hanging until timeout_sec
+        drv = MacOSGeminiDriver()
+        req = DesktopJobRequest(
+            job_id="dsk-confirm-fastfail",
+            prompt="Run read-only check",
+            driver="macos_ax",
+            mode="task",
+            timeout_sec=180,
+            poll_interval_ms=50,
+        )
+
+        class ConfirmAX:
+            def __init__(self) -> None:
+                self.poll_calls = 0
+
+            def has_window(self, _pid: int) -> bool:
+                return True
+
+            def ensure_mode(self, _pid: int, _mode: str) -> bool:
+                return True
+
+            def write_prompt_and_submit(self, _pid: int, _text: str) -> tuple[bool, bool]:
+                return True, True
+
+            def poll_chat(self, _pid: int) -> dict[str, Any]:
+                self.poll_calls += 1
+                return {
+                    "has_window": True,
+                    "busy": False,
+                    "text": "",
+                    "has_copy_button": False,
+                    "confirmation_card": "ActionCardRemyConfirmationCard",
+                }
+
+        confirm_ax = ConfirmAX()
+        with mock.patch.object(MacOSGeminiDriver, "_check_screen_locked", return_value="unlocked"), \
+             mock.patch.object(MacOSGeminiDriver, "_check_accessibility", return_value="granted"), \
+             mock.patch.object(
+                 drv,
+                 "discover_app",
+                 return_value={
+                     "app_detected": True,
+                     "app_name": "Gemini",
+                     "app_path": "/Applications/Gemini.app",
+                     "bundle_id": "com.google.GeminiMacOS",
+                     "app_version": "2.0",
+                     "app_running": True,
+                 },
+             ), \
+             mock.patch.object(MacOSGeminiDriver, "_check_orca", return_value=None), \
+             mock.patch.object(MacOSGeminiDriver, "_find_running_pid", return_value=4242), \
+             mock.patch.object(dw._MacOSAXBridge, "get_instance", return_value=confirm_ax), \
+             mock.patch.object(MacOSGeminiDriver, "_pbpaste_bytes", return_value=b"ORIG"), \
+             mock.patch.object(MacOSGeminiDriver, "_pbcopy_bytes", return_value=True), \
+             mock.patch("desktop_worker.subprocess.run") as mock_sub, \
+             mock.patch("desktop_worker.time.sleep", return_value=None):
+            mock_sub.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+            with self.assertRaises(RuntimeError) as ctx:
+                drv.execute_prompt(build_sentinel_prompt(req.job_id, req.prompt), req.job_id, req, threading.Event())
+
+        self.assertEqual(confirm_ax.poll_calls, 1)
+        self.assertIn("ActionCardRemyConfirmationCard", str(ctx.exception))
+        self.assertIn("aborted instead of hanging until timeout", str(ctx.exception))
+
+    def test_macos_background_mode_daemon_axpress_zero_clipboard_and_diag_log_tail(self):
+        """Default background=True uses daemon AXPress (0 CGEvent), 0 clipboard touches, diagnostic.log tailing, and prev_pid restore."""
+        with tempfile.TemporaryDirectory() as tmp_ws, tempfile.TemporaryDirectory() as tmp_logs, tempfile.TemporaryDirectory() as tmp_app:
+            target_ws = os.path.realpath(tmp_ws)
+            fake_app = Path(tmp_app) / "Gemini.app"
+            (fake_app / "Contents").mkdir(parents=True)
+            diag_log = Path(tmp_logs) / "diagnostic-2026-11-17.log"
+            diag_log.write_text("2026-11-17T00:00:00Z boot\n", encoding="utf-8")
+
+            # 1. _MacOSAXBridge._attach_workspace_folder(..., background=True) spawns daemon AXPress, 0 CGEvent mouse calls
+            bridge = dw._MacOSAXBridge.__new__(dw._MacOSAXBridge)
+            handles: dict[int, tuple[str, Any]] = {}
+            next_id = [7000]
+            axpress_threads: list[tuple[int, str, bool]] = []
+            mouse_posts: list[Any] = []
+            main_ident = threading.get_ident()
+
+            def _alloc(kind: str, val: Any) -> int:
+                next_id[0] += 1
+                handles[next_id[0]] = (kind, val)
+                return next_id[0]
+
+            bridge._attrs = {
+                name: _alloc("attr", name)
+                for name in (
+                    "AXWindows",
+                    "AXChildren",
+                    "AXRole",
+                    "AXSubrole",
+                    "AXIdentifier",
+                    "AXDescription",
+                    "AXTitle",
+                    "AXValue",
+                    "AXSelected",
+                    "AXPress",
+                    "AXCancel",
+                )
+            }
+            bridge._k_true = _alloc("bool", True)
+
+            nodes: dict[int, dict[str, Any]] = {
+                100: {"AXWindows": [201]},
+                201: {"AXRole": "AXWindow", "AXSubrole": "AXStandardWindow", "AXChildren": [401]},
+                401: {"AXRole": "AXButton", "AXDescription": "Folders", "AXTitle": "Folders"},
+                500: {"AXRole": "AXMenu", "AXChildren": [501, 502]},
+                501: {"AXRole": "AXMenuItem", "AXTitle": target_ws},
+                502: {"AXRole": "AXMenuItem", "AXIdentifier": "performAction", "AXTitle": "Add new folder…"},
+            }
+
+            class _BgCF:
+                def CFGetTypeID(self, ref: int) -> int:
+                    return {"str": 1, "arr": 2, "bool": 3}.get(handles.get(ref, ("", None))[0], 0)
+
+                def CFStringGetTypeID(self) -> int:
+                    return 1
+
+                def CFArrayGetTypeID(self) -> int:
+                    return 2
+
+                def CFBooleanGetTypeID(self) -> int:
+                    return 3
+
+                def CFStringCreateWithCString(self, _a, raw_bytes: bytes, _e: int) -> int:
+                    return _alloc("str", raw_bytes.decode("utf-8"))
+
+                def CFStringGetLength(self, ref: int) -> int:
+                    return len(handles[ref][1])
+
+                def CFStringGetMaximumSizeForEncoding(self, length: int, _e: int) -> int:
+                    return length * 4 + 1
+
+                def CFStringGetCString(self, ref: int, buf, max_bytes: int, _e: int) -> bool:
+                    raw = handles[ref][1].encode("utf-8")[: max_bytes - 1]
+                    buf[0 : len(raw) + 1] = raw + b"\x00"
+                    return True
+
+                def CFBooleanGetValue(self, ref: int) -> bool:
+                    return bool(handles[ref][1])
+
+                def CFArrayGetCount(self, ref: int) -> int:
+                    return len(handles[ref][1])
+
+                def CFArrayGetValueAtIndex(self, ref: int, idx: int) -> int:
+                    return int(handles[ref][1][idx])
+
+                def CFRetain(self, ref: int) -> int:
+                    return ref
+
+                def CFRelease(self, _ref: int) -> None:
+                    return None
+
+            class _BgAX:
+                def AXUIElementCreateApplication(self, _pid: int) -> int:
+                    return 100
+
+                def AXUIElementSetMessagingTimeout(self, _app: int, _t: float) -> int:
+                    return 0
+
+                def AXUIElementCopyAttributeValue(self, el: int, attr_ref: int, out_ref) -> int:
+                    attr_name = handles[attr_ref][1]
+                    node = nodes.get(el, {})
+                    if attr_name not in node:
+                        return -25212
+                    val = node[attr_name]
+                    kind = "bool" if isinstance(val, bool) else ("str" if isinstance(val, str) else "arr")
+                    out_ref._obj.value = _alloc(kind, val)
+                    return 0
+
+                def AXUIElementPerformAction(self, el: int, action_ref: int) -> int:
+                    act_name = handles[action_ref][1]
+                    cur_t = threading.current_thread()
+                    axpress_threads.append((el, act_name, cur_t.daemon and cur_t.ident != main_ident))
+                    if el == 401 and act_name == "AXPress":
+                        nodes[201]["AXChildren"] = [401, 500]
+                    elif el == 501 and act_name == "AXPress":
+                        nodes[201]["AXChildren"] = [401, 505]
+                        nodes[505] = {"AXRole": "AXGroup", "AXIdentifier": "ConnectedFolderInputChip", "AXTitle": target_ws}
+                    return 0
+
+            class _BgCG:
+                def CGEventCreateMouseEvent(self, *_a) -> int:
+                    mouse_posts.append(_a)
+                    return _alloc("mouse", _a)
+
+                def CGEventPost(self, *_a) -> None:
+                    mouse_posts.append(_a)
+
+            bridge.cf = _BgCF()
+            bridge.ax = _BgAX()
+            bridge.cg = _BgCG()
+
+            ok = bridge._attach_workspace_folder(4242, 201, target_ws, restore_clipboard=False, background=True)
+            self.assertTrue(ok)
+            self.assertEqual(mouse_posts, [])
+            self.assertIn((401, "AXPress", True), axpress_threads)
+            self.assertTrue(any(el == 501 and act == "AXPress" for el, act, _ in axpress_threads))
+
+            # 2. Full MacOSGeminiDriver silent background flow: default background=True, diag log tail, 0 pbcopy/pbpaste, prev_pid restore
+            drv = MacOSGeminiDriver()
+            job_id = "dsk-bg-silent-01"
+            req = DesktopJobRequest(
+                job_id=job_id,
+                prompt="Analyze silently",
+                driver="macos_ax",
+                mode="task",
+                workspace_path=target_ws,
+                timeout_sec=15,
+            )
+            self.assertTrue(req.background)
+            framed = build_sentinel_prompt(job_id, req.prompt, mode="task", workspace_path=target_ws)
+            expected_md = (
+                f"{SentinelEnvelope.start_marker(job_id)}\n"
+                "## Executive Summary\nSilent background extraction via AXStaticText.AXDescription.\n"
+                f"{SentinelEnvelope.done_marker(job_id)}"
+            )
+
+            class SilentBGBridge:
+                def __init__(self) -> None:
+                    self.frontmost_calls: list[int] = []
+                    self.phase = "dispatch"
+                    self.wait_polls = 0
+                    self.attached_bg: bool | None = None
+                    self._window_visible = False
+
+                def has_window(self, pid: int) -> bool:
+                    return self._window_visible
+
+                def _bring_frontmost(self, pid: int) -> None:
+                    self.frontmost_calls.append(pid)
+                    if pid == 4242:
+                        self._window_visible = True
+
+                def ensure_mode(self, pid: int, mode: str, background: bool = False) -> bool:
+                    return background is True and mode == "task"
+
+                def attach_workspace_folder(
+                    self,
+                    pid: int,
+                    ws: str,
+                    restore_clipboard: bool = True,
+                    background: bool = False,
+                ) -> bool:
+                    self.attached_bg = background
+                    return background is True and ws == target_ws
+
+                def write_prompt_and_submit(self, pid: int, text: str) -> tuple[bool, bool]:
+                    self.phase = "waiting"
+                    self._window_visible = False
+                    return (text == framed, True)
+
+                def poll_chat(self, pid: int) -> dict[str, Any]:
+                    if self.phase == "waiting":
+                        self.wait_polls += 1
+                        if self.wait_polls == 1:
+                            with diag_log.open("a", encoding="utf-8") as fh:
+                                fh.write("addStreamingConversation\n")
+                        elif self.wait_polls >= 2:
+                            with diag_log.open("a", encoding="utf-8") as fh:
+                                fh.write("isMessageTreeCompleted=true\nremoveStreamingConversation()\n")
+                            self.phase = "extract"
+                        return {"has_window": False, "busy": False, "text": "", "confirmation_card": None}
+                    return {
+                        "has_window": self._window_visible,
+                        "busy": False,
+                        "text": expected_md if self._window_visible else "",
+                        "confirmation_card": None,
+                    }
+
+            silent_ax = SilentBGBridge()
+            with mock.patch.dict(os.environ, {"GEMINI_DIAGNOSTIC_LOG_DIR": tmp_logs}, clear=False), \
+                 mock.patch.object(MacOSGeminiDriver, "_check_screen_locked", return_value="unlocked"), \
+                 mock.patch.object(MacOSGeminiDriver, "_check_accessibility", return_value="granted"), \
+                 mock.patch.object(
+                     drv,
+                     "discover_app",
+                     return_value={
+                         "app_detected": True,
+                         "app_name": "Gemini",
+                         "app_path": str(fake_app),
+                         "bundle_id": "com.google.GeminiMacOS",
+                         "app_version": "2.0",
+                         "app_running": True,
+                         "is_pwa": False,
+                     },
+                 ), \
+                 mock.patch.object(MacOSGeminiDriver, "_check_orca", return_value=None), \
+                 mock.patch.object(MacOSGeminiDriver, "_find_running_pid", return_value=4242), \
+                 mock.patch.object(MacOSGeminiDriver, "_get_frontmost_pid", return_value=9999), \
+                 mock.patch.object(dw._MacOSAXBridge, "get_instance", return_value=silent_ax), \
+                 mock.patch.object(MacOSGeminiDriver, "_pbpaste_bytes") as mock_pbpaste, \
+                 mock.patch.object(MacOSGeminiDriver, "_pbcopy_bytes") as mock_pbcopy, \
+                 mock.patch("desktop_worker.subprocess.run") as mock_sub_run, \
+                 mock.patch("desktop_worker.time.sleep", return_value=None):
+                raw_text, meta = drv.execute_prompt(framed, job_id, req, threading.Event())
+
+            mock_pbpaste.assert_not_called()
+            mock_pbcopy.assert_not_called()
+            mock_sub_run.assert_not_called()
+            self.assertTrue(silent_ax.attached_bg)
+            self.assertEqual(raw_text, expected_md)
+            self.assertTrue(meta["background"])
+            self.assertFalse(meta["clipboard_touched"])
+            self.assertTrue(meta["clipboard_restored"])
+            self.assertTrue(meta["workspace_attached"])
+            # prev_pid (9999) restored after dispatch and extraction
+            self.assertIn(9999, silent_ax.frontmost_calls)
+            self.assertEqual(silent_ax.frontmost_calls[-1], 9999)
+
+    def test_macos_background_mode_unbookmarked_workspace_raises_clear_error(self):
+        """Unbookmarked workspace in background=True cancels menu, avoids NSOpenPanel, and raises clear --allow-foreground error."""
+        with tempfile.TemporaryDirectory() as tmp_ws, tempfile.TemporaryDirectory() as other_ws:
+            target_ws = os.path.realpath(tmp_ws)
+            other_dir = os.path.realpath(other_ws)
+
+            bridge = dw._MacOSAXBridge.__new__(dw._MacOSAXBridge)
+            handles: dict[int, tuple[str, Any]] = {}
+            next_id = [6000]
+            actions_called: list[tuple[int, str]] = []
+            key_posts: list[Any] = []
+
+            def _alloc(kind: str, val: Any) -> int:
+                next_id[0] += 1
+                handles[next_id[0]] = (kind, val)
+                return next_id[0]
+
+            bridge._attrs = {
+                name: _alloc("attr", name)
+                for name in ("AXWindows", "AXChildren", "AXRole", "AXSubrole", "AXIdentifier", "AXDescription", "AXTitle", "AXValue", "AXPress", "AXCancel")
+            }
+            bridge._k_true = _alloc("bool", True)
+
+            nodes: dict[int, dict[str, Any]] = {
+                100: {"AXWindows": [201]},
+                201: {"AXRole": "AXWindow", "AXSubrole": "AXStandardWindow", "AXChildren": [401]},
+                401: {"AXRole": "AXButton", "AXDescription": "Folders", "AXTitle": "Folders"},
+                500: {"AXRole": "AXMenu", "AXChildren": [501, 502]},
+                501: {"AXRole": "AXMenuItem", "AXTitle": other_dir},
+                502: {"AXRole": "AXMenuItem", "AXIdentifier": "performAction", "AXTitle": "Add new folder…"},
+            }
+
+            class _CF:
+                def CFGetTypeID(self, ref: int) -> int:
+                    return {"str": 1, "arr": 2}.get(handles.get(ref, ("", None))[0], 0)
+
+                def CFStringGetTypeID(self) -> int:
+                    return 1
+
+                def CFArrayGetTypeID(self) -> int:
+                    return 2
+
+                def CFBooleanGetTypeID(self) -> int:
+                    return 3
+
+                def CFStringCreateWithCString(self, _a, raw_bytes: bytes, _e: int) -> int:
+                    return _alloc("str", raw_bytes.decode("utf-8"))
+
+                def CFStringGetLength(self, ref: int) -> int:
+                    return len(handles[ref][1])
+
+                def CFStringGetMaximumSizeForEncoding(self, length: int, _e: int) -> int:
+                    return length * 4 + 1
+
+                def CFStringGetCString(self, ref: int, buf, max_bytes: int, _e: int) -> bool:
+                    raw = handles[ref][1].encode("utf-8")[: max_bytes - 1]
+                    buf[0 : len(raw) + 1] = raw + b"\x00"
+                    return True
+
+                def CFArrayGetCount(self, ref: int) -> int:
+                    return len(handles[ref][1])
+
+                def CFArrayGetValueAtIndex(self, ref: int, idx: int) -> int:
+                    return int(handles[ref][1][idx])
+
+                def CFRetain(self, ref: int) -> int:
+                    return ref
+
+                def CFRelease(self, _ref: int) -> None:
+                    return None
+
+            class _AX:
+                def AXUIElementCreateApplication(self, _pid: int) -> int:
+                    return 100
+
+                def AXUIElementSetMessagingTimeout(self, _app: int, _t: float) -> int:
+                    return 0
+
+                def AXUIElementCopyAttributeValue(self, el: int, attr_ref: int, out_ref) -> int:
+                    attr_name = handles[attr_ref][1]
+                    node = nodes.get(el, {})
+                    if attr_name not in node:
+                        return -25212
+                    val = node[attr_name]
+                    out_ref._obj.value = _alloc("str" if isinstance(val, str) else "arr", val)
+                    return 0
+
+                def AXUIElementPerformAction(self, el: int, action_ref: int) -> int:
+                    act_name = handles[action_ref][1]
+                    actions_called.append((el, act_name))
+                    if el == 401 and act_name == "AXPress":
+                        nodes[201]["AXChildren"] = [401, 500]
+                    return 0
+
+            class _CG:
+                def CGEventCreateKeyboardEvent(self, *_a) -> int:
+                    key_posts.append(_a)
+                    return 1
+
+                def CGEventPost(self, *_a) -> None:
+                    key_posts.append(_a)
+
+            bridge.cf = _CF()
+            bridge.ax = _AX()
+            bridge.cg = _CG()
+
+            with mock.patch("desktop_worker.time.sleep", return_value=None):
+                with self.assertRaises(RuntimeError) as ctx:
+                    bridge._attach_workspace_folder(4242, 201, target_ws, restore_clipboard=False, background=True)
+
+            self.assertIn("--allow-foreground", str(ctx.exception))
+            self.assertIn("not bookmarked", str(ctx.exception))
+            self.assertIn((500, "AXCancel"), actions_called)
+            self.assertNotIn((502, "AXPress"), actions_called)
+            self.assertEqual(key_posts, [])
+
+    def test_macos_extract_one_shot_background_open_g_fallback_and_post_done_fail_fast(self):
+        """_extract_one_shot_background falls back to open -g -a if AXFrontmost leaves has_window=False, then restores prev_pid."""
+        drv = MacOSGeminiDriver()
+        job_id = "dsk-open-g-01"
+        expected_md = (
+            f"{SentinelEnvelope.start_marker(job_id)}\n"
+            "## Executive Summary\nReopened via open -g -a.\n"
+            f"{SentinelEnvelope.done_marker(job_id)}"
+        )
+
+        class _HiddenWindowBridge:
+            def __init__(self) -> None:
+                self.visible = False
+                self.calls: list[str] = []
+
+            def has_window(self, pid: int) -> bool:
+                return self.visible
+
+            def _bring_frontmost(self, pid: int) -> None:
+                self.calls.append(f"bring:{pid}")
+
+            def _activate_pid(self, pid: int) -> bool:
+                self.calls.append(f"activate:{pid}")
+                return True
+
+            def poll_chat(self, pid: int) -> dict[str, Any]:
+                if not self.visible:
+                    return {"has_window": False, "busy": False, "text": "", "confirmation_card": None}
+                return {"has_window": True, "busy": False, "text": expected_md, "confirmation_card": None}
+
+        ax = _HiddenWindowBridge()
+        sub_cmds: list[list[str]] = []
+
+        def _fake_sub(cmd, **_kwargs):
+            sub_cmds.append(list(cmd))
+            ax.visible = True
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+        with mock.patch.object(MacOSGeminiDriver, "_get_frontmost_pid", return_value=9999), \
+             mock.patch("desktop_worker.subprocess.run", side_effect=_fake_sub) as mock_sub, \
+             mock.patch("desktop_worker.time.sleep", return_value=None):
+            res = drv._extract_one_shot_background(
+                ax_bridge=ax,
+                pid=4242,
+                job_id=job_id,
+                open_bin="/usr/bin/open",
+                app_path="/Applications/Gemini.app",
+            )
+
+        self.assertTrue(mock_sub.called)
+        self.assertEqual(sub_cmds[0], ["/usr/bin/open", "-g", "-a", "/Applications/Gemini.app"])
+        self.assertTrue(res["has_window"])
+        self.assertEqual(res["text"], expected_md)
+        self.assertIn("bring:4242", ax.calls)
+        self.assertEqual(ax.calls[-1], "activate:9999")
+
+        # Post-done fail-fast guard: if saw_done fired and extraction repeatedly returns empty/hidden, do not hang until timeout
+        with tempfile.TemporaryDirectory() as tmp_logs:
+            (Path(tmp_logs) / "diagnostic.log").write_text("addStreamingConversation\n", encoding="utf-8")
+
+            class _AlwaysEmptyBridge(_HiddenWindowBridge):
+                def ensure_mode(self, pid: int, mode: str, background: bool = False) -> bool:
+                    return True
+
+                def write_prompt_and_submit(self, pid: int, text: str) -> tuple[bool, bool]:
+                    return True, True
+
+                def poll_chat(self, pid: int) -> dict[str, Any]:
+                    return {"has_window": True if self.visible else False, "busy": False, "text": "", "confirmation_card": None}
+
+            empty_ax = _AlwaysEmptyBridge()
+            empty_ax.visible = True
+
+            def _wait_returns_done(*, log_state, **_kwargs):
+                log_state["saw_done"] = True
+                return None
+
+            req = DesktopJobRequest(
+                job_id="dsk-post-done-empty",
+                prompt="Check fail-fast",
+                driver="macos_ax",
+                mode="chat",
+                timeout_sec=120,
+            )
+            with mock.patch.dict(os.environ, {"GEMINI_DIAGNOSTIC_LOG_DIR": tmp_logs}, clear=False), \
+                 mock.patch.object(MacOSGeminiDriver, "_check_screen_locked", return_value="unlocked"), \
+                 mock.patch.object(MacOSGeminiDriver, "_check_accessibility", return_value="granted"), \
+                 mock.patch.object(
+                     drv,
+                     "discover_app",
+                     return_value={
+                         "app_detected": True,
+                         "app_name": "Gemini",
+                         "app_path": "/Applications/Gemini.app",
+                         "bundle_id": "com.google.GeminiMacOS",
+                         "app_version": "2.0",
+                         "app_running": True,
+                         "is_pwa": False,
+                     },
+                 ), \
+                 mock.patch.object(MacOSGeminiDriver, "_check_orca", return_value=None), \
+                 mock.patch.object(MacOSGeminiDriver, "_find_running_pid", return_value=4242), \
+                 mock.patch.object(dw._MacOSAXBridge, "get_instance", return_value=empty_ax), \
+                 mock.patch.object(drv, "_wait_via_diagnostic_log", side_effect=_wait_returns_done), \
+                 mock.patch.object(drv, "_extract_one_shot_background", return_value={"has_window": False, "busy": False, "text": "", "confirmation_card": None}), \
+                 mock.patch("desktop_worker.time.sleep", return_value=None):
+                with self.assertRaises(RuntimeError) as ctx:
+                    drv.execute_prompt("prompt", req.job_id, req, threading.Event())
+            self.assertIn("yielded no AX response in background mode", str(ctx.exception))
+
+    def test_windows_driver_background_env_var_and_meta(self):
+        """WindowsGeminiDriver passes AGY_DESKTOP_BACKGROUND='1' (background=True) and '0' (background=False)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            local_app = Path(tmp) / "LocalAppData"
+            exe_path = local_app / "Programs" / "Gemini" / "Gemini.exe"
+            exe_path.parent.mkdir(parents=True, exist_ok=True)
+            exe_path.write_text("stub", encoding="utf-8")
+
+            drv = WindowsGeminiDriver()
+            for bg_flag, expected_env_val in ((True, "1"), (False, "0")):
+                job_id = f"dsk-win-bg-{expected_env_val}"
+                req = DesktopJobRequest(
+                    job_id=job_id,
+                    prompt="Win background test",
+                    driver="windows_uia",
+                    background=bg_flag,
+                )
+                framed = build_sentinel_prompt(job_id, req.prompt)
+                captured_env: dict[str, str] = {}
+
+                class _FakeWinProc:
+                    def __init__(self, cmd, stdin=None, stdout=None, stderr=None, text=None, encoding=None, env=None):
+                        captured_env.update(env or {})
+                        self.returncode = 0
+
+                        class _Stdin:
+                            def write(_, _s):
+                                pass
+
+                            def close(_):
+                                pass
+
+                        class _Stdout:
+                            def read(_):
+                                return json.dumps(
+                                    {
+                                        "text": (
+                                            f"{SentinelEnvelope.start_marker(job_id)}\n"
+                                            "## Executive Summary\nOK\n"
+                                            f"{SentinelEnvelope.done_marker(job_id)}"
+                                        ),
+                                        "clipboard_restored": True,
+                                        "clipboard_touched": not bg_flag,
+                                        "background": bg_flag,
+                                    }
+                                )
+
+                        class _Stderr:
+                            def read(_):
+                                return ""
+
+                        self.stdin = _Stdin()
+                        self.stdout = _Stdout()
+                        self.stderr = _Stderr()
+
+                    def poll(self):
+                        return 0
+
+                with mock.patch.dict(os.environ, {"LOCALAPPDATA": str(local_app)}, clear=False), \
+                     mock.patch.object(WindowsGeminiDriver, "_find_powershell", return_value="powershell.exe"), \
+                     mock.patch("desktop_worker.subprocess.Popen", side_effect=_FakeWinProc):
+                    _, meta = drv.execute_prompt(framed, job_id, req, threading.Event())
+
+                self.assertEqual(captured_env.get("AGY_DESKTOP_BACKGROUND"), expected_env_val)
+                self.assertEqual(meta["background"], bg_flag)
+                self.assertEqual(meta["clipboard_touched"], not bg_flag)
 
     def test_windows_driver_discovery_and_env_prompt_file_no_interpolation(self):
         """WindowsGeminiDriver discovers Gemini.exe, passes prompt via AGY_DESKTOP_PROMPT_FILE, and cleans up temp file."""
@@ -771,6 +2101,51 @@ class TestSentinelAndSecretRedactor(unittest.TestCase):
             mock_exec.assert_not_called()
             self.assertEqual(res.status, "rejected_secrets")
             self.assertGreaterEqual(res.redactions.get("google_api_key", 0), 1)
+
+    def test_default_task_mode_validation_and_readonly_workspace_prompt(self):
+        """DesktopJobRequest defaults to mode='task', validates mode/workspace_path, and SentinelEnvelope enforces read-only workspace rules."""
+        req_default = DesktopJobRequest(job_id="J-1", prompt="Analyze repo")
+        self.assertEqual(req_default.mode, "task")
+        self.assertIsNone(req_default.workspace_path)
+
+        with self.assertRaises(ValueError):
+            DesktopJobRequest(job_id="J-bad-mode", prompt="Analyze repo", mode="invalid")
+
+        missing_ws = str(Path(tempfile.gettempdir()) / f"nonexistent_ws_{os.getpid()}_xyz")
+        with self.assertRaises(ValueError):
+            DesktopJobRequest(job_id="J-bad-ws", prompt="Analyze repo", workspace_path=missing_ws)
+
+        with self.assertRaises(ValueError):
+            DesktopJobRequest.from_dict({"job_id": "J-bad-dict", "prompt": "Analyze repo", "mode": "invalid"})
+
+        with tempfile.TemporaryDirectory() as tmp_ws:
+            resolved_ws = os.path.realpath(tmp_ws)
+            req_task = DesktopJobRequest(
+                job_id="J-task-ws",
+                prompt="Analyze repo",
+                workspace_path=tmp_ws,
+            )
+            self.assertEqual(req_task.mode, "task")
+            self.assertEqual(req_task.workspace_path, resolved_ws)
+
+            prompt_task = SentinelEnvelope.build_prompt(
+                "J-task-ws",
+                "Inspect modules",
+                mode="task",
+                workspace_path=resolved_ws,
+            )
+            self.assertIn("Connected Workspace (STRICTLY READ-ONLY)", prompt_task)
+            self.assertIn("strictly read-only mode", prompt_task)
+            self.assertIn("never modify, create, or delete files", prompt_task)
+            self.assertIn(resolved_ws, prompt_task)
+
+            prompt_chat = SentinelEnvelope.build_prompt(
+                "J-chat-ws",
+                "Quick question",
+                mode="chat",
+                workspace_path=resolved_ws,
+            )
+            self.assertNotIn("Connected Workspace (STRICTLY READ-ONLY)", prompt_chat)
 
 
 class TestDesktopManagerMutexCancellationAndArtifacts(unittest.TestCase):
@@ -1512,6 +2887,175 @@ class TestDesktopServerRESTSSEAndDashboard(unittest.TestCase):
         ):
             self.assertIn(marker, html, f"Dashboard HTML missing marker: {marker}")
 
+    def test_sqlite_legacy_desktop_jobs_migration_adds_mode_and_workspace_columns(self):
+        """StateStore._init_db migrates legacy desktop_jobs table to add mode, workspace_path, and workspace_attached."""
+        with tempfile.TemporaryDirectory() as tmp:
+            legacy_db = os.path.join(tmp, "legacy_desktop.db")
+            conn = sqlite3.connect(legacy_db)
+            conn.execute(
+                """
+                CREATE TABLE desktop_jobs (
+                    job_id TEXT PRIMARY KEY,
+                    task_id TEXT,
+                    status TEXT NOT NULL,
+                    os_platform TEXT NOT NULL,
+                    driver_name TEXT NOT NULL,
+                    app_path TEXT,
+                    prompt_chars INTEGER NOT NULL DEFAULT 0,
+                    prompt_preview TEXT,
+                    redaction_count INTEGER NOT NULL DEFAULT 0,
+                    redactions_json TEXT,
+                    artifact_path TEXT,
+                    summary_excerpt TEXT,
+                    output_chars INTEGER NOT NULL DEFAULT 0,
+                    duration_ms INTEGER NOT NULL DEFAULT 0,
+                    estimated_saved_usd REAL NOT NULL DEFAULT 0.0,
+                    clipboard_restored INTEGER NOT NULL DEFAULT 1,
+                    error_message TEXT,
+                    created_at TEXT NOT NULL,
+                    started_at TEXT,
+                    completed_at TEXT
+                )
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO desktop_jobs (
+                    job_id, task_id, status, os_platform, driver_name, prompt_chars, created_at
+                ) VALUES ('dsk-legacy-1', 'TASK-26', 'completed', 'darwin', 'mock', 120, '2026-11-17T00:00:00+00:00')
+                """
+            )
+            conn.commit()
+            conn.close()
+
+            store = StateStore(db_path=legacy_db, workspace_root=tmp)
+            check_conn = sqlite3.connect(legacy_db)
+            cols = {row[1] for row in check_conn.execute("PRAGMA table_info(desktop_jobs)").fetchall()}
+            check_conn.close()
+
+            self.assertIn("mode", cols)
+            self.assertIn("workspace_path", cols)
+            self.assertIn("workspace_attached", cols)
+            self.assertIn("background", cols)
+
+            jobs = store.list_desktop_jobs(job_id="dsk-legacy-1")
+            self.assertEqual(len(jobs), 1)
+            self.assertEqual(jobs[0]["mode"], "task")
+            self.assertIsNone(jobs[0]["workspace_path"])
+            self.assertFalse(jobs[0]["workspace_attached"])
+            self.assertTrue(jobs[0]["background"])
+
+    def test_background_mode_rest_migration_and_dashboard_checkbox(self):
+        """POST /api/desktop/dispatch defaults to background=True, honors background=False, and dashboard renders #desktop-dispatch-background."""
+        # 1. Default dispatch -> background=True
+        st_bg, _, res_bg = self._request(
+            "POST",
+            "/api/desktop/dispatch",
+            {
+                "job_id": "dsk-bg-default-01",
+                "driver": "mock",
+                "async_mode": False,
+                "prompt": "Default silent background dispatch",
+            },
+        )
+        self.assertEqual(st_bg, 200)
+        self.assertTrue(res_bg["job"]["background"])
+
+        # 2. Explicit background=False (--allow-foreground equivalent)
+        st_fg, _, res_fg = self._request(
+            "POST",
+            "/api/desktop/dispatch",
+            {
+                "job_id": "dsk-fg-optin-01",
+                "driver": "mock",
+                "async_mode": False,
+                "background": False,
+                "prompt": "Opt-in foreground dispatch",
+            },
+        )
+        self.assertEqual(st_fg, 200)
+        self.assertFalse(res_fg["job"]["background"])
+
+        # 3. Dashboard HTML contains checked #desktop-dispatch-background checkbox
+        st_html, _, html = self._request("GET", "/")
+        self.assertEqual(st_html, 200)
+        self.assertIn('id="desktop-dispatch-background"', html)
+
+    def test_task_mode_default_workspace_guard_chat_mode_and_dashboard_ui(self):
+        """POST /api/desktop/dispatch defaults to task+workspace_root, rejects /etc & bogus mode (400), supports chat mode, and renders UI controls."""
+        expected_ws = os.path.realpath(self.temp_dir.name)
+
+        # 1. Default dispatch (omitted mode & workspace_path) -> task + server workspace_root + workspace_attached=True
+        st_def, _, res_def = self._request(
+            "POST",
+            "/api/desktop/dispatch",
+            {
+                "job_id": "dsk-task-default-01",
+                "driver": "mock",
+                "async_mode": False,
+                "prompt": "Default task mode workspace check",
+            },
+        )
+        self.assertEqual(st_def, 200)
+        job_def = res_def["job"]
+        self.assertEqual(job_def["status"], "completed")
+        self.assertEqual(job_def["mode"], "task")
+        self.assertEqual(job_def["workspace_path"], expected_ws)
+        self.assertTrue(job_def["workspace_attached"])
+
+        # 2. Sensitive workspace root (/etc) rejected with HTTP 400
+        st_etc, _, res_etc = self._request(
+            "POST",
+            "/api/desktop/dispatch",
+            {
+                "driver": "mock",
+                "mode": "task",
+                "workspace_path": "/etc",
+                "prompt": "Sensitive root test",
+            },
+        )
+        self.assertEqual(st_etc, 400)
+        self.assertIn("error", res_etc)
+
+        # 3. Invalid mode="bogus" rejected with HTTP 400
+        st_bogus, _, res_bogus = self._request(
+            "POST",
+            "/api/desktop/dispatch",
+            {
+                "driver": "mock",
+                "mode": "bogus",
+                "prompt": "Bogus mode test",
+            },
+        )
+        self.assertEqual(st_bogus, 400)
+        self.assertIn("error", res_bogus)
+
+        # 4. mode="chat" executes with workspace_attached=False and no workspace_path
+        st_chat, _, res_chat = self._request(
+            "POST",
+            "/api/desktop/dispatch",
+            {
+                "job_id": "dsk-chat-mode-01",
+                "driver": "mock",
+                "mode": "chat",
+                "async_mode": False,
+                "prompt": "Quick chat mode test",
+            },
+        )
+        self.assertEqual(st_chat, 200)
+        job_chat = res_chat["job"]
+        self.assertEqual(job_chat["status"], "completed")
+        self.assertEqual(job_chat["mode"], "chat")
+        self.assertIsNone(job_chat["workspace_path"])
+        self.assertFalse(job_chat["workspace_attached"])
+
+        # 5. Dashboard HTML renders #desktop-dispatch-mode and #desktop-dispatch-workspace
+        st_html, _, html = self._request("GET", "/")
+        self.assertEqual(st_html, 200)
+        self.assertIn('id="desktop-dispatch-mode"', html)
+        self.assertIn('id="desktop-dispatch-workspace"', html)
+        self.assertIn("onDesktopDispatchModeChange", html)
+
 
 class TestDesktopSDKAndCLISubprocess(unittest.TestCase):
     """6. Python SDK & CLI Subprocess End-to-End (client.py & desktop_worker.py)."""
@@ -1687,6 +3231,99 @@ class TestDesktopSDKAndCLISubprocess(unittest.TestCase):
         d6 = json.loads(p6.stdout)
         self.assertEqual(d6["status"], "completed")
         self.assertTrue((Path(self.temp_dir.name) / d6["artifact_path"]).exists())
+
+    def test_cli_desktop_ask_task_mode_workspace_binding(self):
+        """client.py desktop-ask --driver mock --mode task --workspace <tmpdir> --json binds workspace E2E."""
+        client_cli = str(ORCH_DIR / "client.py")
+        with tempfile.TemporaryDirectory() as cli_ws:
+            expected_ws = os.path.realpath(cli_ws)
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    client_cli,
+                    "--url",
+                    self.base_url,
+                    "desktop-ask",
+                    "--driver",
+                    "mock",
+                    "--mode",
+                    "task",
+                    "--workspace",
+                    cli_ws,
+                    "--prompt",
+                    "CLI task mode workspace check",
+                    "--json",
+                ],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            payload = json.loads(proc.stdout)
+            self.assertEqual(payload["status"], "ok")
+            job = payload["job"]
+            self.assertEqual(job["status"], "completed")
+            self.assertEqual(job["mode"], "task")
+            self.assertEqual(job["workspace_path"], expected_ws)
+            self.assertTrue(job["workspace_attached"])
+
+    def test_cli_desktop_ask_background_default_and_allow_foreground(self):
+        """client.py desktop-ask defaults to background=True (timeout=240) and --allow-foreground sets background=False."""
+        import client as client_mod
+
+        with mock.patch.object(
+            OrchestratorClient,
+            "desktop_dispatch",
+            return_value={"status": "ok", "job": {"job_id": "dsk-sig-1", "status": "completed", "background": True}},
+        ) as mock_disp, \
+             mock.patch.object(sys, "argv", ["client.py", "desktop-ask", "--prompt", "hi", "--json"]), \
+             mock.patch("builtins.print"):
+            client_mod.main()
+        self.assertTrue(mock_disp.call_args.kwargs["background"])
+        self.assertEqual(mock_disp.call_args.kwargs["timeout_sec"], 240)
+
+        client_cli = str(ORCH_DIR / "client.py")
+        p_bg = subprocess.run(
+            [
+                sys.executable,
+                client_cli,
+                "--url",
+                self.base_url,
+                "desktop-ask",
+                "--driver",
+                "mock",
+                "--prompt",
+                "CLI background default check",
+                "--json",
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        d_bg = json.loads(p_bg.stdout)
+        self.assertEqual(d_bg["status"], "ok")
+        self.assertTrue(d_bg["job"]["background"])
+
+        p_fg = subprocess.run(
+            [
+                sys.executable,
+                client_cli,
+                "--url",
+                self.base_url,
+                "desktop-ask",
+                "--driver",
+                "mock",
+                "--allow-foreground",
+                "--prompt",
+                "CLI allow foreground check",
+                "--json",
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        d_fg = json.loads(p_fg.stdout)
+        self.assertEqual(d_fg["status"], "ok")
+        self.assertFalse(d_fg["job"]["background"])
 
 
 if __name__ == "__main__":
