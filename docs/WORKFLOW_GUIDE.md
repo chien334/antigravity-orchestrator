@@ -15,7 +15,7 @@ Thay vì nạp toàn bộ lịch sử chat hàng nghìn dòng vào từng subage
    - ✦ **Tier 3: Gemini 4 Hydrogen** (`gemini-4-hydrogen`, `reasoning_effort: low/medium/high/xhigh`): Ngựa thồ tốc độ cao (198 tok/s, nhanh hơn 2.5x) dành cho Stage 3 (Parallel Builder) và Stage 4 (Automated Testing), tiết kiệm 95% chi phí đọc cache ($0.075 / 1M tokens).
    - ⚡ **Tier 4: Gemini 3.8 Flash** (`gemini-3.8-flash`): Dành cho triển khai số lượng lớn ở chế độ `cost_saving` và tinh gọn văn bản. Giá: $0.075 / $0.30 / $0.01875.
    - ⚡ **Tier 5: Gemini 3.8 Flash-Lite** (`gemini-3.8-flash-lite`): Dành cho telemetry micro-tier, logging nhịp tim, và linting nhanh. Giá: $0.0375 / $0.15 / $0.01.
-   - 🖥️ **External Heavy-Analysis Offload (`gemini-desktop-app` — MỚI)**: Cầu nối Gemini Desktop App cục bộ (`macos_ax` / `windows_uia` / `linux_pwa` / `mock`) cho phép offload các tác vụ phân tích chỉ đọc dung lượng lớn (`spec-engineer`, `task-planner`, `code-reviewer`, `debugger` với `read_only=True`) ở chế độ `hybrid_desktop` / `offload_heavy_to_desktop` với **$0.00 chi phí API AGY**. Tất cả chỉnh sửa mã nguồn Stage 3 vẫn chạy song song trên `gemini-4-hydrogen` (`198 tok/s`), còn kiểm toán bảo mật luôn khóa chặt trên `gemini-4-carbon`.
+   - 🖥️ **External Heavy-Analysis Offload (`gemini-desktop-app` — MỚI)**: Cầu nối Gemini Desktop App cục bộ (`macos_ax` / `windows_uia` / `linux_pwa` / `mock`) cho phép offload các tác vụ phân tích chỉ đọc dung lượng lớn (`spec-engineer`, `task-planner`, `code-reviewer`, `debugger` với `read_only=True`) ở chế độ `hybrid_desktop` / `offload_heavy_to_desktop` với **$0.00 chi phí API AGY**. Mặc định chạy **Thực Thi Nền Im Lặng (`--background`, `background=True`) — 0% cướp focus cửa sổ**: trên macOS dùng daemon-thread `AXPress` chọn `Folders` (`0` `CGEvent`), ghi trực tiếp `AXValue` + bấm gửi `AXPress` (`0` gõ phím, `0` chạm clipboard), theo dõi thụ động `~/Library/Caches/com.google.GeminiMacOS/Logs/diagnostic*.log` suốt 15–240 giây phân tích, trích xuất nguyên văn `AXStaticText.AXDescription` và khôi phục tức thì `AXFrontmost` nếu `OmnichatWindow` bị ẩn; trên Windows dùng thuần `.NET UIAutomation` (`ValuePattern` + `InvokePattern` + `TextPattern`) với `-WindowStyle Minimized` (`0` `SetForegroundWindow`, `0` `SendKeys`, `0` `Clipboard`). Mặc định dùng **`Task` mode (`--mode task`)** gắn trực tiếp thư mục dự án (`--workspace <path>`, mặc định `os.getcwd()`) qua `Folders` (`ConnectedFolderNSMenu`) để đọc mã nguồn theo đường dẫn tương đối (chỉ cần `--allow-foreground` đúng 1 lần khi đăng ký thư mục mới chưa có bookmark qua `NSOpenPanel` `Add new folder…`), hoặc chuyển `--mode chat` cho prompt độc lập. Tất cả chỉnh sửa mã nguồn Stage 3 vẫn chạy song song trên `gemini-4-hydrogen` (`198 tok/s`), còn kiểm toán bảo mật luôn khóa chặt trên `gemini-4-carbon`.
 4. **Mô Hình "Fast Hands, Deep Brain" & Fast-Retry Circuit Breaker:**
    - Hydrogen trinh sát và viết code thần tốc (198 tok/s); Argon định hình kiến trúc; Carbon chốt chặn an ninh mạng tối cao.
    - Nếu gặp lỗi: Hydrogen tự sửa nhanh đúng 1 lượt với mức tư duy tối đa `xhigh`. Nếu vẫn thất bại (`retry_count >= 2`), kích hoạt ngắt mạch (Circuit Breaker) tự động leo thang lên Gemini 4 Carbon (`high` effort) để chẩn đoán gốc rễ.
@@ -146,9 +146,37 @@ python3 packages/orchestrator/client.py recommend \
   --budget-mode hybrid_desktop \
   --desktop-available \
   --read-only
+
+# Task mode (mặc định) + Silent Background Execution (--background mặc định True):
+# 0% cướp focus cửa sổ khi bạn tiếp tục gõ ở IDE/trình duyệt, 0 chạm clipboard!
 python3 packages/orchestrator/client.py desktop-ask \
   --task SPEC-01 \
-  --prompt-file docs/specs/feature_brief.md \
+  --mode task \
+  --workspace . \
+  --background \
+  --prompt "Inspect docs/specs/feature_brief.md and packages/orchestrator/router.py. Return a read-only critique without editing any files." \
   --driver auto
+
+# Đăng ký thư mục mới chưa có bookmark trên macOS (chỉ dùng --allow-foreground đúng 1 lần cho NSOpenPanel "Add new folder…"):
+python3 packages/orchestrator/client.py desktop-ask \
+  --task SPEC-01B \
+  --mode task \
+  --workspace /path/to/new-project \
+  --allow-foreground \
+  --prompt "Inspect README.md (read-only)." \
+  --driver auto
+
+# Hoặc Chat mode độc lập (không gắn thư mục dự án):
+python3 packages/orchestrator/client.py desktop-dispatch \
+  --task SPEC-02 \
+  --mode chat \
+  --prompt-file docs/specs/feature_brief.md \
+  --async
+
+# Hoặc qua REST API POST /api/desktop/dispatch:
+# curl -s -X POST http://localhost:8484/api/desktop/dispatch \
+#   -H "Content-Type: application/json" \
+#   -d '{"task_id":"SPEC-01","mode":"task","workspace":".","background":true,"allow_foreground":false,"prompt":"Review docs/specs/feature_brief.md (read-only)","async_mode":true}'
+
 python3 packages/orchestrator/client.py desktop-jobs --limit 20 --format text
 ```

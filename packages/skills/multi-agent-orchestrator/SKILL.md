@@ -114,7 +114,7 @@ To maximize precision, throughput, and financial economy, tasks are dynamically 
 | **Tier 3: High-Throughput Workhorse** | **Gemini 4 Hydrogen** | `gemini-4-hydrogen` | **$1.50** | **$7.50** | **$0.075** | `low`, `medium`, `high`, `xhigh` | • `builder`: Parallel disjoint feature implementation, CRUD, UI components at 198 tok/s (2.5x speed).<br>• `test-engineer`: Unit/integration test suites, assertion gates, test fixtures.<br>• `scout`: Codebase reconnaissance and symbol pointer discovery.<br>• 95% cache read savings ($0.075 / 1M tokens). |
 | **Tier 4: Cost-Efficient Builder / Bulk** | **Gemini 3.8 Flash** | `gemini-3.8-flash` | **$0.075** | **$0.30** | **$0.01875** | `None` | • `code-simplifier`: Text formatting, doc generation, low-complexity scaffolding.<br>• Fallback for bulk execution in `cost_saving` mode. |
 | **Tier 5: Ultra-Fast Micro-Tier** | **Gemini 3.8 Flash-Lite** | `gemini-3.8-flash-lite` | **$0.0375** | **$0.15** | **$0.01** | `None` | • `observability-and-instrumentation`: Heartbeats, quick linting, documentation formatting.<br>• Near-zero latency execution. |
-| **External Heavy-Analysis Offload** | **Gemini Desktop App** (`EXTERNAL_WORKERS`) | `gemini-desktop-app` | **$0.00** | **$0.00** | **$0.00** | `None` | • `spec-engineer`, `task-planner`, `code-reviewer`, `debugger` (`read_only=True`).<br>• Offloads large non-mutating synthesis to local macOS/Windows/Linux Gemini Desktop GUI via [`gemini-desktop-worker`](../gemini-desktop-worker/SKILL.md); tracks `AGY Quota Saved` vs Carbon baseline. |
+| **External Heavy-Analysis Offload** | **Gemini Desktop App** (`EXTERNAL_WORKERS`) | `gemini-desktop-app` | **$0.00** | **$0.00** | **$0.00** | `None` | • `spec-engineer`, `task-planner`, `code-reviewer`, `debugger` (`read_only=True`).<br>• Defaults to **`Task` mode** (`--mode task`) with Direct Workspace Binding (`--workspace`, defaulting to `os.getcwd()`) via `Folders` (`ConnectedFolderNSMenu`), or `--mode chat` for standalone prompts (`$0.00` AGY API spend via [`gemini-desktop-worker`](../gemini-desktop-worker/SKILL.md)); tracks `AGY Quota Saved` vs Carbon baseline. |
 
 ### Tunable Reasoning Effort Guidelines (`--reasoning-effort` / `--effort`)
 - **`xhigh`** (Exclusively supported on `gemini-4-hydrogen`): Maximum depth thinking for challenging algorithmic edge cases, self-healing test fixes, and complex logic implementation without sacrificing 198 tok/s velocity. *(Clamped to `high` on Carbon/Argon).*
@@ -173,7 +173,7 @@ To maximize fleet velocity while preserving mathematical correctness and securit
 - **`speed_first` / `latency_sensitive`**: All standard development, build, test, and documentation tasks assigned to `gemini-4-hydrogen` (with `xhigh` effort for reviews). Security strictly remains on Carbon.
 - **`quality_first`**: Builders on Argon, Specs/Reviews/Security on Carbon.
 - **`cost_saving` / `cost_first`**: Builders on Gemini 3.8 Flash, Telemetry on Flash-Lite, Security on Carbon.
-- **`hybrid_desktop` / `offload_heavy_to_desktop`**: Evaluates **Rule 1.5 (Desktop Offload Gate)** after Rule 1 (Security Guardrail) & Rule 2 (Circuit Breaker). Heavy **read-only** analytical tasks (`spec-engineer`, `task-planner`, `code-reviewer`, or read-only `scout`/`debugger`) route to `gemini-desktop-app` (`$0.00` AGY API spend) when `--desktop-available` and `--read-only` (or `file_count == 0`) hold, while all file-editing Stage 3 builders remain on `gemini-4-hydrogen` (`198 tok/s`) and security audits remain locked on `gemini-4-carbon`.
+- **`hybrid_desktop` / `offload_heavy_to_desktop`**: Evaluates **Rule 1.5 (Desktop Offload Gate)** after Rule 1 (Security Guardrail) & Rule 2 (Circuit Breaker). Heavy **read-only** analytical tasks (`spec-engineer`, `task-planner`, `code-reviewer`, or read-only `scout`/`debugger`) route to `gemini-desktop-app` (`$0.00` AGY API spend) when `--desktop-available` and `--read-only` (or `file_count == 0`) hold. In **`Task` mode (`--mode task`, default)**, Gemini App mounts the project directory via `Folders` (`ConnectedFolderNSMenu`) using `--workspace <path>` (auto-defaults to `os.getcwd()`), so orchestrators reference relative file paths instead of pasting huge source files while keeping a strict read-only contract (zero workspace edits, output saved to `docs/reports/desktop_worker/{job_id}.md`). All file-editing Stage 3 builders remain on `gemini-4-hydrogen` (`198 tok/s`) and security audits remain locked on `gemini-4-carbon`.
 
 ### Smart Router API & CLI
 Query the smart router before assigning subagents:
@@ -194,11 +194,24 @@ python3 packages/orchestrator/client.py recommend \
   --read-only
 
 # Pre-flight & dispatch to local Gemini Desktop App ($0.00 AGY API spend)
+# Task mode (default) mounts workspace via Folders (ConnectedFolderNSMenu) — reference relative paths concisely
 python3 packages/orchestrator/client.py desktop-doctor --format text
 python3 packages/orchestrator/client.py desktop-ask \
   --task SPEC-01 \
-  --prompt-file docs/specs/draft_brief.md \
+  --mode task \
+  --workspace . \
+  --prompt "Inspect docs/specs/draft_brief.md and packages/orchestrator/router.py. Return a read-only critique without editing any files." \
   --driver auto
+
+# Or standalone Chat mode without mounting a workspace folder
+python3 packages/orchestrator/client.py desktop-dispatch \
+  --task SPEC-02 \
+  --mode chat \
+  --prompt-file docs/specs/draft_brief.md \
+  --async
+
+# REST API: POST /api/desktop/dispatch (Task mode + workspace binding)
+# {"task_id": "SPEC-01", "mode": "task", "workspace": ".", "prompt": "...", "driver": "auto", "async_mode": true}
 
 # Security task always routes to Carbon regardless of budget mode
 python3 packages/orchestrator/client.py recommend \

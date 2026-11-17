@@ -16,10 +16,10 @@ graph TD
     Orchestrator --> ReadyQueue
 
     subgraph DesktopBridge["Cross-Platform Gemini Desktop App Worker Bridge ($0.00 API Spend)"]
-        DesktopAPI["Server Desktop Queue<br/>POST /api/desktop/dispatch<br/>FIFO + File Lock"]
+        DesktopAPI["Server Desktop Queue<br/>POST /api/desktop/dispatch<br/>mode: task (default) | chat + workspace"]
         Redactor["SecretRedactor + Split-Literal Sentinel<br/>(8 Credential Patterns + Clipboard Restore)"]
-        MacDrv["MacOSGeminiDriver<br/>com.google.GeminiMacOS<br/>googlegemini://newchat + AX"]
-        WinDrv["WindowsGeminiDriver<br/>Gemini.exe / PWA<br/>PowerShell -Sta + UIAutomation"]
+        MacDrv["MacOSGeminiDriver<br/>com.google.GeminiMacOS<br/>Silent Background (AXValue + Log Tail)"]
+        WinDrv["WindowsGeminiDriver<br/>Gemini.exe / PWA<br/>Minimized .NET UIAutomation"]
         LinDrv["LinuxGeminiDriver<br/>Chromium/Edge PWA<br/>wl-copy / xclip / xdotool"]
         MockDrv["MockGeminiDriver<br/>Deterministic CI Simulator"]
         DesktopArtifact["Artifact Writer<br/>docs/reports/desktop_worker/{job_id}.md"]
@@ -114,20 +114,27 @@ The runtime matches task requirements against five distinct capability and finan
   - **Rule 1.5 (Desktop Offload Gate)**: Evaluated after Rule 1 & Rule 2; routes heavy non-mutating analytical personas (`spec-engineer`, `task-planner`, `code-reviewer`, or read-only `scout`/`codebase-researcher`/`doc-generator`/`debugger`) to `EXTERNAL_WORKERS["gemini-desktop-app"]` (`$0.00` AGY API spend) when `desktop_available=True` and (`file_count == 0` or `read_only=True`). File-editing Stage 3 builders always stay on `gemini-4-hydrogen`.
 
 ### 2.3 Cross-Platform Gemini Desktop App Worker Bridge (`desktop_worker.py`)
+- **Silent Background Execution (`background=True` Default & `--allow-foreground` Opt-in)**:
+  * **`background=True` (`--background`, Default)**: Runs with zero window focus theft (`0%` interruption while the user continues working in other apps) and zero clipboard mutation on macOS and Windows.
+  * **`--allow-foreground` (Opt-in Only)**: Disabled by default; required only once when registering a brand-new unbookmarked workspace folder via the macOS `NSOpenPanel` (`Add new folder…`) sheet.
+- **Interaction Modes (`--mode task` Default vs. `--mode chat`) & Direct Workspace Binding (`--workspace`)**:
+  * **`Task` Mode (`--mode task`, Default)**: Selects `Task` mode in `Gemini.app` and binds `--workspace <path>` (auto-defaults to `os.getcwd()`) directly via `Folders` (`ConnectedFolderNSMenu`). Because `Gemini.app` reads the mounted workspace directly from disk, AGY agents do not need to copy huge source files into prompts — concise prompts referencing relative paths suffice.
+  * **`Chat` Mode (`--mode chat`)**: Uses standard standalone chat without attaching a local workspace folder, suited for self-contained prompts or conceptual reviews.
+  * **Read-Only Analysis Contract**: Even with `Folders` mounted in `Task` mode, prompts instruct `Gemini.app` to perform strictly read-only inspection (zero workspace edits, avoiding interactive confirmation blocks) and emit structured findings inside the Sentinel envelope to `docs/reports/desktop_worker/{job_id}.md`.
 - **Stdlib-Only OS Drivers (`BaseDesktopDriver`)**:
-  * `MacOSGeminiDriver` (`macos_ax`, `darwin`): Discovers `com.google.GeminiMacOS` / `com.google.gemini` via `plistlib`, `mdfind`, and canonical `/Applications/Gemini.app` or PWA paths; verifies screen lock (`CGSSessionScreenIsLocked`) and `AXIsProcessTrustedWithOptions(null)`; opens fresh chat via `googlegemini://newchat?ext_src=app_shortcut`; injects via `pbcopy` + `Cmd+V` (with optional `orca computer` adapter & Apple Shortcuts); reads AX tree or `Cmd+Shift+C` fallback.
-  * `WindowsGeminiDriver` (`windows_uia`, `win32`): Discovers `%LOCALAPPDATA%\Programs\Gemini\Gemini.exe`, Start Menu `.lnk` / `Get-StartApps`, or Edge/Chrome PWA; executes static PowerShell (`-NoProfile -NonInteractive -Sta -ExecutionPolicy Bypass -Command -`) using `.NET System.Windows.Automation` (`UIAutomationClient`) and `System.Windows.Forms.Clipboard` with a private `0600` temp file (`AGY_DESKTOP_PROMPT_FILE`).
+  * `MacOSGeminiDriver` (`macos_ax`, `darwin`): Discovers `com.google.GeminiMacOS` / `com.google.gemini` via `plistlib`, `mdfind`, and canonical `/Applications/Gemini.app` or PWA paths; verifies screen lock (`CGSSessionScreenIsLocked`) and `AXIsProcessTrustedWithOptions(null)`; opens fresh chat via `googlegemini://newchat?ext_src=app_shortcut`; selects `Task` (default) or `Chat` mode and mounts `--workspace` via daemon-thread `AXPress` on `Folders` (`ConnectedFolderNSMenu`, zero `CGEvent` cursor movement); injects prompts via direct `AXValue` write + `AXPress` submit (zero synthetic keystrokes, zero clipboard touch); passively tails `~/Library/Caches/com.google.GeminiMacOS/Logs/diagnostic*.log` throughout 15–240s heavy analysis (`0%` window focus theft); extracts verbatim responses from `AXStaticText.AXDescription`; and restores `AXFrontmost` immediately if `OmnichatWindow` was hidden (retaining `pbcopy` + `Cmd+V` / `Cmd+Shift+C` fallback only when needed).
+  * `WindowsGeminiDriver` (`windows_uia`, `win32`): Discovers `%LOCALAPPDATA%\Programs\Gemini\Gemini.exe`, Start Menu `.lnk` / `Get-StartApps`, or Edge/Chrome PWA; executes static PowerShell (`-NoProfile -NonInteractive -Sta -WindowStyle Minimized -ExecutionPolicy Bypass -Command -`) using pure `.NET System.Windows.Automation` (`ValuePattern` + `InvokePattern` + `TextPattern`) with **`0` `SetForegroundWindow`, `0` `SendKeys`, and `0` `Clipboard`** via a private `0600` temp file (`AGY_DESKTOP_PROMPT_FILE`).
   * `LinuxGeminiDriver` (`linux_pwa`, `linux`): Detects `$DISPLAY`/`$WAYLAND_DISPLAY`, Chromium/Chrome/Edge `--app=https://gemini.google.com`, `wl-copy`/`xclip`/`xsel`, and `xdotool`/`wtype`; fails gracefully on headless hosts with `--driver mock` remediation.
   * `MockGeminiDriver` (`mock`): Zero-GUI deterministic simulator for CI/tests (`MOCK_DELAY_MS`, `[MOCK_TIMEOUT]`, `[MOCK_ERROR]`, `[MOCK_PARTIAL]`, `[MOCK_CHROME]`).
 - **Security & Correctness Invariants**:
   * **Zero `shell=True` & Zero Prompt Interpolation**: All OS scripts are static and receive dynamic data strictly via `stdin`, `argv`, or `0600` env-referenced temp files.
-  * **Pre-Flight `SecretRedactor`**: Scrubs 8 credential categories (Google/LLM/GitHub/AWS keys, JWT, PEM private keys, DB DSNs, Bearer/KV credentials) before clipboard mutation or SQLite preview storage; `strict_secrets=True` aborts (`rejected_secrets`).
-  * **Clipboard Save/Restore Invariant**: Prior clipboard contents are restored inside `try...finally` immediately after paste (`<= 300ms`) and after fallback copy extraction.
+  * **Pre-Flight `SecretRedactor`**: Scrubs 8 credential categories (Google/LLM/GitHub/AWS keys, JWT, PEM private keys, DB DSNs, Bearer/KV credentials) before injection or SQLite preview storage; `strict_secrets=True` aborts (`rejected_secrets`).
+  * **Zero-Clipboard Silent Mode & Clipboard Save/Restore Invariant**: Default `background=True` execution on macOS (`AXValue` + `AXStaticText.AXDescription`) and Windows (`ValuePattern` + `TextPattern`) never touches the OS clipboard; fallback paths (`Cmd+V` / `Cmd+Shift+C` / `linux_pwa`) restore prior clipboard contents inside `try...finally` immediately (`<= 300ms`).
   * **Split-Literal Sentinel Protocol**: `SentinelEnvelope.build_prompt()` splits `"<<<AGY_DESKTOP_DONE:"` + `f"{job_id}>>>"` so echoed user prompts never trigger premature completion; completion requires busy-control absence, sentinel boundaries after `--- TASK CONTEXT ---`, and `>= 500ms` stability debounce.
   * **Single-Window Mutex & Path Traversal Guard**: Serializes GUI access via `threading.Lock` + `fcntl.flock`/`msvcrt.locking` + FIFO queue, and restricts `output_path` strictly inside `<workspace_root>/docs/reports`.
 - **REST Endpoints, CLI & Quota Saved Accounting**:
-  * Endpoints: `GET /api/desktop/status`, `POST /api/desktop/dispatch`, `GET /api/desktop/jobs`, `GET /api/desktop/jobs/{job_id}`, `POST /api/desktop/cancel`, `POST /api/desktop/jobs/{job_id}/cancel`, plus SSE `desktop_job_*` events.
-  * CLI (`client.py`): `desktop-doctor` (`desktop-status`), `desktop-ask` (`desktop-dispatch`), `desktop-jobs`, `desktop-cancel`.
+  * Endpoints: `GET /api/desktop/status`, `POST /api/desktop/dispatch` (accepts `mode: "task" | "chat"`, `workspace: "."`, `background: true`, `allow_foreground: false`), `GET /api/desktop/jobs`, `GET /api/desktop/jobs/{job_id}`, `POST /api/desktop/cancel`, `POST /api/desktop/jobs/{job_id}/cancel`, plus SSE `desktop_job_*` events.
+  * CLI (`client.py`): `desktop-doctor` (`desktop-status`), `desktop-ask --mode task --workspace . --background` (`desktop-dispatch`, plus opt-in `--allow-foreground` for first-time `NSOpenPanel` folder registration), `desktop-jobs`, `desktop-cancel`.
   * Accounting: `compute_desktop_quota_saved()` estimates `ceil(chars / 4)` tokens against `gemini-4-carbon` baseline rates (`$2.00` in / `$10.00` out per 1M) as **AGY Quota Saved** (`usd` & `vnd`), while actual AGY API cost remains `$0.00`.
 
 ---

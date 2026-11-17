@@ -25,11 +25,11 @@ Phiên bản mới nâng cấp toàn diện lên **Kiến Trúc Đội Ngũ 5 T�
 - **Phân Tích Tài Chính 5 Tầng Model (Per-Model Financial Analytics)**: Đo lường chi tiết số token (Input, Output, Cache Read), chi phí quy đổi USD & VNĐ (tỷ giá cố định 25.400 VND/USD), và tỷ lệ trúng bộ nhớ đệm (Cache Hit Rate %) riêng biệt cho Carbon, Argon, Hydrogen, Flash, và Flash-Lite.
 - **Xuất Báo Cáo Kiểm Toán Tự Động (Mission Audit Exporter)**: Endpoint `GET /api/audit/export?format=markdown|json` và lệnh `client.py export` tạo báo cáo nghiệm thu hoàn chỉnh sau mỗi chiến dịch phát triển.
 - **Web Dashboard Thời Gian Thực (SSE & SQLite)**: Giao diện tối Dark-mode hiện đại, huy hiệu Obsidian Emerald cho Carbon, huy hiệu Electric Cyan (`#06b6d4`) cho Hydrogen, huy hiệu Teal cho **Gemini Desktop App**, nhãn nhịp đập tư duy (`xhigh`), biểu đồ DAG trực quan bằng SVG, modal Sandbox thử nghiệm Smart Router kèm mô phỏng Circuit Breaker, và bảng theo dõi hàng đợi **Desktop Worker + AGY Quota Saved**.
-- **Cầu Nối Gemini Desktop App Đa Nền Tảng (Cross-Platform Desktop Worker Bridge — MỚI)**: Cho phép offload các tác vụ phân tích nặng chỉ đọc (`read_only=True`: tổng hợp kiến trúc, phản biện spec, phân tích log) sang ứng dụng **Google Gemini Desktop App** cục bộ với **$0.00 chi phí API AGY** qua chế độ `hybrid_desktop` / `offload_heavy_to_desktop`:
-  - **macOS (`macos_ax`)**: Tự động phát hiện `com.google.GeminiMacOS` / `com.google.gemini` (`/Applications/Gemini.app`), mở chat mới qua deep link `googlegemini://newchat?ext_src=app_shortcut`, kiểm tra quyền Accessibility (`AXIsProcessTrustedWithOptions`), chống khóa màn hình, dán qua `pbcopy` + `Cmd+V` (kèm tùy chọn `orca computer` adapter & Apple Shortcuts).
-  - **Windows (`windows_uia`)**: Tự động tìm `Gemini.exe` (`%LOCALAPPDATA%\Programs\Gemini\Gemini.exe`, Start Menu, Edge/Chrome PWA) và điều khiển bằng PowerShell `-Sta` + `.NET UIAutomationClient` (`System.Windows.Automation`) & `System.Windows.Forms.Clipboard` thông qua file tạm riêng tư (`0600`).
+- **Cầu Nối Gemini Desktop App Đa Nền Tảng (Cross-Platform Desktop Worker Bridge — MỚI)**: Cho phép offload các tác vụ phân tích nặng chỉ đọc (`read_only=True`: tổng hợp kiến trúc, phản biện spec, phân tích log) sang ứng dụng **Google Gemini Desktop App** cục bộ với **$0.00 chi phí API AGY** qua chế độ `hybrid_desktop` / `offload_heavy_to_desktop`, mặc định chạy **Thực Thi Nền Im Lặng (`--background`, mặc định `True`) — 0% cướp focus cửa sổ**:
+  - **macOS (`macos_ax`)**: Tự động phát hiện `com.google.GeminiMacOS` / `com.google.gemini` (`/Applications/Gemini.app`), mở phiên mới qua deep link `googlegemini://newchat?ext_src=app_shortcut`, hỗ trợ **2 chế độ tương tác**: **`Task` mode (Mặc định — `--mode task`)** gắn trực tiếp thư mục dự án (`--workspace <path>`, tự động mặc định `os.getcwd()`) qua daemon-thread `AXPress` trên menu `Folders` (`ConnectedFolderNSMenu`, không di chuyển con trỏ `CGEvent`) giúp Gemini App đọc file theo đường dẫn tương đối (hợp đồng chỉ đọc: không sửa file, tránh confirmation blocks), và **`Chat` mode (`--mode chat`)** cho prompt độc lập. Trong chế độ nền mặc định (`background=True`), hệ thống ghi trực tiếp `AXValue` + bấm gửi `AXPress` (không gõ phím, không chạm clipboard), theo dõi thụ động `~/Library/Caches/com.google.GeminiMacOS/Logs/diagnostic*.log` suốt 15–240 giây phân tích nặng (**0% gián đoạn focus** khi bạn làm việc ở ứng dụng khác), trích xuất nguyên văn `AXStaticText.AXDescription`, và khôi phục tức thì `AXFrontmost` nếu `OmnichatWindow` từng bị ẩn. Cờ **`--allow-foreground` (chỉ bật khi cần)** chỉ dùng đúng 1 lần khi đăng ký thư mục mới chưa có bookmark qua hộp thoại macOS `NSOpenPanel` (`Add new folder…`).
+  - **Windows (`windows_uia`)**: Tự động tìm `Gemini.exe` (`%LOCALAPPDATA%\Programs\Gemini\Gemini.exe`, Start Menu, Edge/Chrome PWA) và chạy PowerShell `-Sta -WindowStyle Minimized` sử dụng thuần `.NET UIAutomation` (**`ValuePattern` + `InvokePattern` + `TextPattern`**) với **`0` `SetForegroundWindow`, `0` `SendKeys`, `0` `Clipboard`** thông qua file tạm riêng tư (`0600`).
   - **Linux (`linux_pwa`) & CI (`mock`)**: Hỗ trợ Chromium/Edge PWA (`--app=https://gemini.google.com`) trên X11/Wayland (`wl-copy`/`xclip`/`xdotool`) và trình giả lập `MockGeminiDriver` cho CI/headless.
-  - **Lá Chắn Bảo Mật & Chống Cắt Xén**: `SecretRedactor` (ẩn tự động 8 loại khóa API/JWT/PEM/DSN trước khi chạm clipboard, hỗ trợ `--strict-secrets`), **Clipboard Save/Restore** (`try...finally` khôi phục clipboard gốc `<= 300ms`), **Split-Literal Sentinel Protocol** (`<<<AGY_DESKTOP_START:{job_id}>>>` / `<<<AGY_DESKTOP_DONE:{job_id}>>>` + `>= 500ms` stability debounce), khóa cửa sổ đơn (`threading.Lock` + `fcntl.flock`/`msvcrt.locking` + hàng đợi FIFO `desktop_jobs`), và xuất kết quả chuẩn hóa về `docs/reports/desktop_worker/{job_id}.md`.
+  - **Lá Chắn Bảo Mật & Chống Cắt Xén**: `SecretRedactor` (ẩn tự động 8 loại khóa API/JWT/PEM/DSN trước khi gửi hoặc lưu SQLite `prompt_preview`, hỗ trợ `--strict-secrets`), **Zero-Clipboard Silent Mode** (không chạm clipboard khi chạy `AXValue`/`UIAutomation` nền; giữ **Clipboard Save/Restore** `try...finally <= 300ms` cho đường fallback), **Split-Literal Sentinel Protocol** (`<<<AGY_DESKTOP_START:{job_id}>>>` / `<<<AGY_DESKTOP_DONE:{job_id}>>>` + `>= 500ms` stability debounce), khóa cửa sổ đơn (`threading.Lock` + `fcntl.flock`/`msvcrt.locking` + hàng đợi FIFO `desktop_jobs`), và xuất kết quả chuẩn hóa về `docs/reports/desktop_worker/{job_id}.md`.
 - **Zero Dependency Runtime**: Hoạt động hoàn toàn trên Python Standard Library (`sqlite3`, `http.server`, `urllib`, `json`, `argparse`, `threading`, `plistlib`), không yêu cầu cài đặt thêm bất kỳ thư viện pip nào.
 
 ---
@@ -250,11 +250,32 @@ python3 packages/orchestrator/client.py recommend \
   --read-only
 
 # 3. Gửi tác vụ phân tích nặng sang Gemini Desktop App ($0.00 chi phí API AGY)
+#    Chạy nền im lặng mặc định (--background, background=True): 0% cướp focus & 0 chạm clipboard!
+#    Task mode (mặc định) gắn workspace qua Folders (ConnectedFolderNSMenu) — chỉ cần đường dẫn tương đối
 python3 packages/orchestrator/client.py desktop-ask \
   --task SPEC-01 \
-  --prompt-file docs/specs/my_large_spec.md \
+  --mode task \
+  --workspace . \
+  --background \
+  --prompt "Inspect docs/specs/my_large_spec.md and packages/orchestrator/router.py (read-only, zero edits)." \
   --driver auto \
   --timeout 180
+
+#    Đăng ký thư mục mới chưa có bookmark trên macOS (chỉ cần --allow-foreground đúng 1 lần cho NSOpenPanel "Add new folder…")
+python3 packages/orchestrator/client.py desktop-ask \
+  --task SPEC-01B \
+  --mode task \
+  --workspace /path/to/new-project \
+  --allow-foreground \
+  --prompt "Inspect README.md (read-only)." \
+  --driver auto
+
+#    Hoặc Chat mode độc lập không gắn thư mục workspace
+python3 packages/orchestrator/client.py desktop-dispatch \
+  --task SPEC-02 \
+  --mode chat \
+  --prompt-file docs/specs/my_large_spec.md \
+  --async
 
 # 4. Theo dõi hàng đợi desktop_jobs hoặc hủy job đang chạy
 python3 packages/orchestrator/client.py desktop-jobs --limit 20 --format text
@@ -273,7 +294,7 @@ python3 packages/orchestrator/client.py desktop-cancel --job-id dsk-20261117-a1b
 | `GET` | `/api/models` | Trả về danh mục mô hình 5 tầng (`MODEL_REGISTRY`) + `external_workers` | Không |
 | `POST` | `/api/router/recommend` | Đề xuất model, mức tư duy, Circuit Breaker & `hybrid_desktop` offload | `{"agent_type": "...", "complexity": "...", "budget_mode": "hybrid_desktop", "desktop_available": true, "read_only": true}` |
 | `GET` | `/api/desktop/status` | Kiểm tra trạng thái Gemini Desktop App theo OS & quota đã tiết kiệm | `?driver=auto&target_os=auto&app_path=...` |
-| `POST` | `/api/desktop/dispatch` | Đưa job phân tích (đã scrub secrets & bọc Sentinel) vào hàng đợi Desktop | `{"prompt": "...", "task_id": "...", "driver": "auto", "redact_secrets": true, "async_mode": true}` |
+| `POST` | `/api/desktop/dispatch` | Đưa job phân tích (mặc định `mode: "task"`, `background: true` chạy nền không cướp focus, đã scrub secrets & bọc Sentinel) vào hàng đợi Desktop | `{"prompt": "...", "task_id": "...", "mode": "task", "workspace": ".", "background": true, "allow_foreground": false, "driver": "auto", "redact_secrets": true, "async_mode": true}` |
 | `GET` | `/api/desktop/jobs` | Liệt kê danh sách `desktop_jobs` & tổng hợp `AGY Quota Saved` | `?job_id=...&status=...&limit=50` |
 | `GET` | `/api/desktop/jobs/{job_id}` | Truy xuất chi tiết một desktop job và con trỏ `artifact_path` | Path param `job_id` |
 | `POST` | `/api/desktop/cancel` | Hủy job desktop đang chờ hoặc đang chạy (hoặc `POST /api/desktop/jobs/{job_id}/cancel`) | `{"job_id": "..."}` |
