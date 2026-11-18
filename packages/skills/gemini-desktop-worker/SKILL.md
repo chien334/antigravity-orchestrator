@@ -42,12 +42,12 @@ Direct workspace binding gives `Gemini.app` read visibility into project files, 
 ### 2.3 Silent Background Execution (`--background` Default `True` & `--allow-foreground`)
 By default (`--background`, `background=True`), the Desktop Worker runs with **zero focus theft** so developers can keep typing in their IDE, browser, or terminal uninterrupted during 15–240s heavy analysis:
 
-- **macOS (`macos_ax`) Zero-Focus-Theft Pipeline**:
-  1. **Daemon-Thread `Folders` Selection**: Opens `Folders` (`ConnectedFolderNSMenu`) via background daemon-thread `AXPress` with **zero `CGEvent` cursor movement**.
-  2. **Direct `AXValue` Write + `AXPress` Submit**: Writes the Sentinel-wrapped prompt directly into the input `AXTextArea` via `AXValue` and triggers submission via `AXPress` (**zero synthetic keystrokes, zero clipboard touch**).
-  3. **Passive Diagnostic Log Tailing**: Monitors `~/Library/Caches/com.google.GeminiMacOS/Logs/diagnostic*.log` passively throughout the 15–240s analysis window (`0%` window focus interruption while you work in other apps).
-  4. **Verbatim `AXStaticText.AXDescription` Extraction**: Reads the completed response directly from `AXStaticText.AXDescription` without stealing focus or touching the clipboard.
-  5. **Instant `AXFrontmost` Restoration**: Immediately restores prior `AXFrontmost` state if `OmnichatWindow` had to be unhidden transiently.
+- **macOS (`macos_ax`) Zero-Focus-Theft Pipeline (`0` Focus Switches)**:
+  1. **Stealth `OmnichatWindow` Hydration**: If `OmnichatWindow` is closed or in `MinichatWindow` (`AXSystemDialog`), opens `OmnichatWindow` via `AXMenuBar -> File -> Open App` (`AXPress`) with `AXHidden=True` — **0 `AXFrontmost` transitions, 0 `open -a` focus theft**.
+  2. **Daemon-Thread `Folders` Selection**: Opens `Folders` (`ConnectedFolderNSMenu`) via background daemon-thread `AXPress` with **zero `CGEvent` cursor movement**.
+  3. **Direct `AXValue` Write + `AXPress` Submit**: Writes the Sentinel-wrapped prompt directly into the input `AXTextArea` via `AXValue` and triggers submission via `AXPress` (**zero synthetic keystrokes, zero clipboard touch**).
+  4. **Passive AX & Diagnostic Log Tailing**: Passively inspects `AXHidden` `OmnichatWindow` via `poll_chat` and tails `~/Library/Caches/com.google.GeminiMacOS/Logs/diagnostic*.log` (`removeStreamingConversation()` / `agentModeTask: ended` + quiet debounce in Task mode so intermediate stream turns never bounce windows).
+  5. **Verbatim `AXStaticText.AXDescription` Extraction**: Reads the completed response directly from `AXStaticText.AXDescription` / `AXButton.AXDescription` with `0` focus switches and `0` clipboard mutations.
 - **Windows (`windows_uia`) Zero-Focus-Theft Pipeline**:
   - Uses pure `.NET UIAutomation` (**`ValuePattern` + `InvokePattern` + `TextPattern`**) launched with `-WindowStyle Minimized` (`0` `SetForegroundWindow`, `0` `SendKeys`, `0` `Clipboard`).
 - **`--allow-foreground` (Opt-in Only)**:

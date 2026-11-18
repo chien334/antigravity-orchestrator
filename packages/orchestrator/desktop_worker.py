@@ -68,6 +68,7 @@ _MACOS_CONFIRMATION_CARD_IDS: tuple[str, ...] = (
     "ActionCardRemyElicitationCard",
     "AgentWaitingForInputRow",
     "InlineConfirmationSlotView",
+    "tab_stop_Continue",
 )
 
 VALID_JOB_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{1,63}$")
@@ -1229,8 +1230,8 @@ class SentinelEnvelope:
             safe_ws = str(workspace_path).replace("\n", " ").replace("\r", " ").strip()
             lines.append(
                 f"5. Connected Workspace (STRICTLY READ-ONLY): Inspect `{safe_ws}` directly in strictly read-only mode "
-                "(never modify, create, or delete files, run mutating commands, or trigger confirmation prompts) "
-                "before outputting your analysis and the split-literal end marker."
+                "(never modify, create, or delete files, never execute shell/terminal commands, and never trigger confirmation prompts; "
+                "use read-only file/directory inspection tools only) before outputting your analysis and the split-literal end marker."
             )
         header = "\n".join(lines)
         if meta_block:
@@ -1440,6 +1441,7 @@ class _MacOSAXBridge:
             )
         }
         self._k_true = ctypes.c_void_p.in_dll(self.cf, "kCFBooleanTrue").value
+        self._k_false = ctypes.c_void_p.in_dll(self.cf, "kCFBooleanFalse").value
 
     def _bind_signatures(self) -> None:
         cf = self.cf
@@ -2413,6 +2415,37 @@ class _MacOSAXBridge:
         finally:
             self.cf.CFRelease(app_el)
 
+    def _is_minichat_window(self, win_el: int) -> bool:
+        """Return True if win_el is Gemini's transient NSPanel MinichatWindow rather than OmnichatWindow."""
+        subrole = self._get_str(win_el, "AXSubrole")
+        title_low = self._get_str(win_el, "AXTitle").lower()
+        return subrole == "AXSystemDialog" or "mini chat" in title_low
+
+    def is_hidden(self, pid: int) -> bool:
+        """Return True if the target macOS application currently has AXHidden == True."""
+        if "AXHidden" not in getattr(self, "_attrs", {}):
+            return False
+        app_el = int(self.ax.AXUIElementCreateApplication(pid))
+        self.ax.AXUIElementSetMessagingTimeout(app_el, 1.5)
+        try:
+            return self._get_bool(app_el, "AXHidden", False)
+        finally:
+            self.cf.CFRelease(app_el)
+
+    def set_hidden(self, pid: int, hidden: bool = True) -> bool:
+        """Set AXHidden on the target macOS application without activating or stealing focus."""
+        if "AXHidden" not in getattr(self, "_attrs", {}):
+            return False
+        val = self._k_true if hidden else getattr(self, "_k_false", None)
+        if val is None:
+            val = ctypes.c_void_p.in_dll(self.cf, "kCFBooleanFalse").value
+        app_el = int(self.ax.AXUIElementCreateApplication(pid))
+        self.ax.AXUIElementSetMessagingTimeout(app_el, 1.5)
+        try:
+            return int(self.ax.AXUIElementSetAttributeValue(app_el, self._attr("AXHidden"), val)) == 0
+        finally:
+            self.cf.CFRelease(app_el)
+
     def has_window(self, pid: int) -> bool:
         app_el = int(self.ax.AXUIElementCreateApplication(pid))
         self.ax.AXUIElementSetMessagingTimeout(app_el, 1.5)
@@ -2424,6 +2457,93 @@ class _MacOSAXBridge:
             return False
         finally:
             self.cf.CFRelease(app_el)
+
+    def has_usable_background_window(self, pid: int) -> bool:
+        """Return True iff Gemini.app has a non-Minichat AXWindow (OmnichatWindow) accessible in AXWindows."""
+        app_el = int(self.ax.AXUIElementCreateApplication(pid))
+        self.ax.AXUIElementSetMessagingTimeout(app_el, 1.5)
+        try:
+            win_el = self._find_window(app_el)
+            if not win_el:
+                return False
+            try:
+                return not self._is_minichat_window(win_el)
+            finally:
+                self.cf.CFRelease(win_el)
+        finally:
+            self.cf.CFRelease(app_el)
+
+    def open_app_window_silent(
+        self,
+        pid: int,
+        keep_hidden: bool = True,
+        wait_s: float = 2.0,
+        cancel_event: threading.Event | None = None,
+    ) -> bool:
+        """Open Gemini OmnichatWindow via AXMenuBar -> File -> Open App with 0 focus switches."""
+        if self.has_usable_background_window(pid):
+            if keep_hidden:
+                self.set_hidden(pid, True)
+            return True
+
+        app_el = int(self.ax.AXUIElementCreateApplication(pid))
+        self.ax.AXUIElementSetMessagingTimeout(app_el, 1.5)
+        try:
+            mb_ref = self._copy_attr(app_el, "AXMenuBar")
+            if not mb_ref:
+                return False
+            try:
+                file_root = self._find_retained_element(
+                    mb_ref,
+                    lambda el, r: r == "AXMenuBarItem" and self._get_str(el, "AXTitle").strip().lower() in ("file", "tệp"),
+                )
+                search_root = file_root if file_root is not None else mb_ref
+                try:
+                    open_item = self._find_retained_element(
+                        search_root,
+                        lambda el, r: (
+                            r == "AXMenuItem"
+                            and self._get_str(el, "AXTitle").strip().lower() in ("open app", "mở ứng dụng")
+                        ),
+                    )
+                    if open_item is None and file_root is not None:
+                        open_item = self._find_retained_element(
+                            mb_ref,
+                            lambda el, r: (
+                                r == "AXMenuItem"
+                                and self._get_str(el, "AXTitle").strip().lower() in ("open app", "mở ứng dụng")
+                            ),
+                        )
+                    if open_item is None:
+                        return False
+                    try:
+                        if not self._get_bool(open_item, "AXEnabled", True):
+                            return False
+                        if self.perform_action(open_item, "AXPress") != 0:
+                            return False
+                    finally:
+                        self.cf.CFRelease(open_item)
+                finally:
+                    if file_root is not None:
+                        self.cf.CFRelease(file_root)
+            finally:
+                self.cf.CFRelease(mb_ref)
+        finally:
+            self.cf.CFRelease(app_el)
+
+        deadline = time.monotonic() + max(0.2, float(wait_s))
+        while True:
+            if cancel_event is not None and cancel_event.is_set():
+                raise DesktopJobCancelledError("Desktop job cancelled")
+            if keep_hidden:
+                self.set_hidden(pid, True)
+            if self.has_usable_background_window(pid):
+                if keep_hidden:
+                    self.set_hidden(pid, True)
+                return True
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(0.04)
 
     def _is_send_button(self, el: int, role: str) -> bool:
         if role != "AXButton":
@@ -3126,9 +3246,21 @@ class MacOSGeminiDriver(BaseDesktopDriver):
     _DIAGNOSTIC_START_MARKERS: tuple[str, ...] = (
         "addStreamingConversation",
         "finishSending",
+        "agentModeTask: started",
+    )
+    _DIAGNOSTIC_ACTIVITY_MARKERS: tuple[str, ...] = (
+        "addStreamingConversation",
+        "finishSending",
+        "agentModeTask: started",
+        "Executing function call",
+    )
+    _DIAGNOSTIC_TASK_DONE_MARKERS: tuple[str, ...] = (
+        "removeStreamingConversation()",
+        "agentModeTask: ended",
     )
     _DIAGNOSTIC_DONE_MARKERS: tuple[str, ...] = (
         "removeStreamingConversation()",
+        "agentModeTask: ended",
         "isMessageTreeCompleted=true",
         "ClientGenerateResponseStream.endOfData",
         "Streaming delivered complete response",
@@ -3255,7 +3387,11 @@ class MacOSGeminiDriver(BaseDesktopDriver):
         }
 
     @classmethod
-    def _read_diagnostic_log_updates(cls, log_state: dict[str, Any]) -> tuple[bool, bool]:
+    def _read_diagnostic_log_updates(
+        cls,
+        log_state: dict[str, Any],
+        mode: str = "task",
+    ) -> tuple[bool, bool]:
         """Tail appended bytes across diagnostic*.log rotation; return (saw_start, saw_done)."""
         if not log_state.get("dir_exists"):
             return False, False
@@ -3303,6 +3439,7 @@ class MacOSGeminiDriver(BaseDesktopDriver):
                 pass
 
         if not chunks:
+            log_state["saw_recent_activity"] = False
             return bool(log_state.get("saw_stream_start", False)), False
 
         combined = str(log_state.get("tail_buf") or "") + "".join(chunks)
@@ -3311,7 +3448,16 @@ class MacOSGeminiDriver(BaseDesktopDriver):
                 log_state["saw_stream_start"] = True
                 break
 
-        saw_done = any(marker in combined for marker in cls._DIAGNOSTIC_DONE_MARKERS)
+        done_markers = (
+            cls._DIAGNOSTIC_TASK_DONE_MARKERS
+            if str(mode or "task").strip().lower() == "task"
+            else cls._DIAGNOSTIC_DONE_MARKERS
+        )
+        last_done_pos = max((combined.rfind(m) for m in done_markers), default=-1)
+        last_activity_pos = max((combined.rfind(m) for m in cls._DIAGNOSTIC_ACTIVITY_MARKERS), default=-1)
+
+        saw_done = last_done_pos != -1 and last_done_pos > last_activity_pos
+        log_state["saw_recent_activity"] = last_activity_pos > last_done_pos
         if saw_done:
             log_state["tail_buf"] = ""
         elif combined.endswith("\n"):
@@ -3330,6 +3476,62 @@ class MacOSGeminiDriver(BaseDesktopDriver):
         except TypeError:
             return fn(*args, **kwargs)
 
+    @staticmethod
+    def _has_usable_background_window(ax_bridge: Any, pid: int) -> bool:
+        usable_fn = getattr(ax_bridge, "has_usable_background_window", None)
+        if callable(usable_fn):
+            return bool(usable_fn(pid))
+        has_win_fn = getattr(ax_bridge, "has_window", None)
+        if callable(has_win_fn):
+            return bool(has_win_fn(pid))
+        return bool(ax_bridge.poll_chat(pid).get("has_window"))
+
+    def _ensure_window_background(
+        self,
+        ax_bridge: Any,
+        pid: int,
+        open_bin: str = "",
+        app_path: str = "",
+        cancel_event: threading.Event | None = None,
+        bring_wait_s: float = 0.8,
+        open_wait_s: float = 1.5,
+        keep_hidden_if_opened: bool = True,
+    ) -> tuple[bool, bool]:
+        """
+        Ensure Gemini.app OmnichatWindow is accessible in AXWindows for background execution.
+        Returns (has_window, did_steal_focus).
+        Prefers 0-focus-switch AXMenuBar -> File -> Open App + AXHidden=True; falls back to
+        _wake_window_background only if silent menu open is unavailable or fails.
+        """
+        if self._has_usable_background_window(ax_bridge, pid):
+            return True, False
+
+        silent_open_fn = getattr(ax_bridge, "open_app_window_silent", None)
+        if callable(silent_open_fn):
+            try:
+                if silent_open_fn(
+                    pid,
+                    keep_hidden=keep_hidden_if_opened,
+                    wait_s=max(2.0, open_wait_s),
+                    cancel_event=cancel_event,
+                ):
+                    return True, False
+            except DesktopJobCancelledError:
+                raise
+            except Exception:
+                pass
+
+        woke = self._wake_window_background(
+            ax_bridge=ax_bridge,
+            pid=pid,
+            open_bin=open_bin,
+            app_path=app_path,
+            cancel_event=cancel_event,
+            bring_wait_s=bring_wait_s,
+            open_wait_s=open_wait_s,
+        )
+        return woke, True
+
     def _wait_via_diagnostic_log(
         self,
         ax_bridge: Any,
@@ -3341,13 +3543,14 @@ class MacOSGeminiDriver(BaseDesktopDriver):
         deadline: float,
     ) -> dict[str, Any] | None:
         """
-        Wait silently without focus theft until diagnostic*.log signals stream completion,
-        or (if log directory does not exist) sleep in 10.0s chunks between brief <0.15s probes.
+        Wait silently with 0 focus theft until AX poll_chat or diagnostic*.log signals completion,
+        or (if log directory does not exist) check passively/silently without focus bounces.
         """
         poll_interval = 0.5
         fallback_sleep = 10.0
         last_len: int | None = None
         stable_since: float | None = None
+        mode_norm = str(getattr(request, "mode", "task") or "task").strip().lower()
 
         while True:
             if cancel_event.is_set():
@@ -3356,7 +3559,7 @@ class MacOSGeminiDriver(BaseDesktopDriver):
             if now > deadline:
                 raise TimeoutError(f"Timed out after {request.timeout_sec}s waiting for Gemini Desktop response")
 
-            # a) Passively inspect window WITHOUT activating if it happens to be visible.
+            # a) Passively inspect window WITHOUT activating (works even while AXHidden == True).
             poll_data = ax_bridge.poll_chat(pid)
             if poll_data.get("has_window"):
                 confirmation_card = poll_data.get("confirmation_card")
@@ -3391,22 +3594,46 @@ class MacOSGeminiDriver(BaseDesktopDriver):
                     stable_since = None
 
             if log_state.get("dir_exists"):
-                # b) Tail diagnostic*.log for stream start/completion markers.
-                _, saw_done = self._read_diagnostic_log_updates(log_state)
+                # b) Tail diagnostic*.log for outer stream/task completion markers.
+                _, saw_done = self._read_diagnostic_log_updates(log_state, mode=mode_norm)
                 if saw_done or log_state.get("saw_done"):
                     log_state["saw_done"] = True
-                    # c) Settle 0.4s before single one-shot extraction.
-                    if cancel_event.wait(0.4):
-                        raise DesktopJobCancelledError("Desktop job cancelled")
-                    self._read_diagnostic_log_updates(log_state)
-                    return None
+                    # c) Quiet settle debounce: in task mode verify no new tool/stream turn resumes.
+                    settle_total = 1.0 if mode_norm == "task" else 0.4
+                    settle_end = min(deadline, time.monotonic() + settle_total)
+                    restarted = False
+                    while time.monotonic() < settle_end:
+                        step = min(0.25, max(0.02, settle_end - time.monotonic()))
+                        if cancel_event.wait(step):
+                            raise DesktopJobCancelledError("Desktop job cancelled")
+                        re_poll = ax_bridge.poll_chat(pid)
+                        if re_poll.get("has_window"):
+                            if re_poll.get("confirmation_card"):
+                                raise RuntimeError(
+                                    f"Gemini Task mode paused waiting for interactive confirmation/elicitation ({re_poll['confirmation_card']}); "
+                                    "aborted instead of hanging until timeout. Use strictly read-only prompt instructions or resolve the prompt in Gemini.app."
+                                )
+                            re_txt = str(re_poll.get("text") or "")
+                            if not re_poll.get("busy") and SentinelEnvelope.has_complete_sentinel(re_txt, job_id):
+                                return re_poll
+                        _, new_done = self._read_diagnostic_log_updates(log_state, mode=mode_norm)
+                        if log_state.get("saw_recent_activity") and not new_done:
+                            log_state["saw_done"] = False
+                            restarted = True
+                            break
+                    if not restarted:
+                        self._read_diagnostic_log_updates(log_state, mode=mode_norm)
+                        if log_state.get("saw_recent_activity"):
+                            log_state["saw_done"] = False
+                        else:
+                            return None
 
                 remaining = max(0.01, deadline - time.monotonic())
                 if cancel_event.wait(min(poll_interval, remaining)):
                     raise DesktopJobCancelledError("Desktop job cancelled")
             else:
                 # d) Fallback ONLY when diagnostic*.log directory does not exist at all:
-                # long 10.0s passive sleep between brief <0.15s checks with instant prev_pid restore.
+                # try 0-switch silent open first before brief fallback wake.
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise TimeoutError(f"Timed out after {request.timeout_sec}s waiting for Gemini Desktop response")
@@ -3414,6 +3641,28 @@ class MacOSGeminiDriver(BaseDesktopDriver):
                     raise DesktopJobCancelledError("Desktop job cancelled")
                 if time.monotonic() > deadline:
                     raise TimeoutError(f"Timed out after {request.timeout_sec}s waiting for Gemini Desktop response")
+
+                silent_open_fn = getattr(ax_bridge, "open_app_window_silent", None)
+                if callable(silent_open_fn):
+                    try:
+                        if silent_open_fn(pid, keep_hidden=True, wait_s=1.5, cancel_event=cancel_event):
+                            probe_data = ax_bridge.poll_chat(pid)
+                            if probe_data.get("confirmation_card"):
+                                raise RuntimeError(
+                                    f"Gemini Task mode paused waiting for interactive confirmation/elicitation ({probe_data['confirmation_card']}); "
+                                    "aborted instead of hanging until timeout. Use strictly read-only prompt instructions or resolve the prompt in Gemini.app."
+                                )
+                            if (
+                                probe_data.get("has_window")
+                                and not probe_data.get("busy")
+                                and SentinelEnvelope.has_complete_sentinel(str(probe_data.get("text") or ""), job_id)
+                            ):
+                                return probe_data
+                            continue
+                    except DesktopJobCancelledError:
+                        raise
+                    except Exception:
+                        pass
 
                 prev_pid = self._get_frontmost_pid()
                 probe_data: dict[str, Any] = {"has_window": False, "busy": False, "text": "", "confirmation_card": None}
@@ -3452,7 +3701,7 @@ class MacOSGeminiDriver(BaseDesktopDriver):
         bring_wait_s: float = 0.45,
         open_wait_s: float = 1.2,
     ) -> bool:
-        """Briefly wake a hidden OmnichatWindow via AXFrontmost, falling back to open -g -a."""
+        """Fallback wake for hidden OmnichatWindow when silent AXMenuBar Open App is unavailable."""
         has_win_fn = getattr(ax_bridge, "has_window", None)
 
         def _has_win() -> bool:
@@ -3504,8 +3753,8 @@ class MacOSGeminiDriver(BaseDesktopDriver):
     ) -> dict[str, Any]:
         """
         Single one-shot verbatim extraction via AXStaticText/AXButton.AXDescription (zero clipboard touch).
-        Checks poll_chat passively first; only if OmnichatWindow is hidden (has_window==False),
-        captures prev_pid, briefly wakes Gemini.app (with open -g -a fallback), reads poll_chat, and immediately restores prev_pid.
+        Checks poll_chat passively first; if hidden, tries 0-switch AXMenuBar Open App first,
+        only falling back to brief wake + prev_pid restore if silent open is unavailable/fails.
         """
         poll_data = ax_bridge.poll_chat(pid)
         if poll_data.get("has_window"):
@@ -3517,6 +3766,23 @@ class MacOSGeminiDriver(BaseDesktopDriver):
                 time.sleep(0.2)
                 poll_data = ax_bridge.poll_chat(pid)
             return poll_data
+
+        silent_open_fn = getattr(ax_bridge, "open_app_window_silent", None)
+        if callable(silent_open_fn):
+            try:
+                if silent_open_fn(pid, keep_hidden=True, wait_s=2.0):
+                    poll_data = ax_bridge.poll_chat(pid)
+                    if (
+                        poll_data.get("has_window")
+                        and not poll_data.get("confirmation_card")
+                        and not poll_data.get("busy")
+                        and not SentinelEnvelope.has_complete_sentinel(str(poll_data.get("text") or ""), job_id)
+                    ):
+                        time.sleep(0.15)
+                        poll_data = ax_bridge.poll_chat(pid)
+                    return poll_data
+            except Exception:
+                pass
 
         prev_pid = self._get_frontmost_pid()
         try:
@@ -3552,32 +3818,57 @@ class MacOSGeminiDriver(BaseDesktopDriver):
         cancel_event: threading.Event,
         app_info: dict[str, Any],
     ) -> tuple[str, dict[str, Any]]:
-        """Silent background execution via native AXUIElement + daemon AXPress + diagnostic*.log wait."""
+        """Silent 0-focus-switch background execution via AXHidden OmnichatWindow + diagnostic*.log tail."""
         workspace_attached = False
         log_state = self._snapshot_diagnostic_log()
 
-        # Dispatch Phase: check has_window passively first (0.0s focus touch if already visible).
-        has_win = bool(ax_bridge.has_window(pid))
+        is_hidden_fn = getattr(ax_bridge, "is_hidden", None)
+        set_hidden_fn = getattr(ax_bridge, "set_hidden", None)
+        had_usable_win = self._has_usable_background_window(ax_bridge, pid)
+        was_hidden = bool(is_hidden_fn(pid)) if callable(is_hidden_fn) else True
+        keep_hidden = was_hidden or (not had_usable_win)
+
+        # Dispatch Phase: prefer 0-switch AXMenuBar -> File -> Open App + AXHidden=True when needed.
         prev_pid: int | None = None
         surfaced_for_dispatch = False
         try:
+            has_win = had_usable_win
             if not has_win:
-                prev_pid = self._get_frontmost_pid()
-                surfaced_for_dispatch = True
-                has_win = self._wake_window_background(
-                    ax_bridge=ax_bridge,
-                    pid=pid,
-                    open_bin=open_bin,
-                    app_path=str(app_info["app_path"]),
-                    cancel_event=cancel_event,
-                    bring_wait_s=0.8,
-                    open_wait_s=1.5,
-                )
+                silent_open_fn = getattr(ax_bridge, "open_app_window_silent", None)
+                if callable(silent_open_fn):
+                    try:
+                        has_win = bool(
+                            silent_open_fn(
+                                pid,
+                                keep_hidden=keep_hidden,
+                                wait_s=2.0,
+                                cancel_event=cancel_event,
+                            )
+                        )
+                    except DesktopJobCancelledError:
+                        raise
+                    except Exception:
+                        has_win = False
+                if not has_win:
+                    prev_pid = self._get_frontmost_pid()
+                    surfaced_for_dispatch = True
+                    has_win = self._wake_window_background(
+                        ax_bridge=ax_bridge,
+                        pid=pid,
+                        open_bin=open_bin,
+                        app_path=str(app_info["app_path"]),
+                        cancel_event=cancel_event,
+                        bring_wait_s=0.8,
+                        open_wait_s=1.5,
+                    )
 
             if not has_win:
                 raise RuntimeError(
                     "Gemini.app window did not appear for silent background dispatch; retry with --allow-foreground."
                 )
+
+            if keep_hidden and callable(set_hidden_fn):
+                set_hidden_fn(pid, True)
 
             if request.new_chat:
                 new_chat_fn = getattr(ax_bridge, "press_new_chat", None)
@@ -3600,22 +3891,23 @@ class MacOSGeminiDriver(BaseDesktopDriver):
                             restore_clipboard=False,
                         )
                     )
-                    if not workspace_attached and not surfaced_for_dispatch:
-                        prev_pid = self._get_frontmost_pid()
-                        bring_fn = getattr(ax_bridge, "_bring_frontmost", None)
-                        if callable(bring_fn):
-                            bring_fn(pid)
-                            surfaced_for_dispatch = True
-                            time.sleep(0.05)
-                        workspace_attached = bool(
-                            self._call_with_optional_background(
-                                attach_fn,
-                                pid,
-                                request.workspace_path,
-                                background=True,
-                                restore_clipboard=False,
+                    if not workspace_attached and not self._has_usable_background_window(ax_bridge, pid):
+                        silent_open_fn = getattr(ax_bridge, "open_app_window_silent", None)
+                        if callable(silent_open_fn) and silent_open_fn(
+                            pid,
+                            keep_hidden=keep_hidden,
+                            wait_s=1.5,
+                            cancel_event=cancel_event,
+                        ):
+                            workspace_attached = bool(
+                                self._call_with_optional_background(
+                                    attach_fn,
+                                    pid,
+                                    request.workspace_path,
+                                    background=True,
+                                    restore_clipboard=False,
+                                )
                             )
-                        )
 
             # Snapshot diagnostic*.log offset right BEFORE clicking send_button.
             log_state = self._snapshot_diagnostic_log()
@@ -3624,11 +3916,10 @@ class MacOSGeminiDriver(BaseDesktopDriver):
             submitted = False
             write_deadline = time.monotonic() + 1.2
             while True:
-                if not ax_bridge.has_window(pid):
-                    if not surfaced_for_dispatch:
+                if not self._has_usable_background_window(ax_bridge, pid):
+                    if prev_pid is None and not callable(getattr(ax_bridge, "open_app_window_silent", None)):
                         prev_pid = self._get_frontmost_pid()
-                        surfaced_for_dispatch = True
-                    self._wake_window_background(
+                    ok_win, stole = self._ensure_window_background(
                         ax_bridge=ax_bridge,
                         pid=pid,
                         open_bin=open_bin,
@@ -3636,7 +3927,10 @@ class MacOSGeminiDriver(BaseDesktopDriver):
                         cancel_event=cancel_event,
                         bring_wait_s=0.45,
                         open_wait_s=1.0,
+                        keep_hidden_if_opened=keep_hidden,
                     )
+                    if stole:
+                        surfaced_for_dispatch = True
                 written, submitted = ax_bridge.write_prompt_and_submit(pid, framed_prompt)
                 if written or time.monotonic() >= write_deadline:
                     break
@@ -3658,11 +3952,13 @@ class MacOSGeminiDriver(BaseDesktopDriver):
                 raise RuntimeError(
                     "Failed to invoke Gemini.app Send button via AXPress in background mode; retry with --allow-foreground."
                 )
+            if keep_hidden and callable(set_hidden_fn):
+                set_hidden_fn(pid, True)
         finally:
             if surfaced_for_dispatch:
                 self._activate_pid(ax_bridge, prev_pid, exclude_pid=pid)
 
-        # Wait Phase + One-Shot Verbatim Extraction (0 clipboard touch).
+        # Wait Phase + Passive Verbatim Extraction (0 focus switches, 0 clipboard touch).
         deadline = time.monotonic() + max(1, int(request.timeout_sec))
         captured_text = ""
         post_done_empty = 0
@@ -3676,17 +3972,18 @@ class MacOSGeminiDriver(BaseDesktopDriver):
                 log_state=log_state,
                 deadline=deadline,
             )
-            poll_data = (
-                direct_poll
-                if direct_poll is not None
-                else self._extract_one_shot_background(
-                    ax_bridge=ax_bridge,
-                    pid=pid,
-                    job_id=job_id,
-                    open_bin=open_bin,
-                    app_path=str(app_info["app_path"]),
-                )
-            )
+            if direct_poll is not None:
+                poll_data = direct_poll
+            else:
+                poll_data = ax_bridge.poll_chat(pid)
+                if not poll_data.get("has_window"):
+                    poll_data = self._extract_one_shot_background(
+                        ax_bridge=ax_bridge,
+                        pid=pid,
+                        job_id=job_id,
+                        open_bin=open_bin,
+                        app_path=str(app_info["app_path"]),
+                    )
 
             confirmation_card = poll_data.get("confirmation_card")
             if confirmation_card:
@@ -3697,38 +3994,66 @@ class MacOSGeminiDriver(BaseDesktopDriver):
 
             candidate_text = str(poll_data.get("text") or "")
             if SentinelEnvelope.has_complete_sentinel(candidate_text, job_id):
-                captured_text = candidate_text
-                break
+                if not poll_data.get("busy"):
+                    captured_text = candidate_text
+                    break
+                # Sentinel rendered while Stop button is briefly still clearing; settle passively.
+                log_state["saw_done"] = False
+                post_done_empty = 0
+                if cancel_event.wait(0.35):
+                    raise DesktopJobCancelledError("Desktop job cancelled")
+                continue
 
-            if not poll_data.get("busy"):
-                if candidate_text.strip():
-                    if cancel_event.wait(0.4):
-                        raise DesktopJobCancelledError("Desktop job cancelled")
-                    recheck = self._extract_one_shot_background(
+            if poll_data.get("busy"):
+                # Critical: clear saw_done so intermediate Task-mode stream events never trigger tight wake loops!
+                log_state["saw_done"] = False
+                post_done_empty = 0
+                if cancel_event.wait(0.4):
+                    raise DesktopJobCancelledError("Desktop job cancelled")
+                continue
+
+            if candidate_text.strip():
+                if cancel_event.wait(0.5):
+                    raise DesktopJobCancelledError("Desktop job cancelled")
+                recheck = (
+                    ax_bridge.poll_chat(pid)
+                    if poll_data.get("has_window")
+                    else self._extract_one_shot_background(
                         ax_bridge=ax_bridge,
                         pid=pid,
                         job_id=job_id,
                         open_bin=open_bin,
                         app_path=str(app_info["app_path"]),
                     )
-                    if recheck.get("confirmation_card"):
-                        raise RuntimeError(
-                            f"Gemini Task mode paused waiting for interactive confirmation/elicitation ({recheck['confirmation_card']}); "
-                            "aborted instead of hanging until timeout. Use strictly read-only prompt instructions or resolve the prompt in Gemini.app."
-                        )
-                    re_txt = str(recheck.get("text") or "")
-                    if SentinelEnvelope.has_complete_sentinel(re_txt, job_id):
-                        captured_text = re_txt
-                        break
-                    if not recheck.get("busy"):
-                        captured_text = re_txt or candidate_text
-                        break
-                elif direct_poll is None and log_state.get("saw_done"):
-                    post_done_empty += 1
-                    if post_done_empty >= 3:
-                        raise RuntimeError(
-                            "Gemini.app completed streaming in diagnostic logs, but OmnichatWindow yielded no AX response in background mode; retry with --allow-foreground."
-                        )
+                )
+                if recheck.get("confirmation_card"):
+                    raise RuntimeError(
+                        f"Gemini Task mode paused waiting for interactive confirmation/elicitation ({recheck['confirmation_card']}); "
+                        "aborted instead of hanging until timeout. Use strictly read-only prompt instructions or resolve the prompt in Gemini.app."
+                    )
+                if recheck.get("busy"):
+                    log_state["saw_done"] = False
+                    post_done_empty = 0
+                    continue
+                re_txt = str(recheck.get("text") or "")
+                if SentinelEnvelope.has_complete_sentinel(re_txt, job_id):
+                    captured_text = re_txt
+                    break
+                if re_txt != candidate_text:
+                    log_state["saw_done"] = False
+                    post_done_empty = 0
+                    continue
+                captured_text = re_txt or candidate_text
+                break
+
+            if direct_poll is None and log_state.get("saw_done"):
+                post_done_empty += 1
+                if post_done_empty >= 3:
+                    raise RuntimeError(
+                        "Gemini.app completed streaming in diagnostic logs, but OmnichatWindow yielded no AX response in background mode; retry with --allow-foreground."
+                    )
+                if cancel_event.wait(0.35):
+                    raise DesktopJobCancelledError("Desktop job cancelled")
 
         return captured_text, {
             "clipboard_restored": True,

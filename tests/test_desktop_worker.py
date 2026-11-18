@@ -1533,6 +1533,399 @@ class TestCrossPlatformDriversAndDiscovery(unittest.TestCase):
                     drv.execute_prompt("prompt", req.job_id, req, threading.Event())
             self.assertIn("yielded no AX response in background mode", str(ctx.exception))
 
+    def test_macos_zero_switch_open_app_window_silent_and_axhidden(self):
+        """open_app_window_silent opens OmnichatWindow via AXMenuBar File->Open App + AXHidden=True with 0 AXFrontmost calls."""
+        bridge = dw._MacOSAXBridge.__new__(dw._MacOSAXBridge)
+        handles: dict[int, tuple[str, Any]] = {}
+        next_id = [9000]
+        frontmost_sets: list[Any] = []
+        actions_called: list[tuple[int, str]] = []
+
+        def _alloc(kind: str, val: Any) -> int:
+            next_id[0] += 1
+            handles[next_id[0]] = (kind, val)
+            return next_id[0]
+
+        bridge._attrs = {
+            name: _alloc("attr", name)
+            for name in (
+                "AXWindows",
+                "AXChildren",
+                "AXRole",
+                "AXSubrole",
+                "AXIdentifier",
+                "AXDescription",
+                "AXTitle",
+                "AXValue",
+                "AXEnabled",
+                "AXHidden",
+                "AXFrontmost",
+                "AXMenuBar",
+                "AXPress",
+            )
+        }
+        bridge._k_true = _alloc("bool", True)
+        bridge._k_false = _alloc("bool", False)
+
+        # Start with MinichatWindow (AXSystemDialog) and AXHidden=True; File -> Open App transitions to OmnichatWindow (AXStandardWindow).
+        nodes: dict[int, dict[str, Any]] = {
+            100: {"AXWindows": [200], "AXHidden": True, "AXMenuBar": 300},
+            200: {"AXRole": "AXWindow", "AXSubrole": "AXSystemDialog", "AXTitle": "Gemini Mini Chat — New chat"},
+            201: {"AXRole": "AXWindow", "AXSubrole": "AXStandardWindow", "AXTitle": "Gemini — New chat"},
+            300: {"AXRole": "AXMenuBar", "AXChildren": [310]},
+            310: {"AXRole": "AXMenuBarItem", "AXTitle": "File", "AXChildren": [311]},
+            311: {"AXRole": "AXMenu", "AXChildren": [312]},
+            312: {"AXRole": "AXMenuItem", "AXTitle": "Open App", "AXEnabled": True},
+        }
+
+        class _CF:
+            def CFGetTypeID(self, ref: int) -> int:
+                return {"str": 1, "arr": 2, "bool": 3}.get(handles.get(ref, ("", None))[0], 0)
+
+            def CFStringGetTypeID(self) -> int:
+                return 1
+
+            def CFArrayGetTypeID(self) -> int:
+                return 2
+
+            def CFBooleanGetTypeID(self) -> int:
+                return 3
+
+            def CFStringCreateWithCString(self, _a, raw_bytes: bytes, _e: int) -> int:
+                return _alloc("str", raw_bytes.decode("utf-8"))
+
+            def CFStringGetLength(self, ref: int) -> int:
+                return len(handles[ref][1])
+
+            def CFStringGetMaximumSizeForEncoding(self, length: int, _e: int) -> int:
+                return length * 4 + 1
+
+            def CFStringGetCString(self, ref: int, buf, max_bytes: int, _e: int) -> bool:
+                raw = handles[ref][1].encode("utf-8")[: max_bytes - 1]
+                buf[0 : len(raw) + 1] = raw + b"\x00"
+                return True
+
+            def CFBooleanGetValue(self, ref: int) -> bool:
+                return bool(handles[ref][1])
+
+            def CFArrayGetCount(self, ref: int) -> int:
+                return len(handles[ref][1])
+
+            def CFArrayGetValueAtIndex(self, ref: int, idx: int) -> int:
+                return int(handles[ref][1][idx])
+
+            def CFRetain(self, ref: int) -> int:
+                return ref
+
+            def CFRelease(self, _ref: int) -> None:
+                return None
+
+        class _AX:
+            def AXUIElementCreateApplication(self, _pid: int) -> int:
+                return 100
+
+            def AXUIElementSetMessagingTimeout(self, _app: int, _t: float) -> int:
+                return 0
+
+            def AXUIElementCopyAttributeValue(self, el: int, attr_ref: int, out_ref) -> int:
+                attr_name = handles[attr_ref][1]
+                node = nodes.get(el, {})
+                if attr_name not in node:
+                    return -25212
+                val = node[attr_name]
+                if isinstance(val, bool):
+                    out_ref._obj.value = _alloc("bool", val)
+                elif isinstance(val, str):
+                    out_ref._obj.value = _alloc("str", val)
+                elif isinstance(val, int):
+                    out_ref._obj.value = val
+                elif isinstance(val, list):
+                    out_ref._obj.value = _alloc("arr", val)
+                return 0
+
+            def AXUIElementSetAttributeValue(self, el: int, attr_ref: int, val_ref: int) -> int:
+                attr_name = handles[attr_ref][1]
+                if attr_name == "AXFrontmost":
+                    frontmost_sets.append(val_ref)
+                kind, val = handles.get(val_ref, ("", None))
+                if el in nodes and kind == "bool":
+                    nodes[el][attr_name] = val
+                return 0
+
+            def AXUIElementPerformAction(self, el: int, action_ref: int) -> int:
+                act_name = handles[action_ref][1]
+                actions_called.append((el, act_name))
+                if el == 312 and act_name == "AXPress":
+                    nodes[100]["AXWindows"] = [201]
+                    nodes[100]["AXHidden"] = False
+                return 0
+
+        bridge.cf = _CF()
+        bridge.ax = _AX()
+        bridge.cg = None
+
+        self.assertFalse(bridge.has_usable_background_window(4242))
+        with mock.patch("desktop_worker.time.sleep", return_value=None):
+            ok = bridge.open_app_window_silent(4242, keep_hidden=True, wait_s=1.0)
+        self.assertTrue(ok)
+        self.assertTrue(bridge.has_usable_background_window(4242))
+        self.assertTrue(bridge.is_hidden(4242))
+        self.assertIn((312, "AXPress"), actions_called)
+        self.assertEqual(frontmost_sets, [])
+
+    def test_macos_task_mode_intermediate_endOfData_and_zero_focus_switch_flow(self):
+        """Task mode ignores intermediate endOfData, resets saw_done if busy=True, and achieves 0 focus switches with silent open."""
+        with tempfile.TemporaryDirectory() as tmp_ws, tempfile.TemporaryDirectory() as tmp_logs, tempfile.TemporaryDirectory() as tmp_app:
+            target_ws = os.path.realpath(tmp_ws)
+            fake_app = Path(tmp_app) / "Gemini.app"
+            (fake_app / "Contents").mkdir(parents=True)
+            diag_log = Path(tmp_logs) / "diagnostic-task.log"
+            diag_log.write_text("boot\n", encoding="utf-8")
+
+            # 1. _read_diagnostic_log_updates ignores intermediate endOfData / Loop exited in task mode
+            with mock.patch.dict(os.environ, {"GEMINI_DIAGNOSTIC_LOG_DIR": tmp_logs}, clear=False):
+                state = MacOSGeminiDriver._snapshot_diagnostic_log()
+                with diag_log.open("a", encoding="utf-8") as fh:
+                    fh.write(
+                        "agentModeTask: started\n"
+                        "addStreamingConversation\n"
+                        "ClientGenerateResponseStream.endOfData\n"
+                        "Loop exited normally\n"
+                    )
+                saw_start, saw_done = MacOSGeminiDriver._read_diagnostic_log_updates(state, mode="task")
+                self.assertTrue(saw_start)
+                self.assertFalse(saw_done)
+
+                # If removeStreamingConversation() is followed immediately by a new addStreamingConversation(), saw_done stays False
+                with diag_log.open("a", encoding="utf-8") as fh:
+                    fh.write("removeStreamingConversation()\naddStreamingConversation\n")
+                _, saw_done_restarted = MacOSGeminiDriver._read_diagnostic_log_updates(state, mode="task")
+                self.assertFalse(saw_done_restarted)
+                self.assertTrue(state.get("saw_recent_activity"))
+
+                # Final agentModeTask: ended + removeStreamingConversation() triggers saw_done=True
+                with diag_log.open("a", encoding="utf-8") as fh:
+                    fh.write("agentModeTask: ended (success=true)\nremoveStreamingConversation()\n")
+                _, saw_done_final = MacOSGeminiDriver._read_diagnostic_log_updates(state, mode="task")
+                self.assertTrue(saw_done_final)
+
+            # 2. Full zero-focus-switch MacOSGeminiDriver run using open_app_window_silent + AXHidden=True
+            diag_log.write_text("boot\n", encoding="utf-8")
+            drv = MacOSGeminiDriver()
+            job_id = "dsk-zero-switch-01"
+            req = DesktopJobRequest(
+                job_id=job_id,
+                prompt="Zero switch test",
+                driver="macos_ax",
+                mode="task",
+                workspace_path=target_ws,
+                timeout_sec=15,
+            )
+            framed = build_sentinel_prompt(job_id, req.prompt, mode="task", workspace_path=target_ws)
+            expected_md = (
+                f"{SentinelEnvelope.start_marker(job_id)}\n"
+                "## Executive Summary\nCompleted with 0 focus switches.\n"
+                f"{SentinelEnvelope.done_marker(job_id)}"
+            )
+
+            class _ZeroSwitchBridge:
+                def __init__(self) -> None:
+                    self._usable_win = False
+                    self._hidden = True
+                    self.bring_calls: list[int] = []
+                    self.activate_calls: list[int] = []
+                    self.polls = 0
+
+                def is_hidden(self, _pid: int) -> bool:
+                    return self._hidden
+
+                def set_hidden(self, _pid: int, hidden: bool = True) -> bool:
+                    self._hidden = bool(hidden)
+                    return True
+
+                def has_window(self, _pid: int) -> bool:
+                    return self._usable_win
+
+                def has_usable_background_window(self, _pid: int) -> bool:
+                    return self._usable_win
+
+                def open_app_window_silent(self, _pid: int, keep_hidden: bool = True, wait_s: float = 2.0, cancel_event=None) -> bool:
+                    self._usable_win = True
+                    if keep_hidden:
+                        self._hidden = True
+                    return True
+
+                def _bring_frontmost(self, pid: int) -> None:
+                    self.bring_calls.append(pid)
+
+                def _activate_pid(self, pid: int) -> bool:
+                    self.activate_calls.append(pid)
+                    return True
+
+                def press_new_chat(self, _pid: int) -> bool:
+                    return True
+
+                def ensure_mode(self, _pid: int, mode: str, background: bool = False) -> bool:
+                    return background is True and mode == "task"
+
+                def attach_workspace_folder(self, _pid: int, ws: str, restore_clipboard: bool = True, background: bool = False) -> bool:
+                    return background is True and ws == target_ws
+
+                def write_prompt_and_submit(self, _pid: int, text: str) -> tuple[bool, bool]:
+                    return (text == framed), True
+
+                def poll_chat(self, _pid: int) -> dict[str, Any]:
+                    self.polls += 1
+                    if self.polls == 1:
+                        with diag_log.open("a", encoding="utf-8") as fh:
+                            fh.write("agentModeTask: started\naddStreamingConversation\nClientGenerateResponseStream.endOfData\n")
+                        return {"has_window": True, "busy": True, "text": "", "confirmation_card": None}
+                    return {"has_window": True, "busy": False, "text": expected_md, "confirmation_card": None}
+
+            zero_ax = _ZeroSwitchBridge()
+            with mock.patch.dict(os.environ, {"GEMINI_DIAGNOSTIC_LOG_DIR": tmp_logs}, clear=False), \
+                 mock.patch.object(MacOSGeminiDriver, "_check_screen_locked", return_value="unlocked"), \
+                 mock.patch.object(MacOSGeminiDriver, "_check_accessibility", return_value="granted"), \
+                 mock.patch.object(
+                     drv,
+                     "discover_app",
+                     return_value={
+                         "app_detected": True,
+                         "app_name": "Gemini",
+                         "app_path": str(fake_app),
+                         "bundle_id": "com.google.GeminiMacOS",
+                         "app_version": "2.0",
+                         "app_running": True,
+                         "is_pwa": False,
+                     },
+                 ), \
+                 mock.patch.object(MacOSGeminiDriver, "_check_orca", return_value=None), \
+                 mock.patch.object(MacOSGeminiDriver, "_find_running_pid", return_value=4242), \
+                 mock.patch.object(MacOSGeminiDriver, "_get_frontmost_pid", side_effect=AssertionError("Must not probe/steal focus")), \
+                 mock.patch.object(dw._MacOSAXBridge, "get_instance", return_value=zero_ax), \
+                 mock.patch.object(MacOSGeminiDriver, "_pbpaste_bytes") as mock_pbpaste, \
+                 mock.patch.object(MacOSGeminiDriver, "_pbcopy_bytes") as mock_pbcopy, \
+                 mock.patch("desktop_worker.subprocess.run") as mock_sub_run, \
+                 mock.patch("desktop_worker.time.sleep", return_value=None):
+                raw_text, meta = drv.execute_prompt(framed, job_id, req, threading.Event())
+
+            self.assertEqual(raw_text, expected_md)
+            self.assertTrue(meta["background"])
+            self.assertTrue(meta["workspace_attached"])
+            self.assertEqual(zero_ax.bring_calls, [])
+            self.assertEqual(zero_ax.activate_calls, [])
+            self.assertTrue(zero_ax._hidden)
+            mock_sub_run.assert_not_called()
+            mock_pbpaste.assert_not_called()
+            mock_pbcopy.assert_not_called()
+
+            # 3. If saw_done latches from a false wakeup while busy=True, _execute_via_native_ax_background resets saw_done
+            class _FalseSawDoneBridge(_ZeroSwitchBridge):
+                def __init__(self) -> None:
+                    super().__init__()
+                    self.extract_calls = 0
+
+                def poll_chat(self, _pid: int) -> dict[str, Any]:
+                    self.polls += 1
+                    if self.polls <= 2:
+                        return {"has_window": False, "busy": False, "text": "", "confirmation_card": None}
+                    if self.polls == 3:
+                        # False done returned busy=True -> must clear log_state["saw_done"]!
+                        return {"has_window": True, "busy": True, "text": "", "confirmation_card": None}
+                    return {"has_window": True, "busy": False, "text": expected_md, "confirmation_card": None}
+
+            saw_done_ax = _FalseSawDoneBridge()
+            wait_call_states: list[bool] = []
+
+            def _fake_wait(*, log_state, **_kw):
+                wait_call_states.append(bool(log_state.get("saw_done", False)))
+                if len(wait_call_states) == 1:
+                    log_state["saw_done"] = True
+                    return None
+                return {"has_window": True, "busy": False, "text": expected_md, "confirmation_card": None}
+
+            with mock.patch.dict(os.environ, {"GEMINI_DIAGNOSTIC_LOG_DIR": tmp_logs}, clear=False), \
+                 mock.patch.object(MacOSGeminiDriver, "_check_screen_locked", return_value="unlocked"), \
+                 mock.patch.object(MacOSGeminiDriver, "_check_accessibility", return_value="granted"), \
+                 mock.patch.object(
+                     drv,
+                     "discover_app",
+                     return_value={
+                         "app_detected": True,
+                         "app_name": "Gemini",
+                         "app_path": str(fake_app),
+                         "bundle_id": "com.google.GeminiMacOS",
+                         "app_version": "2.0",
+                         "app_running": True,
+                         "is_pwa": False,
+                     },
+                 ), \
+                 mock.patch.object(MacOSGeminiDriver, "_check_orca", return_value=None), \
+                 mock.patch.object(MacOSGeminiDriver, "_find_running_pid", return_value=4242), \
+                 mock.patch.object(dw._MacOSAXBridge, "get_instance", return_value=saw_done_ax), \
+                 mock.patch.object(drv, "_wait_via_diagnostic_log", side_effect=_fake_wait), \
+                 mock.patch("desktop_worker.time.sleep", return_value=None):
+                raw2, _ = drv.execute_prompt(framed, job_id, req, threading.Event())
+            self.assertEqual(raw2, expected_md)
+            self.assertEqual(wait_call_states, [False, False])
+
+    def test_macos_poll_chat_detects_tab_stop_continue_backup_card(self):
+        """poll_chat detects tab_stop_Continue backup confirmation card so jobs abort immediately."""
+        bridge = dw._MacOSAXBridge.__new__(dw._MacOSAXBridge)
+        handles: dict[int, tuple[str, Any]] = {}
+        next_id = [9500]
+
+        def _alloc(kind: str, val: Any) -> int:
+            next_id[0] += 1
+            handles[next_id[0]] = (kind, val)
+            return next_id[0]
+
+        bridge._attrs = {
+            name: _alloc("attr", name)
+            for name in ("AXWindows", "AXChildren", "AXRole", "AXSubrole", "AXIdentifier", "AXDescription", "AXTitle", "AXValue")
+        }
+        bridge._k_true = _alloc("bool", True)
+        nodes = {
+            100: {"AXWindows": [201]},
+            201: {"AXRole": "AXWindow", "AXSubrole": "AXStandardWindow", "AXChildren": [301]},
+            301: {"AXRole": "AXButton", "AXIdentifier": "tab_stop_Continue", "AXDescription": "Continue, keyboard shortcut Command Return"},
+        }
+
+        class _CF:
+            def CFGetTypeID(self, ref: int) -> int:
+                return {"str": 1, "arr": 2}.get(handles.get(ref, ("", None))[0], 0)
+            def CFStringGetTypeID(self) -> int: return 1
+            def CFArrayGetTypeID(self) -> int: return 2
+            def CFBooleanGetTypeID(self) -> int: return 3
+            def CFStringGetLength(self, ref: int) -> int: return len(handles[ref][1])
+            def CFStringGetMaximumSizeForEncoding(self, length: int, _e: int) -> int: return length * 4 + 1
+            def CFStringGetCString(self, ref: int, buf, max_bytes: int, _e: int) -> bool:
+                raw = handles[ref][1].encode("utf-8")[: max_bytes - 1]
+                buf[0 : len(raw) + 1] = raw + b"\x00"
+                return True
+            def CFArrayGetCount(self, ref: int) -> int: return len(handles[ref][1])
+            def CFArrayGetValueAtIndex(self, ref: int, idx: int) -> int: return int(handles[ref][1][idx])
+            def CFRetain(self, ref: int) -> int: return ref
+            def CFRelease(self, _ref: int) -> None: return None
+
+        class _AX:
+            def AXUIElementCreateApplication(self, _pid: int) -> int: return 100
+            def AXUIElementSetMessagingTimeout(self, _app: int, _t: float) -> int: return 0
+            def AXUIElementCopyAttributeValue(self, el: int, attr_ref: int, out_ref) -> int:
+                attr_name = handles[attr_ref][1]
+                node = nodes.get(el, {})
+                if attr_name not in node: return -25212
+                val = node[attr_name]
+                out_ref._obj.value = _alloc("str" if isinstance(val, str) else "arr", val)
+                return 0
+
+        bridge.cf = _CF()
+        bridge.ax = _AX()
+        bridge.cg = None
+        polled = bridge.poll_chat(4242)
+        self.assertTrue(polled["has_window"])
+        self.assertEqual(polled["confirmation_card"], "tab_stop_Continue")
+
     def test_windows_driver_background_env_var_and_meta(self):
         """WindowsGeminiDriver passes AGY_DESKTOP_BACKGROUND='1' (background=True) and '0' (background=False)."""
         with tempfile.TemporaryDirectory() as tmp:
