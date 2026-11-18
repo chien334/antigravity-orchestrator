@@ -3330,6 +3330,7 @@ class TestDesktopServerRESTSSEAndDashboard(unittest.TestCase):
             self.assertIn("workspace_path", cols)
             self.assertIn("workspace_attached", cols)
             self.assertIn("background", cols)
+            self.assertIn("allow_edits", cols)
 
             jobs = store.list_desktop_jobs(job_id="dsk-legacy-1")
             self.assertEqual(len(jobs), 1)
@@ -3337,6 +3338,7 @@ class TestDesktopServerRESTSSEAndDashboard(unittest.TestCase):
             self.assertIsNone(jobs[0]["workspace_path"])
             self.assertFalse(jobs[0]["workspace_attached"])
             self.assertTrue(jobs[0]["background"])
+            self.assertFalse(jobs[0]["allow_edits"])
 
     def test_background_mode_rest_migration_and_dashboard_checkbox(self):
         """POST /api/desktop/dispatch defaults to background=True, honors background=False, and dashboard renders #desktop-dispatch-background."""
@@ -3373,6 +3375,19 @@ class TestDesktopServerRESTSSEAndDashboard(unittest.TestCase):
         st_html, _, html = self._request("GET", "/")
         self.assertEqual(st_html, 200)
         self.assertIn('id="desktop-dispatch-background"', html)
+
+        # 4. Invalid allow_edits value rejected with HTTP 400
+        st_bad_ae, _, res_bad_ae = self._request(
+            "POST",
+            "/api/desktop/dispatch",
+            {
+                "driver": "mock",
+                "allow_edits": "maybe",
+                "prompt": "Bad allow_edits type check",
+            },
+        )
+        self.assertEqual(st_bad_ae, 400)
+        self.assertIn("allow_edits", res_bad_ae["error"])
 
     def test_task_mode_default_workspace_guard_chat_mode_and_dashboard_ui(self):
         """POST /api/desktop/dispatch defaults to task+workspace_root, rejects /etc & bogus mode (400), supports chat mode, and renders UI controls."""
@@ -3717,6 +3732,495 @@ class TestDesktopSDKAndCLISubprocess(unittest.TestCase):
         d_fg = json.loads(p_fg.stdout)
         self.assertEqual(d_fg["status"], "ok")
         self.assertFalse(d_fg["job"]["background"])
+
+        # Validate --allow-edits CLI dispatch (defaults False, sets True with --allow-edits)
+        p_ae = subprocess.run(
+            [
+                sys.executable,
+                client_cli,
+                "--url",
+                self.base_url,
+                "desktop-ask",
+                "--driver",
+                "mock",
+                "--allow-edits",
+                "--prompt",
+                "CLI allow edits check",
+                "--json",
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        d_ae = json.loads(p_ae.stdout)
+        self.assertEqual(d_ae["status"], "ok")
+        self.assertTrue(d_ae["job"]["allow_edits"])
+        self.assertFalse(d_bg["job"]["allow_edits"])
+
+
+class TestAllowEditsAndTimeoutTelemetry(unittest.TestCase):
+    """Verify authorized edits mode, silent confirmation card AXPress, and timeout telemetry preservation."""
+
+    def test_allow_edits_prompt_framing_and_request_parsing(self):
+        """DesktopJobRequest parses allow_edits and SentinelEnvelope switches Rule 5 to authorized workspace edits."""
+        req_default = DesktopJobRequest(job_id="J-ro", prompt="Audit")
+        self.assertFalse(req_default.allow_edits)
+
+        with tempfile.TemporaryDirectory() as tmp_ws:
+            resolved_ws = os.path.realpath(tmp_ws)
+            req_edit = DesktopJobRequest.from_dict(
+                {
+                    "job_id": "J-edit-1",
+                    "prompt": "Fix bug",
+                    "workspace_path": tmp_ws,
+                    "allow_edits": "true",
+                }
+            )
+            self.assertTrue(req_edit.allow_edits)
+
+            ro_prompt = SentinelEnvelope.build_prompt(
+                "J-ro",
+                "Audit",
+                mode="task",
+                workspace_path=resolved_ws,
+                allow_edits=False,
+            )
+            self.assertIn("STRICTLY READ-ONLY", ro_prompt)
+
+            ed_prompt = SentinelEnvelope.build_prompt(
+                "J-edit-1",
+                "Fix bug",
+                mode="task",
+                workspace_path=resolved_ws,
+                allow_edits=True,
+            )
+            self.assertIn("AUTHORIZED WORKSPACE EDITS", ed_prompt)
+            self.assertNotIn("STRICTLY READ-ONLY", ed_prompt)
+            self.assertIn("NEVER execute destructive shell commands", ed_prompt)
+            self.assertIn(resolved_ws, ed_prompt)
+
+    def test_macos_approve_confirmation_card_zero_focus_switch(self):
+        """approve_confirmation_card presses affirmative button via AXPress with AXHidden=True and never calls _bring_frontmost."""
+        bridge = dw._MacOSAXBridge.__new__(dw._MacOSAXBridge)
+        handles: dict[int, tuple[str, Any]] = {}
+        next_id = [9500]
+        pressed_els: list[int] = []
+        set_attrs: list[tuple[int, str, Any]] = []
+
+        def _alloc(kind: str, val: Any) -> int:
+            next_id[0] += 1
+            handles[next_id[0]] = (kind, val)
+            return next_id[0]
+
+        bridge._attrs = {
+            name: _alloc("attr", name)
+            for name in (
+                "AXWindows",
+                "AXChildren",
+                "AXRole",
+                "AXSubrole",
+                "AXIdentifier",
+                "AXDescription",
+                "AXTitle",
+                "AXValue",
+                "AXEnabled",
+                "AXHidden",
+                "AXFrontmost",
+                "AXPress",
+                "AXSheets",
+            )
+        }
+        bridge._k_true = _alloc("bool", True)
+        bridge._k_false = _alloc("bool", False)
+
+        nodes: dict[int, dict[str, Any]] = {
+            100: {"AXWindows": [201]},
+            201: {"AXRole": "AXWindow", "AXSubrole": "AXStandardWindow", "AXChildren": [301]},
+            301: {
+                "AXRole": "AXGroup",
+                "AXIdentifier": "ActionCardRemyConfirmationCard",
+                "AXChildren": [401, 402],
+            },
+            401: {
+                "AXRole": "AXButton",
+                "AXTitle": "Cancel",
+                "AXDescription": "Cancel",
+                "AXIdentifier": "cancel_btn",
+                "AXEnabled": True,
+            },
+            402: {
+                "AXRole": "AXButton",
+                "AXTitle": "Allow",
+                "AXDescription": "Allow file edit",
+                "AXIdentifier": "tab_stop_Continue",
+                "AXEnabled": True,
+            },
+        }
+
+        class _CF:
+            def CFGetTypeID(self, ref: int) -> int:
+                return {"str": 1, "arr": 2, "bool": 3}.get(handles.get(ref, ("", None))[0], 0)
+
+            def CFStringGetTypeID(self) -> int:
+                return 1
+
+            def CFArrayGetTypeID(self) -> int:
+                return 2
+
+            def CFBooleanGetTypeID(self) -> int:
+                return 3
+
+            def CFBooleanGetValue(self, ref: int) -> bool:
+                return bool(handles[ref][1])
+
+            def CFStringGetLength(self, ref: int) -> int:
+                return len(handles[ref][1])
+
+            def CFStringGetMaximumSizeForEncoding(self, length: int, _enc: int) -> int:
+                return length * 4 + 1
+
+            def CFStringGetCString(self, ref: int, buf, max_bytes: int, _enc: int) -> bool:
+                raw = handles[ref][1].encode("utf-8")[: max_bytes - 1]
+                buf[0 : len(raw) + 1] = raw + b"\x00"
+                return True
+
+            def CFArrayGetCount(self, ref: int) -> int:
+                return len(handles[ref][1])
+
+            def CFArrayGetValueAtIndex(self, ref: int, idx: int) -> int:
+                return int(handles[ref][1][idx])
+
+            def CFRetain(self, ref: int) -> int:
+                return ref
+
+            def CFRelease(self, _ref: int) -> None:
+                return None
+
+        class _AX:
+            def AXUIElementCreateApplication(self, _pid: int) -> int:
+                return 100
+
+            def AXUIElementSetMessagingTimeout(self, _app: int, _t: float) -> int:
+                return 0
+
+            def AXUIElementCopyAttributeValue(self, el: int, attr_ref: int, out_ref) -> int:
+                attr_name = handles[attr_ref][1]
+                node = nodes.get(el, {})
+                if attr_name not in node:
+                    return -25212
+                val = node[attr_name]
+                if isinstance(val, bool):
+                    out_ref._obj.value = bridge._k_true if val else bridge._k_false
+                else:
+                    out_ref._obj.value = _alloc("str" if isinstance(val, str) else "arr", val)
+                return 0
+
+            def AXUIElementSetAttributeValue(self, el: int, attr_ref: int, val_ref: int) -> int:
+                attr_name = handles[attr_ref][1]
+                set_attrs.append((el, attr_name, handles.get(val_ref, ("?", val_ref))[1]))
+                return 0
+
+            def AXUIElementPerformAction(self, el: int, action_ref: int) -> int:
+                if handles.get(action_ref, ("", ""))[1] == "AXPress":
+                    pressed_els.append(el)
+                return 0
+
+        bridge.cf = _CF()
+        bridge.ax = _AX()
+        bridge.cg = None
+
+        approved = bridge.approve_confirmation_card(4242, keep_hidden=True)
+        self.assertEqual(approved, "tab_stop_Continue:Allow")
+        self.assertEqual(pressed_els, [402])  # Strictly "Allow", NEVER "Cancel" (401)
+        self.assertIn((100, "AXHidden", True), set_attrs)
+        self.assertNotIn((100, "AXFrontmost", True), set_attrs)
+
+        # Also verify container card button discovery when button has generic AXIdentifier
+        pressed_els.clear()
+        nodes[402]["AXIdentifier"] = "confirm_allow_btn"
+        approved_card = bridge.approve_confirmation_card(4242, keep_hidden=True)
+        self.assertEqual(approved_card, "ActionCardRemyConfirmationCard:Allow")
+        self.assertEqual(pressed_els, [402])
+
+        # Elicitation card with no affirmative button returns None safely
+        nodes[301]["AXIdentifier"] = "ActionCardRemyElicitationCard"
+        nodes[301]["AXChildren"] = []
+        self.assertIsNone(bridge.approve_confirmation_card(4242, keep_hidden=True))
+
+    def test_macos_background_allow_edits_silently_approves_confirmation_and_preserves_ws_on_timeout(self):
+        """With allow_edits=True, background mode silently presses confirmation cards (0 focus switches); TimeoutError preserves workspace_attached=True."""
+        expected_md = (
+            "<<<AGY_DESKTOP_START:dsk-allow-edits-01>>>\n"
+            "## Executive Summary\nEdited successfully.\n"
+            "<<<AGY_DESKTOP_DONE:dsk-allow-edits-01>>>"
+        )
+
+        class _SilentEditBridge:
+            def __init__(self) -> None:
+                self.poll_calls = 0
+                self.approve_calls: list[bool] = []
+                self.bring_calls = 0
+
+            def is_hidden(self, _pid: int) -> bool:
+                return True
+
+            def set_hidden(self, _pid: int, _hidden: bool = True) -> bool:
+                return True
+
+            def has_usable_background_window(self, _pid: int) -> bool:
+                return True
+
+            def has_window(self, _pid: int) -> bool:
+                return True
+
+            def press_new_chat(self, _pid: int) -> bool:
+                return True
+
+            def ensure_mode(self, _pid: int, _mode: str, background: bool = False) -> bool:
+                return True
+
+            def attach_workspace_folder(self, _pid: int, _ws: str, **_kwargs) -> bool:
+                return True
+
+            def write_prompt_and_submit(self, _pid: int, _text: str) -> tuple[bool, bool]:
+                return True, True
+
+            def _bring_frontmost(self, _pid: int) -> None:
+                self.bring_calls += 1
+
+            def approve_confirmation_card(self, _pid: int, keep_hidden: bool = True) -> str | None:
+                self.approve_calls.append(bool(keep_hidden))
+                return "ActionCardRemyConfirmationCard:Allow"
+
+            def poll_chat(self, _pid: int) -> dict[str, Any]:
+                self.poll_calls += 1
+                if self.poll_calls == 1:
+                    return {
+                        "has_window": True,
+                        "busy": False,
+                        "text": "",
+                        "has_copy_button": False,
+                        "confirmation_card": "ActionCardRemyConfirmationCard",
+                    }
+                return {
+                    "has_window": True,
+                    "busy": False,
+                    "text": expected_md,
+                    "has_copy_button": True,
+                    "confirmation_card": None,
+                }
+
+        drv = MacOSGeminiDriver()
+        bridge = _SilentEditBridge()
+        with tempfile.TemporaryDirectory() as tmp_ws, tempfile.TemporaryDirectory() as tmp_logs:
+            req = DesktopJobRequest(
+                job_id="dsk-allow-edits-01",
+                prompt="Edit target.py",
+                driver="macos_ax",
+                mode="task",
+                workspace_path=tmp_ws,
+                background=True,
+                allow_edits=True,
+                timeout_sec=30,
+            )
+            with mock.patch.dict(os.environ, {"GEMINI_DIAGNOSTIC_LOG_DIR": tmp_logs}, clear=False), \
+                 mock.patch.object(MacOSGeminiDriver, "_check_screen_locked", return_value="unlocked"), \
+                 mock.patch.object(MacOSGeminiDriver, "_check_accessibility", return_value="granted"), \
+                 mock.patch.object(
+                     drv,
+                     "discover_app",
+                     return_value={
+                         "app_detected": True,
+                         "app_name": "Gemini",
+                         "app_path": "/Applications/Gemini.app",
+                         "bundle_id": "com.google.GeminiMacOS",
+                         "app_version": "2.0",
+                         "app_running": True,
+                         "is_pwa": False,
+                     },
+                 ), \
+                 mock.patch.object(MacOSGeminiDriver, "_check_orca", return_value=None), \
+                 mock.patch.object(MacOSGeminiDriver, "_find_running_pid", return_value=4242), \
+                 mock.patch.object(dw._MacOSAXBridge, "get_instance", return_value=bridge), \
+                 mock.patch("desktop_worker.time.sleep", return_value=None):
+                raw_text, meta = drv.execute_prompt(
+                    build_sentinel_prompt(req.job_id, req.prompt, mode="task", workspace_path=tmp_ws, allow_edits=True),
+                    req.job_id,
+                    req,
+                    threading.Event(),
+                )
+            self.assertEqual(raw_text, expected_md)
+            self.assertEqual(bridge.approve_calls, [True])
+            self.assertEqual(bridge.bring_calls, 0)
+            self.assertTrue(meta["workspace_attached"])
+
+            # Now test TimeoutError inside _execute_via_native_ax_background preserves workspace_attached=True in DesktopJobResult
+            class _TimeoutAfterAttachBridge(_SilentEditBridge):
+                def poll_chat(self, _pid: int) -> dict[str, Any]:
+                    return {"has_window": True, "busy": True, "text": "", "confirmation_card": None}
+
+            timeout_bridge = _TimeoutAfterAttachBridge()
+            mgr = DesktopWorkerManager(
+                artifacts_dir=Path(tmp_ws) / "reports",
+                lock_path=Path(tmp_ws) / "worker.lock",
+                workspace_root=Path(tmp_ws),
+            )
+            req_to = DesktopJobRequest(
+                job_id="dsk-timeout-ws-01",
+                prompt="Slow task",
+                driver="macos_ax",
+                mode="task",
+                workspace_path=tmp_ws,
+                background=True,
+                allow_edits=True,
+                timeout_sec=1,
+            )
+            with mock.patch.dict(os.environ, {"GEMINI_DIAGNOSTIC_LOG_DIR": tmp_logs}, clear=False), \
+                 mock.patch.object(dw, "get_desktop_driver", return_value=drv), \
+                 mock.patch.object(MacOSGeminiDriver, "_check_screen_locked", return_value="unlocked"), \
+                 mock.patch.object(MacOSGeminiDriver, "_check_accessibility", return_value="granted"), \
+                 mock.patch.object(
+                     drv,
+                     "discover_app",
+                     return_value={
+                         "app_detected": True,
+                         "app_name": "Gemini",
+                         "app_path": "/Applications/Gemini.app",
+                         "bundle_id": "com.google.GeminiMacOS",
+                         "app_version": "2.0",
+                         "app_running": True,
+                         "is_pwa": False,
+                     },
+                 ), \
+                 mock.patch.object(MacOSGeminiDriver, "_check_orca", return_value=None), \
+                 mock.patch.object(MacOSGeminiDriver, "_find_running_pid", return_value=4242), \
+                 mock.patch.object(dw._MacOSAXBridge, "get_instance", return_value=timeout_bridge), \
+                 mock.patch.object(drv, "_wait_via_diagnostic_log", side_effect=TimeoutError("Timed out after 1s")):
+                res_to = mgr.execute_job(req_to)
+
+            self.assertEqual(res_to.status, "timed_out")
+            self.assertTrue(res_to.workspace_attached)
+            self.assertTrue(res_to.allow_edits)
+
+    def test_macos_background_workspace_attach_retries_and_aborts_if_unattached(self):
+        """Background Task dispatch retries transient workspace attach failures and refuses unattached submission."""
+        drv = MacOSGeminiDriver()
+        job_id = "dsk-attach-guard-01"
+
+        class _FlakyAttachBridge:
+            def __init__(self, fail_limit: int) -> None:
+                self.fail_limit = fail_limit
+                self.attach_calls = 0
+                self.write_calls = 0
+                self.poll_calls = 0
+
+            def is_hidden(self, _pid: int) -> bool:
+                return True
+
+            def set_hidden(self, _pid: int, _hidden: bool = True) -> bool:
+                return True
+
+            def has_usable_background_window(self, _pid: int) -> bool:
+                return True
+
+            def has_window(self, _pid: int) -> bool:
+                return True
+
+            def press_new_chat(self, _pid: int) -> bool:
+                return True
+
+            def ensure_mode(self, _pid: int, _mode: str, background: bool = False) -> bool:
+                return True
+
+            def attach_workspace_folder(self, _pid: int, _ws: str, **_kwargs) -> bool:
+                self.attach_calls += 1
+                return self.attach_calls > self.fail_limit
+
+            def write_prompt_and_submit(self, _pid: int, _text: str) -> tuple[bool, bool]:
+                self.write_calls += 1
+                return True, True
+
+            def poll_chat(self, _pid: int) -> dict[str, Any]:
+                self.poll_calls += 1
+                return {
+                    "has_window": True,
+                    "busy": False,
+                    "text": (
+                        f"{SentinelEnvelope.start_marker(job_id)}\n"
+                        "## Executive Summary\nAttached on retry.\n"
+                        f"{SentinelEnvelope.done_marker(job_id)}"
+                    ),
+                    "has_copy_button": True,
+                    "confirmation_card": None,
+                }
+
+        with tempfile.TemporaryDirectory() as tmp_ws, tempfile.TemporaryDirectory() as tmp_logs:
+            req = DesktopJobRequest(
+                job_id=job_id,
+                prompt="Fix files",
+                driver="macos_ax",
+                mode="task",
+                workspace_path=tmp_ws,
+                background=True,
+                allow_edits=True,
+                timeout_sec=30,
+            )
+            framed = build_sentinel_prompt(job_id, req.prompt, mode="task", workspace_path=tmp_ws, allow_edits=True)
+
+            # 1. Fails first attempt, succeeds on 2nd attempt -> submits and returns workspace_attached=True
+            retry_bridge = _FlakyAttachBridge(fail_limit=1)
+            with mock.patch.dict(os.environ, {"GEMINI_DIAGNOSTIC_LOG_DIR": tmp_logs}, clear=False), \
+                 mock.patch.object(MacOSGeminiDriver, "_check_screen_locked", return_value="unlocked"), \
+                 mock.patch.object(MacOSGeminiDriver, "_check_accessibility", return_value="granted"), \
+                 mock.patch.object(
+                     drv,
+                     "discover_app",
+                     return_value={
+                         "app_detected": True,
+                         "app_name": "Gemini",
+                         "app_path": "/Applications/Gemini.app",
+                         "bundle_id": "com.google.GeminiMacOS",
+                         "app_version": "2.0",
+                         "app_running": True,
+                         "is_pwa": False,
+                     },
+                 ), \
+                 mock.patch.object(MacOSGeminiDriver, "_check_orca", return_value=None), \
+                 mock.patch.object(MacOSGeminiDriver, "_find_running_pid", return_value=4242), \
+                 mock.patch.object(dw._MacOSAXBridge, "get_instance", return_value=retry_bridge), \
+                 mock.patch("desktop_worker.time.sleep", return_value=None):
+                _txt, meta = drv.execute_prompt(framed, job_id, req, threading.Event())
+            self.assertEqual(retry_bridge.attach_calls, 2)
+            self.assertEqual(retry_bridge.write_calls, 1)
+            self.assertTrue(meta["workspace_attached"])
+
+            # 2. Fails all 3 attempts -> raises RuntimeError and NEVER writes/submits prompt unattached
+            perm_fail_bridge = _FlakyAttachBridge(fail_limit=99)
+            with mock.patch.dict(os.environ, {"GEMINI_DIAGNOSTIC_LOG_DIR": tmp_logs}, clear=False), \
+                 mock.patch.object(MacOSGeminiDriver, "_check_screen_locked", return_value="unlocked"), \
+                 mock.patch.object(MacOSGeminiDriver, "_check_accessibility", return_value="granted"), \
+                 mock.patch.object(
+                     drv,
+                     "discover_app",
+                     return_value={
+                         "app_detected": True,
+                         "app_name": "Gemini",
+                         "app_path": "/Applications/Gemini.app",
+                         "bundle_id": "com.google.GeminiMacOS",
+                         "app_version": "2.0",
+                         "app_running": True,
+                         "is_pwa": False,
+                     },
+                 ), \
+                 mock.patch.object(MacOSGeminiDriver, "_check_orca", return_value=None), \
+                 mock.patch.object(MacOSGeminiDriver, "_find_running_pid", return_value=4242), \
+                 mock.patch.object(dw._MacOSAXBridge, "get_instance", return_value=perm_fail_bridge), \
+                 mock.patch("desktop_worker.time.sleep", return_value=None):
+                with self.assertRaises(RuntimeError) as ctx:
+                    drv.execute_prompt(framed, job_id, req, threading.Event())
+            self.assertIn("Failed to attach workspace", str(ctx.exception))
+            self.assertEqual(perm_fail_bridge.attach_calls, 3)
+            self.assertEqual(perm_fail_bridge.write_calls, 0)
 
 
 if __name__ == "__main__":

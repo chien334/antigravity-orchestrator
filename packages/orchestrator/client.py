@@ -336,8 +336,9 @@ class OrchestratorClient:
         workspace_path: Optional[str] = None,
         no_workspace: bool = False,
         background: bool = True,
+        allow_edits: bool = False,
     ) -> dict:
-        """Dispatch a bounded read-only prompt to the local Gemini Desktop Worker (POST /api/desktop/dispatch)."""
+        """Dispatch a bounded prompt to the local Gemini Desktop Worker (POST /api/desktop/dispatch)."""
         eff_mode = (mode or "task").strip().lower() or "task"
         eff_workspace = None if no_workspace else workspace_path
         payload: dict[str, Any] = {
@@ -354,6 +355,7 @@ class OrchestratorClient:
             "workspace_path": eff_workspace,
             "no_workspace": bool(no_workspace),
             "background": bool(background),
+            "allow_edits": bool(allow_edits),
         }
         if task_id is not None:
             payload["task_id"] = task_id
@@ -761,6 +763,12 @@ def main():
         action="store_false",
         help="Allow foreground UI interaction (only needed once to bookmark a new workspace folder)",
     )
+    desktop_dispatch_parser.add_argument(
+        "--allow-edits",
+        action="store_true",
+        default=False,
+        help="Authorize Gemini.app Task mode to edit specified files inside --workspace directly (and silently approve edit confirmation cards in background)",
+    )
     desktop_dispatch_parser.add_argument("--timeout", type=int, default=240, help="Job timeout in seconds (default: 240)")
     desktop_dispatch_parser.add_argument("--output", "--out", dest="output", type=str, default=None, help="Optional output Markdown artifact path inside docs/reports/")
     desktop_dispatch_parser.add_argument("--no-redact", action="store_true", help="Disable pre-flight secret redaction")
@@ -1074,6 +1082,7 @@ def main():
             workspace_path=resolved_workspace,
             no_workspace=args.no_workspace,
             background=args.background,
+            allow_edits=bool(args.allow_edits),
         )
         if "error" in res:
             print(json.dumps(res, indent=2))
@@ -1085,10 +1094,11 @@ def main():
             ws_display = f"{job_ws} (attached)" if job_ws else "none"
             is_bg = bool(job.get("background", args.background))
             exec_display = "background (silent)" if is_bg else "foreground"
+            is_edits = bool(job.get("allow_edits", args.allow_edits))
             print("=== Desktop Worker Dispatch ===")
             print(f"Job ID:            {job.get('job_id', '-')}")
             print(f"Status:            {job.get('status', res.get('status', '-'))}")
-            print(f"Mode: {job_mode} | Workspace: {ws_display}")
+            print(f"Mode: {job_mode} | Workspace: {ws_display} | Allow Edits: {is_edits}")
             print(f"Execution: {exec_display}")
             print(f"Driver / OS:       {job.get('driver_used') or job.get('driver_name', '-')} ({job.get('os_platform', '-')})")
             print(f"Artifact Path:     {job.get('artifact_path') or '-'}")

@@ -991,10 +991,12 @@ class DesktopJobRequest:
     mode: str = DEFAULT_DESKTOP_MODE
     workspace_path: str | None = None
     background: bool = True
+    allow_edits: bool = False
 
     def __post_init__(self) -> None:
         self.mode = validate_desktop_mode(self.mode)
         self.background = bool(self.background)
+        self.allow_edits = bool(self.allow_edits)
         if self.workspace_path is not None:
             self.workspace_path = validate_workspace_path(self.workspace_path)
 
@@ -1029,6 +1031,14 @@ class DesktopJobRequest:
         else:
             background_val = bool(raw_bg)
 
+        raw_allow_edits = data.get("allow_edits")
+        if raw_allow_edits is None:
+            allow_edits_val = False
+        elif isinstance(raw_allow_edits, str):
+            allow_edits_val = raw_allow_edits.strip().lower() not in ("0", "false", "no", "off", "")
+        else:
+            allow_edits_val = bool(raw_allow_edits)
+
         return cls(
             job_id=job_id,
             prompt=str(data.get("prompt") or ""),
@@ -1048,6 +1058,7 @@ class DesktopJobRequest:
             mode=mode_val,
             workspace_path=ws_val,
             background=background_val,
+            allow_edits=allow_edits_val,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -1074,6 +1085,7 @@ class DesktopJobResult:
     workspace_attached: bool = False
     background: bool = True
     clipboard_touched: bool = False
+    allow_edits: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -1199,6 +1211,7 @@ class SentinelEnvelope:
         metadata: dict[str, str] | None = None,
         mode: str = DEFAULT_DESKTOP_MODE,
         workspace_path: str | None = None,
+        allow_edits: bool = False,
     ) -> str:
         """Frame prompt with split-literal closing instructions to prevent prompt-echo false positives."""
         start_tok = cls.start_marker(job_id)
@@ -1228,11 +1241,20 @@ class SentinelEnvelope:
         ]
         if norm_mode == "task" and workspace_path:
             safe_ws = str(workspace_path).replace("\n", " ").replace("\r", " ").strip()
-            lines.append(
-                f"5. Connected Workspace (STRICTLY READ-ONLY): Inspect `{safe_ws}` directly in strictly read-only mode "
-                "(never modify, create, or delete files, never execute shell/terminal commands, and never trigger confirmation prompts; "
-                "use read-only file/directory inspection tools only) before outputting your analysis and the split-literal end marker."
-            )
+            if allow_edits:
+                lines.append(
+                    f"5. Connected Workspace (AUTHORIZED WORKSPACE EDITS): Inspect `{safe_ws}` and directly edit ONLY "
+                    "the target files explicitly specified in the task context below using your workspace file-editing tools. "
+                    "Still NEVER execute destructive shell commands (e.g., rm -rf, git reset --hard, git clean, force-push, dropping databases). "
+                    "Ensure all edits are written cleanly to disk, and before outputting the split-literal end marker, explicitly summarize "
+                    "every modified file path and exact code change (or provide exact code diffs for any change you could not write)."
+                )
+            else:
+                lines.append(
+                    f"5. Connected Workspace (STRICTLY READ-ONLY): Inspect `{safe_ws}` directly in strictly read-only mode "
+                    "(never modify, create, or delete files, never execute shell/terminal commands, and never trigger confirmation prompts; "
+                    "use read-only file/directory inspection tools only) before outputting your analysis and the split-literal end marker."
+                )
         header = "\n".join(lines)
         if meta_block:
             header += meta_block
@@ -1324,6 +1346,7 @@ def build_sentinel_prompt(
     metadata: dict[str, str] | None = None,
     mode: str = DEFAULT_DESKTOP_MODE,
     workspace_path: str | None = None,
+    allow_edits: bool = False,
 ) -> str:
     """Module-level alias for SentinelEnvelope.build_prompt."""
     return SentinelEnvelope.build_prompt(
@@ -1332,6 +1355,7 @@ def build_sentinel_prompt(
         metadata=metadata,
         mode=mode,
         workspace_path=workspace_path,
+        allow_edits=allow_edits,
     )
 
 
@@ -2244,59 +2268,75 @@ class _MacOSAXBridge:
                     return False
 
                 try:
+                    matched_item: int | None = None
+                    add_new_item: int | None = None
                     menu_items: list[int] = []
+                    hydrate_deadline = time.monotonic() + 0.5
 
-                    def _collect_items(el: int, role: str) -> bool:
-                        if role == "AXMenuItem":
-                            self.cf.CFRetain(el)
-                            menu_items.append(el)
-                        return False
-
-                    self._walk_elements(menu_el, _collect_items)
                     try:
-                        matched_item: int | None = None
-                        add_new_item: int | None = None
+                        for scan_idx in range(6):
+                            for prev_item in menu_items:
+                                self.cf.CFRelease(prev_item)
+                            menu_items = []
+                            matched_item = None
+                            add_new_item = None
 
-                        for item in menu_items:
-                            # Skip scroll-container wrapper AXMenuItems (e.g. ConnectedFolderScrollMenuItem
-                            # wrapping an AXScrollArea/AXGroup) whose descendants merge sibling folder rows.
-                            if self._has_descendant_role(item, "AXMenuItem", max_depth=3):
-                                continue
-                            ident = self._get_str(item, "AXIdentifier")
-                            texts = self._collect_element_texts(item, max_depth=2)
-                            is_add_new = (
-                                ident == "performAction"
-                                or any(
-                                    t in ("Add new folder…", "Add new folder...") or t.lower().startswith("add new folder")
-                                    for t in texts
-                                )
-                            )
-                            if is_add_new:
-                                if add_new_item is None:
-                                    add_new_item = item
-                                continue
+                            def _collect_items(el: int, role: str) -> bool:
+                                if role == "AXMenuItem":
+                                    self.cf.CFRetain(el)
+                                    menu_items.append(el)
+                                return False
 
-                            for cand in texts:
-                                try:
-                                    cand_p = Path(cand).expanduser()
-                                    if cand_p.is_absolute() and cand_p.resolve() == target_path:
-                                        matched_item = item
-                                        break
-                                except (OSError, ValueError, RuntimeError):
+                            self._walk_elements(menu_el, _collect_items)
+
+                            for item in menu_items:
+                                # Skip scroll-container wrapper AXMenuItems (e.g. ConnectedFolderScrollMenuItem
+                                # wrapping an AXScrollArea/AXGroup) whose descendants merge sibling folder rows.
+                                if self._has_descendant_role(item, "AXMenuItem", max_depth=3):
                                     continue
-                            if matched_item is not None:
+                                ident = self._get_str(item, "AXIdentifier")
+                                texts = self._collect_element_texts(item, max_depth=2)
+                                is_add_new = (
+                                    ident == "performAction"
+                                    or any(
+                                        t in ("Add new folder…", "Add new folder...") or t.lower().startswith("add new folder")
+                                        for t in texts
+                                    )
+                                )
+                                if is_add_new:
+                                    if add_new_item is None:
+                                        add_new_item = item
+                                    continue
+
+                                for cand in texts:
+                                    try:
+                                        cand_p = Path(cand).expanduser()
+                                        if cand_p.is_absolute() and cand_p.resolve() == target_path:
+                                            matched_item = item
+                                            break
+                                    except (OSError, ValueError, RuntimeError):
+                                        continue
+                                if matched_item is not None:
+                                    break
+
+                            if matched_item is not None or time.monotonic() >= hydrate_deadline or scan_idx == 5:
                                 break
+                            time.sleep(0.08 if background else 0.06)
 
                         if matched_item is not None:
                             if background:
                                 if self.perform_action(matched_item, "AXPress") != 0:
                                     return False
-                                chip_deadline = time.monotonic() + 0.35
-                                while time.monotonic() < chip_deadline:
+                                chip_seen = False
+                                chip_deadline = time.monotonic() + 0.8
+                                while True:
                                     if self._has_attached_folder_chip(window, target_dir, target_name):
+                                        chip_seen = True
+                                        break
+                                    if time.monotonic() >= chip_deadline:
                                         break
                                     time.sleep(0.04)
-                                return True
+                                return chip_seen
                             if not self._click_or_press_element(pid, matched_item):
                                 return False
                             time.sleep(0.4)
@@ -2772,6 +2812,183 @@ class _MacOSAXBridge:
                 if last_copy is not None:
                     self.cf.CFRelease(last_copy)
                 self.cf.CFRelease(win_el)
+        finally:
+            self.cf.CFRelease(app_el)
+
+    _APPROVAL_BUTTON_EXACT: frozenset[str] = frozenset(
+        {
+            "continue",
+            "allow",
+            "allow once",
+            "allow always",
+            "always allow",
+            "approve",
+            "accept",
+            "apply",
+            "confirm",
+            "proceed",
+            "yes",
+            "run",
+            "save",
+        }
+    )
+    _APPROVAL_BUTTON_PREFIXES: tuple[str, ...] = (
+        "allow ",
+        "approve ",
+        "accept ",
+        "apply ",
+        "continue",
+        "confirm ",
+        "proceed",
+    )
+    _REJECT_BUTTON_TOKENS: tuple[str, ...] = (
+        "cancel",
+        "deny",
+        "reject",
+        "decline",
+        "don't",
+        "do not",
+        "stop",
+        "dismiss",
+        "skip",
+        "never",
+        "abort",
+    )
+
+    def _safe_has_attr(self, name: str) -> bool:
+        return name in getattr(self, "_attrs", {})
+
+    def _is_enabled_element(self, el: int) -> bool:
+        if not self._safe_has_attr("AXEnabled"):
+            return True
+        return self._get_bool(el, "AXEnabled", True)
+
+    def _classify_approval_button(self, el: int, role: str) -> tuple[int, str] | None:
+        """Return (priority, label) if AXButton represents an affirmative confirmation control."""
+        if role != "AXButton" or not self._is_enabled_element(el):
+            return None
+        ident = self._get_str(el, "AXIdentifier").strip()
+        title = self._get_str(el, "AXTitle").strip()
+        desc = self._get_str(el, "AXDescription").strip()
+        ident_l = ident.lower()
+        combined_l = f"{title} {desc}".strip().lower()
+        if any(tok in combined_l for tok in self._REJECT_BUTTON_TOKENS):
+            return None
+        if ident_l == "tab_stop_continue" or "tab_stop_continue" in ident_l:
+            return (100, title or desc or ident)
+        for cand in (title, desc):
+            if not cand:
+                continue
+            cand_l = cand.lower()
+            if cand_l in self._APPROVAL_BUTTON_EXACT:
+                score = 90 if cand_l in ("continue", "allow", "approve", "accept", "apply") else 80
+                return (score, cand)
+            if cand_l.startswith(self._APPROVAL_BUTTON_PREFIXES):
+                return (70, cand)
+        return None
+
+    def approve_confirmation_card(self, pid: int, keep_hidden: bool = True) -> str | None:
+        """
+        Silently approve an active confirmation card (e.g. ActionCardRemyConfirmationCard /
+        InlineConfirmationSlotView / tab_stop_Continue) via AXPress without activating Gemini.app.
+        Returns '<card_id>:<button_label>' if pressed successfully, else None.
+        """
+        app_el = int(self.ax.AXUIElementCreateApplication(pid))
+        self.ax.AXUIElementSetMessagingTimeout(app_el, 1.5)
+        try:
+            win_el = self._find_window(app_el)
+            if not win_el:
+                return None
+
+            roots: list[int] = [win_el]
+            if self._safe_has_attr("AXSheets"):
+                sheets_ref = self._copy_attr(win_el, "AXSheets")
+                if sheets_ref:
+                    try:
+                        if self.cf.CFGetTypeID(sheets_ref) == self.cf.CFArrayGetTypeID():
+                            n_sheets = int(self.cf.CFArrayGetCount(sheets_ref))
+                            for idx in range(min(n_sheets, 8)):
+                                sh = int(self.cf.CFArrayGetValueAtIndex(sheets_ref, idx))
+                                self.cf.CFRetain(sh)
+                                roots.append(sh)
+                    finally:
+                        self.cf.CFRelease(sheets_ref)
+
+            best_score = -1
+            best_label = ""
+            best_card = ""
+            best_btn: int | None = None
+
+            def _scan_root(root_el: int) -> None:
+                cards: list[tuple[str, int]] = []
+
+                def _find_cards(el: int, role: str) -> bool:
+                    nonlocal best_score, best_label, best_card, best_btn
+                    ident = self._get_str(el, "AXIdentifier")
+                    if not ident:
+                        return False
+                    matched_card: str | None = None
+                    for card_id in _MACOS_CONFIRMATION_CARD_IDS:
+                        if card_id in ident:
+                            matched_card = card_id
+                            break
+                    if matched_card is None:
+                        return False
+                    cls_btn = self._classify_approval_button(el, role)
+                    if cls_btn is not None:
+                        score, lbl = cls_btn
+                        if score > best_score:
+                            if best_btn is not None:
+                                self.cf.CFRelease(best_btn)
+                            self.cf.CFRetain(el)
+                            best_btn = el
+                            best_score = score
+                            best_label = lbl
+                            best_card = matched_card
+                    self.cf.CFRetain(el)
+                    cards.append((matched_card, el))
+                    return False
+
+                self._walk_elements(root_el, _find_cards)
+                try:
+                    for card_name, card_el in cards:
+                        def _find_btn(el: int, role: str, *, _cname: str = card_name) -> bool:
+                            nonlocal best_score, best_label, best_card, best_btn
+                            cls_btn = self._classify_approval_button(el, role)
+                            if cls_btn is None:
+                                return False
+                            score, lbl = cls_btn
+                            if score > best_score:
+                                if best_btn is not None:
+                                    self.cf.CFRelease(best_btn)
+                                self.cf.CFRetain(el)
+                                best_btn = el
+                                best_score = score
+                                best_label = lbl
+                                best_card = _cname
+                            return False
+
+                        self._walk_elements(card_el, _find_btn)
+                finally:
+                    for _, card_el in cards:
+                        self.cf.CFRelease(card_el)
+
+            try:
+                for rt in roots:
+                    _scan_root(rt)
+                if best_btn is None:
+                    return None
+                pressed_ok = self.perform_action(best_btn, "AXPress") == 0
+                if keep_hidden:
+                    self.set_hidden(pid, True)
+                if not pressed_ok:
+                    return None
+                return f"{best_card}:{best_label}" if best_label else best_card
+            finally:
+                if best_btn is not None:
+                    self.cf.CFRelease(best_btn)
+                for rt in roots:
+                    self.cf.CFRelease(rt)
         finally:
             self.cf.CFRelease(app_el)
 
@@ -3532,6 +3749,72 @@ class MacOSGeminiDriver(BaseDesktopDriver):
         )
         return woke, True
 
+    @staticmethod
+    def _attach_desktop_meta(exc: BaseException, **meta: Any) -> None:
+        if not hasattr(exc, "_desktop_meta"):
+            setattr(exc, "_desktop_meta", dict(meta))
+
+    @staticmethod
+    def _handle_confirmation_card(
+        ax_bridge: Any,
+        pid: int,
+        confirmation_card: str,
+        request: DesktopJobRequest,
+        approval_state: dict[str, Any],
+        log_state: dict[str, Any] | None = None,
+        keep_hidden: bool = True,
+    ) -> bool:
+        """
+        Handle interactive confirmation/elicitation cards.
+        - Read-only (allow_edits=False): immediately fast-fail (never hang until timeout).
+        - Authorized edits (allow_edits=True): silently press affirmative action button via AXPress
+          while preserving keep_hidden (0 focus switches), guarded by approval/loop limits.
+        """
+        if not bool(getattr(request, "allow_edits", False)):
+            raise RuntimeError(
+                f"Gemini Task mode paused waiting for interactive confirmation/elicitation ({confirmation_card}); "
+                "aborted instead of hanging until timeout. Use strictly read-only prompt instructions or resolve the prompt in Gemini.app."
+            )
+
+        if log_state is not None:
+            log_state["saw_done"] = False
+
+        approve_fn = getattr(ax_bridge, "approve_confirmation_card", None)
+        if not callable(approve_fn):
+            raise RuntimeError(
+                f"Gemini Task mode paused waiting for interactive confirmation/elicitation ({confirmation_card}); "
+                "silent auto-approval bridge unavailable."
+            )
+
+        max_approvals = int(approval_state.get("max_approvals", 20))
+        if int(approval_state.get("count", 0)) >= max_approvals:
+            raise RuntimeError(
+                f"Gemini Task mode exceeded {max_approvals} confirmation approvals ({confirmation_card}); aborted to prevent loop."
+            )
+
+        approved = approve_fn(pid, keep_hidden=keep_hidden)
+        if approved:
+            sig = f"{confirmation_card}:{approved}"
+            approval_state["count"] = int(approval_state.get("count", 0)) + 1
+            approval_state["misses"] = 0
+            consecutive = int(approval_state.get("consecutive_same", 0)) + 1 if approval_state.get("last_sig") == sig else 1
+            approval_state["last_sig"] = sig
+            approval_state["consecutive_same"] = consecutive
+            if consecutive > 6:
+                raise RuntimeError(
+                    f"Gemini Task mode stuck repeating confirmation card ({sig}) after {consecutive} approvals."
+                )
+            return True
+
+        misses = int(approval_state.get("misses", 0)) + 1
+        approval_state["misses"] = misses
+        if misses >= int(approval_state.get("max_misses", 4)):
+            raise RuntimeError(
+                f"Gemini Task mode paused waiting for interactive confirmation/elicitation ({confirmation_card}); "
+                "no affirmative approval button could be invoked automatically."
+            )
+        return False
+
     def _wait_via_diagnostic_log(
         self,
         ax_bridge: Any,
@@ -3541,6 +3824,8 @@ class MacOSGeminiDriver(BaseDesktopDriver):
         cancel_event: threading.Event,
         log_state: dict[str, Any],
         deadline: float,
+        approval_state: dict[str, Any] | None = None,
+        keep_hidden: bool = True,
     ) -> dict[str, Any] | None:
         """
         Wait silently with 0 focus theft until AX poll_chat or diagnostic*.log signals completion,
@@ -3551,6 +3836,8 @@ class MacOSGeminiDriver(BaseDesktopDriver):
         last_len: int | None = None
         stable_since: float | None = None
         mode_norm = str(getattr(request, "mode", "task") or "task").strip().lower()
+        if approval_state is None:
+            approval_state = {}
 
         while True:
             if cancel_event.is_set():
@@ -3564,10 +3851,20 @@ class MacOSGeminiDriver(BaseDesktopDriver):
             if poll_data.get("has_window"):
                 confirmation_card = poll_data.get("confirmation_card")
                 if confirmation_card:
-                    raise RuntimeError(
-                        f"Gemini Task mode paused waiting for interactive confirmation/elicitation ({confirmation_card}); "
-                        "aborted instead of hanging until timeout. Use strictly read-only prompt instructions or resolve the prompt in Gemini.app."
+                    self._handle_confirmation_card(
+                        ax_bridge=ax_bridge,
+                        pid=pid,
+                        confirmation_card=str(confirmation_card),
+                        request=request,
+                        approval_state=approval_state,
+                        log_state=log_state,
+                        keep_hidden=keep_hidden,
                     )
+                    last_len = None
+                    stable_since = None
+                    if cancel_event.wait(min(0.3, max(0.05, deadline - time.monotonic()))):
+                        raise DesktopJobCancelledError("Desktop job cancelled")
+                    continue
                 candidate_text = str(poll_data.get("text") or "")
                 busy = bool(poll_data.get("busy", False))
                 if not busy and SentinelEnvelope.has_complete_sentinel(candidate_text, job_id):
@@ -3609,10 +3906,17 @@ class MacOSGeminiDriver(BaseDesktopDriver):
                         re_poll = ax_bridge.poll_chat(pid)
                         if re_poll.get("has_window"):
                             if re_poll.get("confirmation_card"):
-                                raise RuntimeError(
-                                    f"Gemini Task mode paused waiting for interactive confirmation/elicitation ({re_poll['confirmation_card']}); "
-                                    "aborted instead of hanging until timeout. Use strictly read-only prompt instructions or resolve the prompt in Gemini.app."
+                                self._handle_confirmation_card(
+                                    ax_bridge=ax_bridge,
+                                    pid=pid,
+                                    confirmation_card=str(re_poll["confirmation_card"]),
+                                    request=request,
+                                    approval_state=approval_state,
+                                    log_state=log_state,
+                                    keep_hidden=keep_hidden,
                                 )
+                                restarted = True
+                                break
                             re_txt = str(re_poll.get("text") or "")
                             if not re_poll.get("busy") and SentinelEnvelope.has_complete_sentinel(re_txt, job_id):
                                 return re_poll
@@ -3648,10 +3952,16 @@ class MacOSGeminiDriver(BaseDesktopDriver):
                         if silent_open_fn(pid, keep_hidden=True, wait_s=1.5, cancel_event=cancel_event):
                             probe_data = ax_bridge.poll_chat(pid)
                             if probe_data.get("confirmation_card"):
-                                raise RuntimeError(
-                                    f"Gemini Task mode paused waiting for interactive confirmation/elicitation ({probe_data['confirmation_card']}); "
-                                    "aborted instead of hanging until timeout. Use strictly read-only prompt instructions or resolve the prompt in Gemini.app."
+                                self._handle_confirmation_card(
+                                    ax_bridge=ax_bridge,
+                                    pid=pid,
+                                    confirmation_card=str(probe_data["confirmation_card"]),
+                                    request=request,
+                                    approval_state=approval_state,
+                                    log_state=log_state,
+                                    keep_hidden=keep_hidden,
                                 )
+                                continue
                             if (
                                 probe_data.get("has_window")
                                 and not probe_data.get("busy")
@@ -3660,6 +3970,8 @@ class MacOSGeminiDriver(BaseDesktopDriver):
                                 return probe_data
                             continue
                     except DesktopJobCancelledError:
+                        raise
+                    except RuntimeError:
                         raise
                     except Exception:
                         pass
@@ -3680,10 +3992,16 @@ class MacOSGeminiDriver(BaseDesktopDriver):
                     self._activate_pid(ax_bridge, prev_pid, exclude_pid=pid)
 
                 if probe_data.get("confirmation_card"):
-                    raise RuntimeError(
-                        f"Gemini Task mode paused waiting for interactive confirmation/elicitation ({probe_data['confirmation_card']}); "
-                        "aborted instead of hanging until timeout. Use strictly read-only prompt instructions or resolve the prompt in Gemini.app."
+                    self._handle_confirmation_card(
+                        ax_bridge=ax_bridge,
+                        pid=pid,
+                        confirmation_card=str(probe_data["confirmation_card"]),
+                        request=request,
+                        approval_state=approval_state,
+                        log_state=log_state,
+                        keep_hidden=keep_hidden,
                     )
+                    continue
                 if (
                     probe_data.get("has_window")
                     and not probe_data.get("busy")
@@ -3882,32 +4200,37 @@ class MacOSGeminiDriver(BaseDesktopDriver):
             if request.mode == "task" and request.workspace_path:
                 attach_fn = getattr(ax_bridge, "attach_workspace_folder", None)
                 if callable(attach_fn):
-                    workspace_attached = bool(
-                        self._call_with_optional_background(
-                            attach_fn,
-                            pid,
-                            request.workspace_path,
-                            background=True,
-                            restore_clipboard=False,
-                        )
-                    )
-                    if not workspace_attached and not self._has_usable_background_window(ax_bridge, pid):
-                        silent_open_fn = getattr(ax_bridge, "open_app_window_silent", None)
-                        if callable(silent_open_fn) and silent_open_fn(
-                            pid,
-                            keep_hidden=keep_hidden,
-                            wait_s=1.5,
-                            cancel_event=cancel_event,
-                        ):
-                            workspace_attached = bool(
-                                self._call_with_optional_background(
-                                    attach_fn,
-                                    pid,
-                                    request.workspace_path,
-                                    background=True,
-                                    restore_clipboard=False,
-                                )
+                    silent_open_fn = getattr(ax_bridge, "open_app_window_silent", None)
+                    for attach_attempt in range(3):
+                        if not self._has_usable_background_window(ax_bridge, pid) and callable(silent_open_fn):
+                            silent_open_fn(
+                                pid,
+                                keep_hidden=keep_hidden,
+                                wait_s=1.5,
+                                cancel_event=cancel_event,
                             )
+                        workspace_attached = bool(
+                            self._call_with_optional_background(
+                                attach_fn,
+                                pid,
+                                request.workspace_path,
+                                background=True,
+                                restore_clipboard=False,
+                            )
+                        )
+                        if workspace_attached:
+                            break
+                        if attach_attempt < 2:
+                            if cancel_event.is_set():
+                                raise DesktopJobCancelledError("Desktop job cancelled")
+                            if callable(mode_fn):
+                                self._call_with_optional_background(mode_fn, pid, request.mode, background=True)
+                            time.sleep(0.45)
+                    if not workspace_attached:
+                        raise RuntimeError(
+                            f"Failed to attach workspace '{request.workspace_path}' in Gemini.app Task mode "
+                            "(background=True) after 3 attempts; aborting instead of dispatching without Connected Folder."
+                        )
 
             # Snapshot diagnostic*.log offset right BEFORE clicking send_button.
             log_state = self._snapshot_diagnostic_log()
@@ -3954,6 +4277,17 @@ class MacOSGeminiDriver(BaseDesktopDriver):
                 )
             if keep_hidden and callable(set_hidden_fn):
                 set_hidden_fn(pid, True)
+        except BaseException as exc:
+            self._attach_desktop_meta(
+                exc,
+                workspace_attached=workspace_attached,
+                background=True,
+                mode=request.mode,
+                workspace_path=request.workspace_path,
+                clipboard_touched=False,
+                clipboard_restored=True,
+            )
+            raise
         finally:
             if surfaced_for_dispatch:
                 self._activate_pid(ax_bridge, prev_pid, exclude_pid=pid)
@@ -3962,98 +4296,129 @@ class MacOSGeminiDriver(BaseDesktopDriver):
         deadline = time.monotonic() + max(1, int(request.timeout_sec))
         captured_text = ""
         post_done_empty = 0
-        while True:
-            direct_poll = self._wait_via_diagnostic_log(
-                ax_bridge=ax_bridge,
-                pid=pid,
-                job_id=job_id,
-                request=request,
-                cancel_event=cancel_event,
-                log_state=log_state,
-                deadline=deadline,
+        approval_state: dict[str, Any] = {}
+        try:
+            while True:
+                direct_poll = self._wait_via_diagnostic_log(
+                    ax_bridge=ax_bridge,
+                    pid=pid,
+                    job_id=job_id,
+                    request=request,
+                    cancel_event=cancel_event,
+                    log_state=log_state,
+                    deadline=deadline,
+                    approval_state=approval_state,
+                    keep_hidden=keep_hidden,
+                )
+                if direct_poll is not None:
+                    poll_data = direct_poll
+                else:
+                    poll_data = ax_bridge.poll_chat(pid)
+                    if not poll_data.get("has_window"):
+                        poll_data = self._extract_one_shot_background(
+                            ax_bridge=ax_bridge,
+                            pid=pid,
+                            job_id=job_id,
+                            open_bin=open_bin,
+                            app_path=str(app_info["app_path"]),
+                        )
+
+                confirmation_card = poll_data.get("confirmation_card")
+                if confirmation_card:
+                    self._handle_confirmation_card(
+                        ax_bridge=ax_bridge,
+                        pid=pid,
+                        confirmation_card=str(confirmation_card),
+                        request=request,
+                        approval_state=approval_state,
+                        log_state=log_state,
+                        keep_hidden=keep_hidden,
+                    )
+                    if cancel_event.wait(0.3):
+                        raise DesktopJobCancelledError("Desktop job cancelled")
+                    continue
+
+                candidate_text = str(poll_data.get("text") or "")
+                if SentinelEnvelope.has_complete_sentinel(candidate_text, job_id):
+                    if not poll_data.get("busy"):
+                        captured_text = candidate_text
+                        break
+                    # Sentinel rendered while Stop button is briefly still clearing; settle passively.
+                    log_state["saw_done"] = False
+                    post_done_empty = 0
+                    if cancel_event.wait(0.35):
+                        raise DesktopJobCancelledError("Desktop job cancelled")
+                    continue
+
+                if poll_data.get("busy"):
+                    # Critical: clear saw_done so intermediate Task-mode stream events never trigger tight wake loops!
+                    log_state["saw_done"] = False
+                    post_done_empty = 0
+                    if cancel_event.wait(0.4):
+                        raise DesktopJobCancelledError("Desktop job cancelled")
+                    continue
+
+                if candidate_text.strip():
+                    if cancel_event.wait(0.5):
+                        raise DesktopJobCancelledError("Desktop job cancelled")
+                    recheck = (
+                        ax_bridge.poll_chat(pid)
+                        if poll_data.get("has_window")
+                        else self._extract_one_shot_background(
+                            ax_bridge=ax_bridge,
+                            pid=pid,
+                            job_id=job_id,
+                            open_bin=open_bin,
+                            app_path=str(app_info["app_path"]),
+                        )
+                    )
+                    if recheck.get("confirmation_card"):
+                        self._handle_confirmation_card(
+                            ax_bridge=ax_bridge,
+                            pid=pid,
+                            confirmation_card=str(recheck["confirmation_card"]),
+                            request=request,
+                            approval_state=approval_state,
+                            log_state=log_state,
+                            keep_hidden=keep_hidden,
+                        )
+                        if cancel_event.wait(0.3):
+                            raise DesktopJobCancelledError("Desktop job cancelled")
+                        continue
+                    if recheck.get("busy"):
+                        log_state["saw_done"] = False
+                        post_done_empty = 0
+                        continue
+                    re_txt = str(recheck.get("text") or "")
+                    if SentinelEnvelope.has_complete_sentinel(re_txt, job_id):
+                        captured_text = re_txt
+                        break
+                    if re_txt != candidate_text:
+                        log_state["saw_done"] = False
+                        post_done_empty = 0
+                        continue
+                    captured_text = re_txt or candidate_text
+                    break
+
+                if direct_poll is None and log_state.get("saw_done"):
+                    post_done_empty += 1
+                    if post_done_empty >= 3:
+                        raise RuntimeError(
+                            "Gemini.app completed streaming in diagnostic logs, but OmnichatWindow yielded no AX response in background mode; retry with --allow-foreground."
+                        )
+                    if cancel_event.wait(0.35):
+                        raise DesktopJobCancelledError("Desktop job cancelled")
+        except BaseException as exc:
+            self._attach_desktop_meta(
+                exc,
+                workspace_attached=workspace_attached,
+                background=True,
+                mode=request.mode,
+                workspace_path=request.workspace_path,
+                clipboard_touched=False,
+                clipboard_restored=True,
             )
-            if direct_poll is not None:
-                poll_data = direct_poll
-            else:
-                poll_data = ax_bridge.poll_chat(pid)
-                if not poll_data.get("has_window"):
-                    poll_data = self._extract_one_shot_background(
-                        ax_bridge=ax_bridge,
-                        pid=pid,
-                        job_id=job_id,
-                        open_bin=open_bin,
-                        app_path=str(app_info["app_path"]),
-                    )
-
-            confirmation_card = poll_data.get("confirmation_card")
-            if confirmation_card:
-                raise RuntimeError(
-                    f"Gemini Task mode paused waiting for interactive confirmation/elicitation ({confirmation_card}); "
-                    "aborted instead of hanging until timeout. Use strictly read-only prompt instructions or resolve the prompt in Gemini.app."
-                )
-
-            candidate_text = str(poll_data.get("text") or "")
-            if SentinelEnvelope.has_complete_sentinel(candidate_text, job_id):
-                if not poll_data.get("busy"):
-                    captured_text = candidate_text
-                    break
-                # Sentinel rendered while Stop button is briefly still clearing; settle passively.
-                log_state["saw_done"] = False
-                post_done_empty = 0
-                if cancel_event.wait(0.35):
-                    raise DesktopJobCancelledError("Desktop job cancelled")
-                continue
-
-            if poll_data.get("busy"):
-                # Critical: clear saw_done so intermediate Task-mode stream events never trigger tight wake loops!
-                log_state["saw_done"] = False
-                post_done_empty = 0
-                if cancel_event.wait(0.4):
-                    raise DesktopJobCancelledError("Desktop job cancelled")
-                continue
-
-            if candidate_text.strip():
-                if cancel_event.wait(0.5):
-                    raise DesktopJobCancelledError("Desktop job cancelled")
-                recheck = (
-                    ax_bridge.poll_chat(pid)
-                    if poll_data.get("has_window")
-                    else self._extract_one_shot_background(
-                        ax_bridge=ax_bridge,
-                        pid=pid,
-                        job_id=job_id,
-                        open_bin=open_bin,
-                        app_path=str(app_info["app_path"]),
-                    )
-                )
-                if recheck.get("confirmation_card"):
-                    raise RuntimeError(
-                        f"Gemini Task mode paused waiting for interactive confirmation/elicitation ({recheck['confirmation_card']}); "
-                        "aborted instead of hanging until timeout. Use strictly read-only prompt instructions or resolve the prompt in Gemini.app."
-                    )
-                if recheck.get("busy"):
-                    log_state["saw_done"] = False
-                    post_done_empty = 0
-                    continue
-                re_txt = str(recheck.get("text") or "")
-                if SentinelEnvelope.has_complete_sentinel(re_txt, job_id):
-                    captured_text = re_txt
-                    break
-                if re_txt != candidate_text:
-                    log_state["saw_done"] = False
-                    post_done_empty = 0
-                    continue
-                captured_text = re_txt or candidate_text
-                break
-
-            if direct_poll is None and log_state.get("saw_done"):
-                post_done_empty += 1
-                if post_done_empty >= 3:
-                    raise RuntimeError(
-                        "Gemini.app completed streaming in diagnostic logs, but OmnichatWindow yielded no AX response in background mode; retry with --allow-foreground."
-                    )
-                if cancel_event.wait(0.35):
-                    raise DesktopJobCancelledError("Desktop job cancelled")
+            raise
 
         return captured_text, {
             "clipboard_restored": True,
@@ -4182,88 +4547,111 @@ class MacOSGeminiDriver(BaseDesktopDriver):
         saw_busy = False
         idle_polls = 0
         window_misses = 0
+        approval_state: dict[str, Any] = {}
 
-        while True:
-            if cancel_event.is_set():
-                raise DesktopJobCancelledError("Desktop job cancelled")
-            if time.monotonic() > deadline:
-                raise TimeoutError(f"Timed out after {request.timeout_sec}s waiting for Gemini Desktop response")
-
-            poll_data = ax_bridge.poll_chat(pid)
-            if not poll_data.get("has_window"):
-                window_misses += 1
-                try:
-                    if window_misses % 3 == 0:
-                        subprocess.run(
-                            [open_bin, "-a", str(app_info["app_path"])],
-                            capture_output=True,
-                            text=True,
-                            timeout=3.0,
-                        )
-                    self._run_osascript(_MACOS_SOFT_ACTIVATE_JXA, lang="JavaScript", args=[proc_name], timeout=3.0)
-                except (OSError, subprocess.SubprocessError, RuntimeError):
-                    pass
-                if cancel_event.wait(min(0.25, poll_sec)):
+        try:
+            while True:
+                if cancel_event.is_set():
                     raise DesktopJobCancelledError("Desktop job cancelled")
-                continue
-            window_misses = 0
+                if time.monotonic() > deadline:
+                    raise TimeoutError(f"Timed out after {request.timeout_sec}s waiting for Gemini Desktop response")
 
-            busy = bool(poll_data.get("busy", False))
-            candidate_text = str(poll_data.get("text") or "")
-            has_copy_btn = bool(poll_data.get("has_copy_button", False))
-            confirmation_card = poll_data.get("confirmation_card")
+                poll_data = ax_bridge.poll_chat(pid)
+                if not poll_data.get("has_window"):
+                    window_misses += 1
+                    try:
+                        if window_misses % 3 == 0:
+                            subprocess.run(
+                                [open_bin, "-a", str(app_info["app_path"])],
+                                capture_output=True,
+                                text=True,
+                                timeout=3.0,
+                            )
+                        self._run_osascript(_MACOS_SOFT_ACTIVATE_JXA, lang="JavaScript", args=[proc_name], timeout=3.0)
+                    except (OSError, subprocess.SubprocessError, RuntimeError):
+                        pass
+                    if cancel_event.wait(min(0.25, poll_sec)):
+                        raise DesktopJobCancelledError("Desktop job cancelled")
+                    continue
+                window_misses = 0
 
-            if confirmation_card:
-                raise RuntimeError(
-                    f"Gemini Task mode paused waiting for interactive confirmation/elicitation ({confirmation_card}); "
-                    "aborted instead of hanging until timeout. Use strictly read-only prompt instructions or resolve the prompt in Gemini.app."
-                )
+                busy = bool(poll_data.get("busy", False))
+                candidate_text = str(poll_data.get("text") or "")
+                has_copy_btn = bool(poll_data.get("has_copy_button", False))
+                confirmation_card = poll_data.get("confirmation_card")
 
-            if busy:
-                saw_busy = True
-                idle_polls = 0
-                last_sig = None
-                stable_since = None
+                if confirmation_card:
+                    self._handle_confirmation_card(
+                        ax_bridge=ax_bridge,
+                        pid=pid,
+                        confirmation_card=str(confirmation_card),
+                        request=request,
+                        approval_state=approval_state,
+                        log_state=None,
+                        keep_hidden=False,
+                    )
+                    last_sig = None
+                    stable_since = None
+                    if cancel_event.wait(min(0.3, poll_sec)):
+                        raise DesktopJobCancelledError("Desktop job cancelled")
+                    continue
+
+                if busy:
+                    saw_busy = True
+                    idle_polls = 0
+                    last_sig = None
+                    stable_since = None
+                    if cancel_event.wait(poll_sec):
+                        raise DesktopJobCancelledError("Desktop job cancelled")
+                    continue
+
+                idle_polls += 1
+                ax_complete = SentinelEnvelope.has_complete_sentinel(candidate_text, job_id)
+                ready_to_sample = ax_complete or (has_copy_btn and (saw_busy or idle_polls >= 3))
+
+                if ready_to_sample:
+                    sig = (len(candidate_text), has_copy_btn)
+                    if last_sig is not None and sig == last_sig:
+                        if stable_since is not None and (time.monotonic() - stable_since) * 1000.0 >= DEFAULT_STABILITY_DEBOUNCE_MS:
+                            final_text = candidate_text
+                            if has_copy_btn:
+                                copied_md, clip_ok = self._copy_via_native_button(
+                                    ax_bridge,
+                                    pid,
+                                    request.restore_clipboard,
+                                )
+                                clipboard_restored = clipboard_restored and clip_ok
+                                if copied_md and (
+                                    SentinelEnvelope.has_complete_sentinel(copied_md, job_id)
+                                    or not ax_complete
+                                ):
+                                    final_text = copied_md
+                            if SentinelEnvelope.has_complete_sentinel(final_text, job_id):
+                                captured_text = final_text
+                                break
+                            # Copy button appeared slightly before done marker; reset and continue polling.
+                            last_sig = None
+                            stable_since = None
+                    else:
+                        last_sig = sig
+                        stable_since = time.monotonic()
+                else:
+                    last_sig = None
+                    stable_since = None
+
                 if cancel_event.wait(poll_sec):
                     raise DesktopJobCancelledError("Desktop job cancelled")
-                continue
-
-            idle_polls += 1
-            ax_complete = SentinelEnvelope.has_complete_sentinel(candidate_text, job_id)
-            ready_to_sample = ax_complete or (has_copy_btn and (saw_busy or idle_polls >= 3))
-
-            if ready_to_sample:
-                sig = (len(candidate_text), has_copy_btn)
-                if last_sig is not None and sig == last_sig:
-                    if stable_since is not None and (time.monotonic() - stable_since) * 1000.0 >= DEFAULT_STABILITY_DEBOUNCE_MS:
-                        final_text = candidate_text
-                        if has_copy_btn:
-                            copied_md, clip_ok = self._copy_via_native_button(
-                                ax_bridge,
-                                pid,
-                                request.restore_clipboard,
-                            )
-                            clipboard_restored = clipboard_restored and clip_ok
-                            if copied_md and (
-                                SentinelEnvelope.has_complete_sentinel(copied_md, job_id)
-                                or not ax_complete
-                            ):
-                                final_text = copied_md
-                        if SentinelEnvelope.has_complete_sentinel(final_text, job_id):
-                            captured_text = final_text
-                            break
-                        # Copy button appeared slightly before done marker; reset and continue polling.
-                        last_sig = None
-                        stable_since = None
-                else:
-                    last_sig = sig
-                    stable_since = time.monotonic()
-            else:
-                last_sig = None
-                stable_since = None
-
-            if cancel_event.wait(poll_sec):
-                raise DesktopJobCancelledError("Desktop job cancelled")
+        except BaseException as exc:
+            self._attach_desktop_meta(
+                exc,
+                workspace_attached=workspace_attached,
+                background=False,
+                mode=request.mode,
+                workspace_path=request.workspace_path,
+                clipboard_touched=True,
+                clipboard_restored=clipboard_restored,
+            )
+            raise
 
         return captured_text, {
             "clipboard_restored": clipboard_restored,
@@ -5761,12 +6149,14 @@ class DesktopWorkerManager:
 
         prompt_mode = "chat" if drv.name == "linux_pwa" else request.mode
         prompt_ws = None if drv.name == "linux_pwa" else request.workspace_path
+        effective_allow_edits = bool(request.allow_edits and drv.name != "linux_pwa")
         framed_prompt = SentinelEnvelope.build_prompt(
             request.job_id,
             clean_prompt,
             metadata=request.metadata,
             mode=prompt_mode,
             workspace_path=prompt_ws,
+            allow_edits=effective_allow_edits,
         )
 
         clipboard_restored = True
@@ -5787,6 +6177,7 @@ class DesktopWorkerManager:
                 effective_ws = meta.get("workspace_path", request.workspace_path)
                 workspace_attached = bool(meta.get("workspace_attached", False))
         except DesktopJobCancelledError as exc:
+            err_meta = getattr(exc, "_desktop_meta", None) or {}
             duration_ms = int((time.monotonic() - start_ts) * 1000)
             return DesktopJobResult(
                 job_id=request.job_id,
@@ -5795,15 +6186,17 @@ class DesktopWorkerManager:
                 os_platform=eff_os,
                 duration_ms=duration_ms,
                 redactions=redactions,
-                clipboard_restored=clipboard_restored,
+                clipboard_restored=bool(err_meta.get("clipboard_restored", clipboard_restored)),
                 error=str(exc),
-                mode=effective_mode,
-                workspace_path=effective_ws,
-                workspace_attached=False,
-                background=effective_background,
-                clipboard_touched=clipboard_touched,
+                mode=str(err_meta.get("mode") or effective_mode),
+                workspace_path=err_meta.get("workspace_path", effective_ws),
+                workspace_attached=bool(err_meta.get("workspace_attached", False)),
+                background=bool(err_meta.get("background", effective_background)),
+                clipboard_touched=bool(err_meta.get("clipboard_touched", clipboard_touched)),
+                allow_edits=request.allow_edits,
             )
         except TimeoutError as exc:
+            err_meta = getattr(exc, "_desktop_meta", None) or {}
             duration_ms = int((time.monotonic() - start_ts) * 1000)
             return DesktopJobResult(
                 job_id=request.job_id,
@@ -5812,15 +6205,17 @@ class DesktopWorkerManager:
                 os_platform=eff_os,
                 duration_ms=duration_ms,
                 redactions=redactions,
-                clipboard_restored=clipboard_restored,
+                clipboard_restored=bool(err_meta.get("clipboard_restored", clipboard_restored)),
                 error=str(exc),
-                mode=effective_mode,
-                workspace_path=effective_ws,
-                workspace_attached=False,
-                background=effective_background,
-                clipboard_touched=clipboard_touched,
+                mode=str(err_meta.get("mode") or effective_mode),
+                workspace_path=err_meta.get("workspace_path", effective_ws),
+                workspace_attached=bool(err_meta.get("workspace_attached", False)),
+                background=bool(err_meta.get("background", effective_background)),
+                clipboard_touched=bool(err_meta.get("clipboard_touched", clipboard_touched)),
+                allow_edits=request.allow_edits,
             )
         except Exception as exc:
+            err_meta = getattr(exc, "_desktop_meta", None) or {}
             duration_ms = int((time.monotonic() - start_ts) * 1000)
             return DesktopJobResult(
                 job_id=request.job_id,
@@ -5829,13 +6224,14 @@ class DesktopWorkerManager:
                 os_platform=eff_os,
                 duration_ms=duration_ms,
                 redactions=redactions,
-                clipboard_restored=clipboard_restored,
+                clipboard_restored=bool(err_meta.get("clipboard_restored", clipboard_restored)),
                 error=str(exc),
-                mode=effective_mode,
-                workspace_path=effective_ws,
-                workspace_attached=False,
-                background=effective_background,
-                clipboard_touched=clipboard_touched,
+                mode=str(err_meta.get("mode") or effective_mode),
+                workspace_path=err_meta.get("workspace_path", effective_ws),
+                workspace_attached=bool(err_meta.get("workspace_attached", False)),
+                background=bool(err_meta.get("background", effective_background)),
+                clipboard_touched=bool(err_meta.get("clipboard_touched", clipboard_touched)),
+                allow_edits=request.allow_edits,
             )
 
         duration_ms = int((time.monotonic() - start_ts) * 1000)
@@ -5878,6 +6274,7 @@ class DesktopWorkerManager:
                     workspace_attached=workspace_attached,
                     background=effective_background,
                     clipboard_touched=clipboard_touched,
+                    allow_edits=request.allow_edits,
                 )
 
         if not sentinel_ok:
@@ -5900,6 +6297,7 @@ class DesktopWorkerManager:
                 workspace_attached=workspace_attached,
                 background=effective_background,
                 clipboard_touched=clipboard_touched,
+                allow_edits=request.allow_edits,
             )
 
         return DesktopJobResult(
@@ -5921,6 +6319,7 @@ class DesktopWorkerManager:
             workspace_attached=workspace_attached,
             background=effective_background,
             clipboard_touched=clipboard_touched,
+            allow_edits=request.allow_edits,
         )
 
 
@@ -5982,6 +6381,12 @@ def _build_cli_parser() -> argparse.ArgumentParser:
         dest="background",
         action="store_false",
         help="Allow foreground activation, CGEvent/SendKeys, and clipboard fallback",
+    )
+    p_ask.add_argument(
+        "--allow-edits",
+        action="store_true",
+        default=False,
+        help="Authorize Gemini.app Task mode to edit specified workspace files and silently approve edit confirmation cards",
     )
     p_ask.add_argument("--json", action="store_true", help="Output JSON job result")
 
@@ -6071,6 +6476,7 @@ def main(argv: list[str] | None = None) -> int:
                 mode=args.mode,
                 workspace_path=workspace_path,
                 background=args.background,
+                allow_edits=bool(args.allow_edits),
             )
         except ValueError as exc:
             err = {"error": str(exc)}

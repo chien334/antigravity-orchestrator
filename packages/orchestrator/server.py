@@ -542,6 +542,8 @@ class StateStore:
                 conn.execute("ALTER TABLE desktop_jobs ADD COLUMN workspace_attached INTEGER DEFAULT 0")
             if "background" not in dj_cols:
                 conn.execute("ALTER TABLE desktop_jobs ADD COLUMN background INTEGER DEFAULT 1")
+            if "allow_edits" not in dj_cols:
+                conn.execute("ALTER TABLE desktop_jobs ADD COLUMN allow_edits INTEGER DEFAULT 0")
 
     def _init_db(self):
         with self._lock:
@@ -592,6 +594,7 @@ class StateStore:
                             workspace_path TEXT DEFAULT NULL,
                             workspace_attached INTEGER DEFAULT 0,
                             background INTEGER DEFAULT 1,
+                            allow_edits INTEGER DEFAULT 0,
                             prompt_chars INTEGER NOT NULL DEFAULT 0,
                             prompt_preview TEXT,
                             redaction_count INTEGER NOT NULL DEFAULT 0,
@@ -690,6 +693,11 @@ class StateStore:
             if "background" in row_keys and row["background"] is not None
             else True
         )
+        allow_edits = (
+            bool(row["allow_edits"])
+            if "allow_edits" in row_keys and row["allow_edits"] is not None
+            else False
+        )
 
         return {
             "job_id": row["job_id"],
@@ -703,6 +711,7 @@ class StateStore:
             "workspace_path": workspace_path,
             "workspace_attached": workspace_attached,
             "background": background,
+            "allow_edits": allow_edits,
             "prompt_chars": int(row["prompt_chars"] or 0),
             "prompt_preview": row["prompt_preview"] or "",
             "redaction_count": int(row["redaction_count"] or 0),
@@ -1512,6 +1521,24 @@ class StateStore:
             "workspace_root": default_ws,
         }
 
+    @staticmethod
+    def _parse_bool_flag(raw_value: Any, field_name: str, default: bool) -> bool:
+        """Parse optional JSON boolean flag strictly."""
+        if raw_value is None:
+            return default
+        if isinstance(raw_value, bool):
+            return raw_value
+        if isinstance(raw_value, (int, float)):
+            return bool(raw_value)
+        if isinstance(raw_value, str):
+            val_str = raw_value.strip().lower()
+            if val_str in ("true", "1", "yes", "on"):
+                return True
+            if val_str in ("false", "0", "no", "off"):
+                return False
+            raise ValueError(f"{field_name} must be a boolean")
+        raise ValueError(f"{field_name} must be a boolean")
+
     def enqueue_desktop_job(self, payload: dict) -> tuple[dict, bool, bool]:
         """Validate, scrub secrets, persist queued job, and dispatch sync or async."""
         if not isinstance(payload, dict):
@@ -1589,23 +1616,8 @@ class StateStore:
         restore_focus = bool(payload.get("restore_focus", False))
         new_chat = bool(payload.get("new_chat", True))
         async_mode = True if payload.get("async_mode") is None else bool(payload.get("async_mode"))
-        raw_background = payload.get("background")
-        if raw_background is None:
-            background = True
-        elif isinstance(raw_background, bool):
-            background = raw_background
-        elif isinstance(raw_background, (int, float)):
-            background = bool(raw_background)
-        elif isinstance(raw_background, str):
-            bg_str = raw_background.strip().lower()
-            if bg_str in ("true", "1", "yes", "on"):
-                background = True
-            elif bg_str in ("false", "0", "no", "off"):
-                background = False
-            else:
-                raise ValueError("background must be a boolean")
-        else:
-            raise ValueError("background must be a boolean")
+        background = self._parse_bool_flag(payload.get("background"), "background", True)
+        allow_edits = self._parse_bool_flag(payload.get("allow_edits"), "allow_edits", False)
 
         task_id = str(payload["task_id"]).strip() if payload.get("task_id") else None
         raw_app_path = payload.get("app_path")
@@ -1642,12 +1654,12 @@ class StateStore:
                             """
                             INSERT INTO desktop_jobs (
                                 job_id, task_id, status, os_platform, driver_name, app_path,
-                                mode, workspace_path, workspace_attached, background,
+                                mode, workspace_path, workspace_attached, background, allow_edits,
                                 prompt_chars, prompt_preview, redaction_count, redactions_json,
                                 artifact_path, summary_excerpt, output_chars, duration_ms,
                                 estimated_saved_usd, estimated_saved_vnd, clipboard_restored,
                                 error_message, created_at, started_at, completed_at
-                            ) VALUES (?, ?, 'rejected_secrets', ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, NULL, '', 0, 0, 0.0, 0, 1, ?, ?, NULL, ?)
+                            ) VALUES (?, ?, 'rejected_secrets', ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, NULL, '', 0, 0, 0.0, 0, 1, ?, ?, NULL, ?)
                             """,
                             (
                                 job_id,
@@ -1658,6 +1670,7 @@ class StateStore:
                                 mode,
                                 workspace_path,
                                 1 if background else 0,
+                                1 if allow_edits else 0,
                                 len(prompt),
                                 prompt_preview,
                                 redaction_count,
@@ -1714,6 +1727,8 @@ class StateStore:
                     req_kwargs["workspace_path"] = workspace_path
                 if has_var_kw or "background" in sig_params:
                     req_kwargs["background"] = bool(background)
+                if has_var_kw or "allow_edits" in sig_params:
+                    req_kwargs["allow_edits"] = bool(allow_edits)
             except (TypeError, ValueError):
                 pass
             req_obj = DesktopJobRequest(**req_kwargs)
@@ -1735,12 +1750,12 @@ class StateStore:
                         """
                         INSERT INTO desktop_jobs (
                             job_id, task_id, status, os_platform, driver_name, app_path,
-                            mode, workspace_path, workspace_attached, background,
+                            mode, workspace_path, workspace_attached, background, allow_edits,
                             prompt_chars, prompt_preview, redaction_count, redactions_json,
                             artifact_path, summary_excerpt, output_chars, duration_ms,
                             estimated_saved_usd, estimated_saved_vnd, clipboard_restored,
                             error_message, created_at, started_at, completed_at
-                        ) VALUES (?, ?, 'queued', ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, NULL, '', 0, 0, 0.0, 0, 1, NULL, ?, NULL, NULL)
+                        ) VALUES (?, ?, 'queued', ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, NULL, '', 0, 0, 0.0, 0, 1, NULL, ?, NULL, NULL)
                         """,
                         (
                             job_id,
@@ -1751,6 +1766,7 @@ class StateStore:
                             mode,
                             workspace_path,
                             1 if background else 0,
+                            1 if allow_edits else 0,
                             len(prompt),
                             prompt_preview,
                             redaction_count,
