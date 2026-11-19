@@ -2719,15 +2719,31 @@ class TestExternalWorkerCostAndHybridRouter(unittest.TestCase):
         )["recommendation"]
         self.assertEqual(r3["model"], "gemini-desktop-app")
 
-        # 4. builder NEVER offloads to desktop (remains on gemini-4-hydrogen)
+        # 4. builder with offload_heavy_to_desktop + prefer_desktop=True and read_only=False
+        # promotes to gemini-desktop-app with allow_edits=True when desktop_available=True,
+        # and falls back cleanly to gemini-4-hydrogen when desktop_available=False.
         r4 = recommend_model(
             agent_type="builder",
             complexity="medium",
             budget_mode="offload_heavy_to_desktop",
             desktop_available=True,
             prefer_desktop=True,
+            read_only=False,
         )["recommendation"]
-        self.assertEqual(r4["model"], "gemini-4-hydrogen")
+        self.assertEqual(r4["model"], "gemini-desktop-app")
+        self.assertEqual(r4["recommended_model"], "gemini-desktop-app")
+        self.assertTrue(r4["desktop_execution"]["allow_edits"])
+        self.assertEqual(r4["fallback_model"], "gemini-4-hydrogen")
+
+        r4_off = recommend_model(
+            agent_type="builder",
+            complexity="medium",
+            budget_mode="offload_heavy_to_desktop",
+            desktop_available=False,
+            prefer_desktop=True,
+            read_only=False,
+        )["recommendation"]
+        self.assertEqual(r4_off["model"], "gemini-4-hydrogen")
 
         # 5. desktop_available=False falls back cleanly to API fleet (Neon)
         r5 = recommend_model(

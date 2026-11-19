@@ -568,11 +568,12 @@ class TestHydrogenE2ERESTAndDashboard(unittest.TestCase):
 
     def test_post_router_recommend_with_retry_and_circuit_breaker(self):
         """POST /api/router/recommend tests retry_count and budget_mode via HTTP."""
-        # 1. Normal builder
+        # 1. Normal builder (explicit pure-API mode for portable determinism)
         status, _, d1 = self._post("/api/router/recommend", {
             "agent_type": "builder",
             "complexity": "medium",
             "retry_count": 0,
+            "desktop_available": False,
         })
         self.assertEqual(status, 200)
         self.assertEqual(d1["recommendation"]["model"], "gemini-4-hydrogen")
@@ -583,6 +584,7 @@ class TestHydrogenE2ERESTAndDashboard(unittest.TestCase):
             "agent_type": "builder",
             "complexity": "medium",
             "retry_count": 1,
+            "desktop_available": False,
         })
         self.assertEqual(status, 200)
         self.assertEqual(d2["recommendation"]["model"], "gemini-4-hydrogen")
@@ -593,6 +595,7 @@ class TestHydrogenE2ERESTAndDashboard(unittest.TestCase):
             "agent_type": "builder",
             "complexity": "medium",
             "retry_count": 2,
+            "desktop_available": False,
         })
         self.assertEqual(status, 200)
         self.assertEqual(d3["recommendation"]["model"], "gemini-4-neon")
@@ -605,6 +608,7 @@ class TestHydrogenE2ERESTAndDashboard(unittest.TestCase):
             "agent_type": "builder",
             "complexity": "medium",
             "retry_count": 3,
+            "desktop_available": False,
         })
         self.assertEqual(status, 200)
         self.assertEqual(d4["recommendation"]["model"], "gemini-4-carbon")
@@ -677,23 +681,23 @@ class TestHydrogenSDKAndCLISubprocess(unittest.TestCase):
         self.assertEqual(res["task"]["model"], "gemini-4-hydrogen")
         self.assertEqual(res["task"]["reasoning_effort"], "xhigh")
 
-        # 2. recommend with budget_mode="speed_first"
-        rec_spd = client.recommend(agent_type="builder", budget_mode="speed_first")
+        # 2. recommend with budget_mode="speed_first" (explicit pure-API mode)
+        rec_spd = client.recommend(agent_type="builder", budget_mode="speed_first", desktop_available=False)
         self.assertEqual(rec_spd["status"], "ok")
         self.assertEqual(rec_spd["recommendation"]["model"], "gemini-4-hydrogen")
 
         # 3. recommend with retry_count=1 -> elevated xhigh
-        rec_retry1 = client.recommend(agent_type="builder", retry_count=1)
+        rec_retry1 = client.recommend(agent_type="builder", retry_count=1, desktop_available=False)
         self.assertEqual(rec_retry1["recommendation"]["model"], "gemini-4-hydrogen")
         self.assertEqual(rec_retry1["recommendation"]["reasoning_effort"], "xhigh")
 
         # 4. recommend with retry_count=2 -> Circuit breaker Stage 2 escalated to Neon
-        rec_retry2 = client.recommend(agent_type="builder", retry_count=2)
+        rec_retry2 = client.recommend(agent_type="builder", retry_count=2, desktop_available=False)
         self.assertEqual(rec_retry2["recommendation"]["model"], "gemini-4-neon")
         self.assertEqual(rec_retry2["recommendation"]["reasoning_effort"], "high")
 
         # 5. recommend with retry_count=3 -> Circuit breaker Stage 3 tripped to Carbon
-        rec_retry3 = client.recommend(agent_type="builder", retry_count=3)
+        rec_retry3 = client.recommend(agent_type="builder", retry_count=3, desktop_available=False)
         self.assertEqual(rec_retry3["recommendation"]["model"], "gemini-4-carbon")
         self.assertEqual(rec_retry3["recommendation"]["reasoning_effort"], "high")
 
@@ -732,13 +736,14 @@ class TestHydrogenSDKAndCLISubprocess(unittest.TestCase):
         self.assertEqual(res["status"], "ok")
         self.assertIn("gemini-4-hydrogen", res["models"])
 
-        # 3. CLI recommend --budget-mode speed_first --retry-count 2 --json (Circuit Breaker Stage 2 -> Neon)
+        # 3. CLI recommend --budget-mode speed_first --retry-count 2 --no-desktop --json (Circuit Breaker Stage 2 -> Neon)
         proc = subprocess.run([
             sys.executable, cli_path, "--url", self.base_url, "recommend",
             "--agent", "builder",
             "--complexity", "medium",
             "--budget-mode", "speed_first",
             "--retry-count", "2",
+            "--no-desktop",
             "--json",
         ], capture_output=True, text=True, check=True)
         res = json.loads(proc.stdout)
@@ -748,12 +753,13 @@ class TestHydrogenSDKAndCLISubprocess(unittest.TestCase):
         self.assertEqual(res["recommendation"]["circuit_breaker"]["status"], "tripped")
         self.assertEqual(res["recommendation"]["circuit_breaker"]["stage"], 2)
 
-        # 3b. CLI recommend --retry-count 3 --json (Circuit Breaker Stage 3 -> Carbon)
+        # 3b. CLI recommend --retry-count 3 --no-desktop --json (Circuit Breaker Stage 3 -> Carbon)
         proc = subprocess.run([
             sys.executable, cli_path, "--url", self.base_url, "recommend",
             "--agent", "builder",
             "--complexity", "medium",
             "--retry-count", "3",
+            "--no-desktop",
             "--json",
         ], capture_output=True, text=True, check=True)
         res = json.loads(proc.stdout)
@@ -763,12 +769,13 @@ class TestHydrogenSDKAndCLISubprocess(unittest.TestCase):
         self.assertEqual(res["recommendation"]["circuit_breaker"]["status"], "tripped")
         self.assertEqual(res["recommendation"]["circuit_breaker"]["stage"], 3)
 
-        # 4. CLI recommend --retry-count 1 --json (Fast Self-Heal with xhigh)
+        # 4. CLI recommend --retry-count 1 --no-desktop --json (Fast Self-Heal with xhigh)
         proc = subprocess.run([
             sys.executable, cli_path, "--url", self.base_url, "recommend",
             "--agent", "builder",
             "--complexity", "medium",
             "--retry-count", "1",
+            "--no-desktop",
             "--json",
         ], capture_output=True, text=True, check=True)
         res = json.loads(proc.stdout)

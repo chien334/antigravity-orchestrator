@@ -454,30 +454,56 @@ class TestNeonServerDashboardAndCLIE2E(unittest.TestCase):
 
     def test_post_router_recommend_neon_swe_matrix(self):
         """Verify POST /api/router/recommend across SWE Neon matrix, CB stages, and Rule 1."""
-        # Task planner -> Neon (medium)
-        _, _, r_plan = self._post("/api/router/recommend", {"agent_type": "task-planner", "complexity": "high"})
+        # Task planner (pure API mode) -> Neon (medium)
+        _, _, r_plan = self._post("/api/router/recommend", {
+            "agent_type": "task-planner",
+            "complexity": "high",
+            "desktop_available": False,
+        })
         self.assertEqual(r_plan["recommendation"]["model"], "gemini-4-neon")
         self.assertEqual(r_plan["recommendation"]["reasoning_effort"], "medium")
 
-        # Multi-file builder (file_count=5) -> Neon
-        _, _, r_mf = self._post("/api/router/recommend", {"agent_type": "builder", "complexity": "medium", "file_count": 5})
+        # Multi-file builder (file_count=5, pure API mode) -> Neon
+        _, _, r_mf = self._post("/api/router/recommend", {
+            "agent_type": "builder",
+            "complexity": "medium",
+            "file_count": 5,
+            "desktop_available": False,
+        })
         self.assertEqual(r_mf["recommendation"]["model"], "gemini-4-neon")
 
-        # Bounded builder (file_count=2) -> Hydrogen
-        _, _, r_bnd = self._post("/api/router/recommend", {"agent_type": "builder", "complexity": "medium", "file_count": 2})
+        # Bounded builder (file_count=2, pure API mode) -> Hydrogen
+        _, _, r_bnd = self._post("/api/router/recommend", {
+            "agent_type": "builder",
+            "complexity": "medium",
+            "file_count": 2,
+            "desktop_available": False,
+        })
         self.assertEqual(r_bnd["recommendation"]["model"], "gemini-4-hydrogen")
 
         # Circuit breaker Stage 2 (retry_count=2) -> Neon, Stage 3 (retry_count=3) -> Carbon
-        _, _, r_cb2 = self._post("/api/router/recommend", {"agent_type": "builder", "retry_count": 2})
+        _, _, r_cb2 = self._post("/api/router/recommend", {
+            "agent_type": "builder",
+            "retry_count": 2,
+            "desktop_available": False,
+        })
         self.assertEqual(r_cb2["recommendation"]["model"], "gemini-4-neon")
         self.assertEqual(r_cb2["recommendation"]["circuit_breaker"]["stage"], 2)
 
-        _, _, r_cb3 = self._post("/api/router/recommend", {"agent_type": "builder", "retry_count": 3})
+        _, _, r_cb3 = self._post("/api/router/recommend", {
+            "agent_type": "builder",
+            "retry_count": 3,
+            "desktop_available": False,
+        })
         self.assertEqual(r_cb3["recommendation"]["model"], "gemini-4-carbon")
         self.assertEqual(r_cb3["recommendation"]["circuit_breaker"]["stage"], 3)
 
         # Rule 1 security -> Carbon with fallback_model='gemini-4-neon'
-        _, _, r_sec = self._post("/api/router/recommend", {"agent_type": "builder", "scope": "auth owasp audit"})
+        _, _, r_sec = self._post("/api/router/recommend", {
+            "agent_type": "builder",
+            "scope": "auth owasp audit",
+            "desktop_available": False,
+        })
         self.assertEqual(r_sec["recommendation"]["model"], "gemini-4-carbon")
         self.assertEqual(r_sec["recommendation"]["fallback_model"], "gemini-4-neon")
 
@@ -552,31 +578,31 @@ class TestNeonServerDashboardAndCLIE2E(unittest.TestCase):
         self.assertIn("gemini-4-neon", mod_json["models"])
         self.assertEqual(mod_json["models"]["gemini-4-neon"]["rates"]["cache"], 0.15)
 
-        # 3. CLI recommend --agent task-planner --json -> gemini-4-neon
+        # 3. CLI recommend --agent task-planner --no-desktop --json -> gemini-4-neon
         proc_plan = subprocess.run(
             [
                 sys.executable, cli_path, "--url", self.base_url, "recommend",
-                "--agent", "task-planner", "--complexity", "high", "--json",
+                "--agent", "task-planner", "--complexity", "high", "--no-desktop", "--json",
             ],
             capture_output=True, text=True, check=True,
         )
         self.assertEqual(json.loads(proc_plan.stdout)["recommendation"]["model"], "gemini-4-neon")
 
-        # 4. CLI recommend --agent builder --files 5 --json -> gemini-4-neon
+        # 4. CLI recommend --agent builder --files 5 --no-desktop --json -> gemini-4-neon
         proc_mf = subprocess.run(
             [
                 sys.executable, cli_path, "--url", self.base_url, "recommend",
-                "--agent", "builder", "--complexity", "medium", "--files", "5", "--json",
+                "--agent", "builder", "--complexity", "medium", "--files", "5", "--no-desktop", "--json",
             ],
             capture_output=True, text=True, check=True,
         )
         self.assertEqual(json.loads(proc_mf.stdout)["recommendation"]["model"], "gemini-4-neon")
 
-        # 5. CLI recommend --agent builder --retry-count 2 --json -> gemini-4-neon (Stage 2)
+        # 5. CLI recommend --agent builder --retry-count 2 --no-desktop --json -> gemini-4-neon (Stage 2)
         proc_cb2 = subprocess.run(
             [
                 sys.executable, cli_path, "--url", self.base_url, "recommend",
-                "--agent", "builder", "--retry-count", "2", "--json",
+                "--agent", "builder", "--retry-count", "2", "--no-desktop", "--json",
             ],
             capture_output=True, text=True, check=True,
         )
