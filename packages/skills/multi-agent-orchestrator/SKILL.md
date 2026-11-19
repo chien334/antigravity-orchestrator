@@ -1,6 +1,6 @@
 ---
 name: multi-agent-orchestrator
-description: Multi-agent orchestration skill following the 1-Agent = 1-Skill paradigm (addyosmani/agent-skills). Coordinates specialized subagents across the software delivery lifecycle with real-time SSE telemetry, context minimization, 5-Tier Periodic Table intelligent model routing (gemini-4-carbon, gemini-4-argon, gemini-4-hydrogen with xhigh effort & 198 tok/s velocity, gemini-3.8-flash, gemini-3.8-flash-lite), automated DAG scheduling, and audit exports.
+description: Multi-agent orchestration skill following the 1-Agent = 1-Skill paradigm (addyosmani/agent-skills). Coordinates specialized subagents across the software delivery lifecycle with real-time SSE telemetry, context minimization, Periodic Table intelligent model routing (gemini-4-neon SWE Frontier #1 with xhigh effort & ~105 tok/s, gemini-4-carbon Security Frontier, gemini-4-hydrogen with xhigh effort & 198 tok/s velocity, gemini-3.8-flash active micro-tier, and legacy gemini-4-argon), automated DAG scheduling, and audit exports.
 ---
 
 # Multi-Agent Orchestrator Skill
@@ -14,13 +14,14 @@ Rooted in the **1-Agent = 1-Skill** paradigm popularized by Addy Osmani's agent 
 ### Core Objectives
 1. **Divide and Conquer**: Deconstruct monolithic tasks into discrete, verifiable slices with clear boundary contracts.
 2. **Context Minimization**: Prevent token bloat by using pointer-based file references (`file:///...`) and scoped briefings.
-3. **5-Tier Periodic Table Intelligent Model Routing**: Dynamically match task complexity to the optimal model tier:
-   - ✦ **Tier 1 (Frontier Reasoning)**: `gemini-4-carbon` ($2.00 / $10.00 / $0.50) — Cybersecurity audits, formal invariants, deep root-cause debugging.
-   - ✦ **Tier 2 (Deep Reasoning)**: `gemini-4-argon` ($1.25 / $5.00 / $0.3125) — Macro Task DAG scheduling, system architecture, 5-axis code audits.
-   - ✦ **Tier 3 (High-Throughput Workhorse)**: `gemini-4-hydrogen` ($1.50 / $7.50 / $0.075) — Parallel software builders, test fixture suites, codebase reconnaissance, rapid UI iteration (198 tok/s, 2.5x speed, `xhigh` effort).
-   - ⚡ **Tier 4 (Cost-Efficient Builder / Bulk)**: `gemini-3.8-flash` ($0.075 / $0.30 / $0.01875) — Bulk code scaffolding, cost-first implementations, text simplification.
-   - ⚡ **Tier 5 (Ultra-Fast Telemetry)**: `gemini-3.8-flash-lite` ($0.0375 / $0.15 / $0.01) — Micro-telemetry heartbeats, ping monitors, linting.
-4. **"Fast Hands, Deep Brain" Topologies**: Accelerate end-to-end execution through Scout-Then-Architect (Hydrogen scouts feed compact pointers to Argon), Fan-Out Builders with Dual Quality Gates (Hydrogen builders + Argon review + Carbon security), and Fast-Retry Circuit Breakers with `--retry-count`.
+3. **Periodic Table Intelligent Model Routing (Neon SWE Fleet)**: Dynamically match task complexity to the optimal model tier:
+   - ✦ **Tier 1 (Frontier Security & Escalation)**: `gemini-4-carbon` ($2.00 / $10.00 / $0.50; $4/$20 Dec 1, 2026) — Stage 6 security audits, auth/crypto/OWASP/CVE/migration invariants (`has_security_impact`, `critical`), and Circuit Breaker Stage 3 (`retry >= 3`).
+   - ⚡✦ **Tier 1.5 / 2 (SWE Frontier & Orchestrator Brain)**: `gemini-4-neon` (Element #10, $3.00 / $15.00 / $0.15, 95% cache savings, ~105 tok/s, `xhigh` effort, Coding Agent Index #1 `58.64`, Intelligence `61`, `gemini-pro-orchestrator-neon`) — Primary SWE Brain replacing `gemini-4-argon` and taking over non-security `spec-engineer`, `task-planner`, `code-reviewer`, `debugger`, `performance-auditor`, multi-file `builder` (`>= 4` files), and Circuit Breaker Stage 2 (`retry == 2`) at ~32% lower cost/task than Carbon.
+   - ✦ **Tier 2b (Legacy Deep Reasoning)**: `gemini-4-argon` ($1.25 / $5.00 / $0.3125 legacy; $2/$10 → $4/$20 Dec 1, 2026) — Superseded by `gemini-4-neon` across SWE routing; retained as legacy/fallback entry.
+   - ⚡ **Tier 3 (High-Throughput Workhorse)**: `gemini-4-hydrogen` ($1.50 / $7.50 / $0.075, 198 tok/s, `xhigh` effort) — Primary SWE Hands for bounded parallel `builder` slices (`<= 3` files), `test-engineer`, `scout`, and rapid UI iteration (~24% quota saved when paired with `Orchestrator (Neon)`).
+   - ⚡ **Tier 4 (Cost-Efficient & Active Micro-Tier)**: `gemini-3.8-flash` ($0.75 / $3.75 / $0.075 live; `low` effort) — Bulk scaffolding, cost-first implementations, simplification, docs, and active micro-tier telemetry/linting (replaces absent `gemini-3.8-flash-lite` default).
+   - 🪨 **Tier 5 (Deprecated / Legacy Alias)**: `gemini-3.8-flash-lite` ($0.0375 / $0.15 / $0.01) — Absent from live `swarm` inventory; kept only for historical SQLite ledger normalization.
+4. **"Fast Hands, Deep Brain" Topologies**: Accelerate end-to-end execution through Scout-Then-Architect (Hydrogen scouts feed compact pointers to Neon), Fan-Out Builders with Dual Quality Gates (Hydrogen bounded builders `<= 3` files + Neon multi-file `>= 4` files & 5-axis review + Carbon security), and the 3-Stage Fast-Retry Circuit Breaker (`retry 1` Hydrogen `xhigh` ➔ `retry 2` Neon `high`/`xhigh` ➔ `retry >= 3` Carbon `high`).
 5. **Automated DAG Scheduling**: Evaluate task dependencies (`depends_on`) automatically via a ready-queue evaluator for concurrent Fan-Out.
 6. **Real-time Observability & Financial Analytics**: Stream subagent progress, telemetry, thoughts, and per-model token expenditure (USD & VND) via Server-Sent Events (SSE) and SQLite.
 7. **Audit & Compliance Sign-off**: Export permanent post-mission execution reports in Markdown and structured JSON.
@@ -34,7 +35,7 @@ Each agent persona maps strictly to a single skill specialty. Agents never cross
 ```
 +-----------------------------------------------------------------------------------+
 |                           Multi-Agent Orchestrator                                |
-|        (Task Dispatch, 5-Tier Smart Routing, DAG Ready Queue, SSE Telemetry)      |
+|     (gemini-pro-orchestrator-neon, Smart Routing, DAG Ready Queue, SSE Telemetry) |
 +-----------------------------------------------------------------------------------+
                                           |
    +--------------------------------------+-----------------------------------+
@@ -42,8 +43,8 @@ Each agent persona maps strictly to a single skill specialty. Agents never cross
    v                    v                 v                 v                 v
 [1. Spec]          [2. Plan]         [3. Build]        [4. Test]        [5. Review]
 Product Spec       Architect         Software Builder  Test Spec        Code Review
-Gemini 4 Carbon    Gemini 4 Argon    Gemini 4 Hydrogen Gemini 4 Hydrogen Gemini 4 Argon
-(effort: high)     (effort: high)    (198 tok/sec)     (effort: medium) (effort: high)
+Gemini 4 Neon      Gemini 4 Neon     Hydrogen (<=3f)   Gemini 4 Hydrogen Gemini 4 Neon
+(effort: high)*    (medium/high)     Neon (>=4f)       (effort: medium) (effort: high)
    |                    |                 |                 |                 |
    +--------------------+-----------------+-----------------+-----------------+
                                           |
@@ -52,20 +53,21 @@ Gemini 4 Carbon    Gemini 4 Argon    Gemini 4 Hydrogen Gemini 4 Hydrogen Gemini 
                        v                                         v
                 [6. Security]                              [7. Release]
                 Security Specialist                        DevOps & Deployment
-                Gemini 4 Carbon (Effort: high)             Gemini 4 Hydrogen / Argon
+                Gemini 4 Carbon (Effort: high)             Gemini 4 Hydrogen / Neon
 ```
+*\*Security/critical specs stay locked on `Gemini 4 Carbon` (`high`).*
 
 | # | Persona | Primary Skill & Responsibility | Recommended Model & Effort | Output Artifact | Workflow Runbook |
 |---|---------|--------------------------------|----------------------------|-----------------|------------------|
-| 1 | **Multi-Agent Orchestrator** | Task scheduling, dependency resolution, SSE telemetry, context dispatch | ✦ **Gemini 4 Argon** (`medium`) | Orchestrator Plan, DAG | [`workflow-pipeline.md`](../../workflows/workflow-pipeline.md) |
-| 2 | **Product / Spec Specialist** | Requirements discovery, user stories, acceptance criteria, edge-case matrix | ✦ **Gemini 4 Carbon** (`high`) | `docs/specs/{feature_id}.spec.md` | [`workflow-spec.md`](../../workflows/workflow-spec.md) |
-| 3 | **Architect / Planner** | System design, contract definition, database schemas, component topology | ✦ **Gemini 4 Argon** (`medium`/`high`) | `docs/plans/{feature_id}.plan.md` | [`workflow-plan.md`](../../workflows/workflow-plan.md) |
-| 4 | **Software Builder** | Code implementation, UI/API development, minimal blast radius edits | ✦ **Gemini 4 Hydrogen** (`medium`/`high`/`xhigh`) | Source Code Files on disk | [`workflow-build.md`](../../workflows/workflow-build.md) |
-| 5 | **Test Specialist** | Test suites, mocks, unit tests, integration tests, assertions | ✦ **Gemini 4 Hydrogen** (`medium`/`high`) | `docs/reports/test_report.json` | [`workflow-test.md`](../../workflows/workflow-test.md) |
-| 6 | **Code Reviewer** | 5-axis code quality inspection, anti-pattern detection, invariants | ✦ **Gemini 4 Argon** (`high`) | `docs/reviews/review_signoff.md` | [`workflow-review.md`](../../workflows/workflow-review.md) |
-| 7 | **Security Specialist** | Threat modeling, OWASP verification, secret scanning, RBAC checks | ✦ **Gemini 4 Carbon** (`high`) | `docs/security/security_audit.md` | [`workflow-security.md`](../../workflows/workflow-security.md) |
-| 8 | **Root-Cause Debugger** | Deep failure isolation, complex multi-component diagnostics | ✦ **Gemini 4 Carbon** (`high`) | Diagnostic Report & Fix Plan | - |
-| 9 | **Observability / Telemetry** | Instrumentation, heartbeat logging, quick formatting, dead code linting | ⚡ **Gemini 3.8 Flash-Lite** (`None`) | Telemetry Logs & Metrics | - |
+| 1 | **Multi-Agent Orchestrator** | Task scheduling, dependency resolution, SSE telemetry, context dispatch | ⚡✦ **Gemini 4 Neon** (`gemini-pro-orchestrator-neon`, `medium`/`high`) | Orchestrator Plan, DAG | [`workflow-pipeline.md`](../../workflows/workflow-pipeline.md) |
+| 2 | **Product / Spec Specialist** | Requirements discovery, user stories, acceptance criteria, edge-case matrix | ⚡✦ **Gemini 4 Neon** (`high`; ✦ **Carbon** `high` if security/critical) | `docs/specs/{feature_id}.spec.md` | [`workflow-spec.md`](../../workflows/workflow-spec.md) |
+| 3 | **Architect / Planner** | System design, contract definition, database schemas, component topology | ⚡✦ **Gemini 4 Neon** (`medium`/`high`) | `docs/plans/{feature_id}.plan.md` | [`workflow-plan.md`](../../workflows/workflow-plan.md) |
+| 4 | **Software Builder** | Code implementation, UI/API development, minimal blast radius edits | ⚡ **Gemini 4 Hydrogen** (`<= 3` files, `medium`/`high`/`xhigh`) / ⚡✦ **Neon** (`>= 4` files) | Source Code Files on disk | [`workflow-build.md`](../../workflows/workflow-build.md) |
+| 5 | **Test Specialist** | Test suites, mocks, unit tests, integration tests, assertions | ⚡ **Gemini 4 Hydrogen** (`medium`; `xhigh` retry 1) | `docs/reports/test_report.json` | [`workflow-test.md`](../../workflows/workflow-test.md) |
+| 6 | **Code Reviewer** | 5-axis code quality inspection, anti-pattern detection, invariants | ⚡✦ **Gemini 4 Neon** (`high`) | `docs/reviews/review_signoff.md` | [`workflow-review.md`](../../workflows/workflow-review.md) |
+| 7 | **Security Specialist** | Threat modeling, OWASP verification, secret scanning, RBAC checks | ✦ **Gemini 4 Carbon** (`high` — Rule 1 locked; optional Neon CWE pre-scan) | `docs/security/security_audit.md` | [`workflow-security.md`](../../workflows/workflow-security.md) |
+| 8 | **Root-Cause Debugger** | Deep failure isolation, complex multi-component diagnostics | ⚡✦ **Gemini 4 Neon** (`high`/`xhigh`; ✦ **Carbon** if critical/security) | Diagnostic Report & Fix Plan | - |
+| 9 | **Observability / Telemetry** | Instrumentation, heartbeat logging, quick formatting, dead code linting | ⚡ **Gemini 3.8 Flash** (`low`) | Telemetry Logs & Metrics | - |
 
 ---
 
@@ -77,22 +79,22 @@ Every stage delivers an explicit, structured file artifact that serves as the st
 [User Request]
        │
        ▼
-[Stage 1: Spec] ──▶ docs/specs/{feature_id}.spec.md (Gemini 4 Carbon, effort: high)
+[Stage 1: Spec] ──▶ docs/specs/{feature_id}.spec.md (Gemini 4 Neon, effort: high; Carbon if security)
                            │
                            ▼
-                   [Stage 2: Plan] ──▶ docs/plans/{feature_id}.plan.md (Gemini 4 Argon)
+                   [Stage 2: Plan] ──▶ docs/plans/{feature_id}.plan.md (Gemini 4 Neon)
                                                │
                                                ▼
                                       [GET /api/dag/ready] ──▶ Evaluates Unblocked Tasks
                                                │
                                                ▼
-                                      [Stage 3: Parallel Builders] ──▶ Disjoint Code Files (Gemini 4 Hydrogen, 198 tok/s)
+                                      [Stage 3: Parallel Builders] ──▶ Disjoint Code Files (Hydrogen <=3f, 198 tok/s | Neon >=4f)
                                                                                │
                                                                                ▼
                                       [Stage 4: Tests] ◀── (Code + Spec AC) ──▶ docs/reports/test_report.json (Gemini 4 Hydrogen)
                                                │
                                                ▼
-                                      [Stage 5: Review] ──▶ docs/reviews/review_signoff.md (Gemini 4 Argon)
+                                      [Stage 5: Review] ──▶ docs/reviews/review_signoff.md (Gemini 4 Neon, effort: high)
                                                                       │
                                                                       ▼
                                                               [Stage 6: Security] ──▶ docs/security/security_audit.md (Gemini 4 Carbon, effort: high)
@@ -103,23 +105,25 @@ Every stage delivers an explicit, structured file artifact that serves as the st
 
 ---
 
-## 4. 5-Tier Intelligent Model Routing Matrix
+## 4. Periodic Table Intelligent Model Routing Matrix
 
-To maximize precision, throughput, and financial economy, tasks are dynamically routed across five discrete model tiers:
+To maximize precision, throughput, and financial economy, tasks are dynamically routed across the Periodic Table model tiers:
 
 | Tier | Engine Model | Canonical ID | Input / 1M | Output / 1M | Cache Read / 1M | Tunable Reasoning Effort | Role Specialization & Rationale |
 | :--- | :--- | :--- | :---: | :---: | :---: | :---: | :--- |
-| **Tier 1: Frontier** | **Gemini 4 Carbon** | `gemini-4-carbon` | **$2.00** | **$10.00** | **$0.50** | `low`, `medium`, `high` | • `security-auditor`: Deep vulnerability modeling, OWASP scans, secret audits.<br>• `spec-engineer`: Formal specification proofs, edge-case discovery.<br>• `debugger`: Complex multi-component root-cause isolation.<br>• Core cryptographic, financial, and authentication logic. |
-| **Tier 2: Deep Reasoning** | **Gemini 4 Argon** | `gemini-4-argon` | **$1.25** | **$5.00** | **$0.3125** | `low`, `medium`, `high` | • `task-planner`: Architecture modeling, dependency graphs, sequencing.<br>• `code-reviewer`: 5-axis rigorous review (correctness, architecture, maintainability, performance, error handling).<br>• `orchestrator`: Fleet dispatch and synthesis coordination. |
-| **Tier 3: High-Throughput Workhorse** | **Gemini 4 Hydrogen** | `gemini-4-hydrogen` | **$1.50** | **$7.50** | **$0.075** | `low`, `medium`, `high`, `xhigh` | • `builder`: Parallel disjoint feature implementation, CRUD, UI components at 198 tok/s (2.5x speed).<br>• `test-engineer`: Unit/integration test suites, assertion gates, test fixtures.<br>• `scout`: Codebase reconnaissance and symbol pointer discovery.<br>• 95% cache read savings ($0.075 / 1M tokens). |
-| **Tier 4: Cost-Efficient Builder / Bulk** | **Gemini 3.8 Flash** | `gemini-3.8-flash` | **$0.075** | **$0.30** | **$0.01875** | `None` | • `code-simplifier`: Text formatting, doc generation, low-complexity scaffolding.<br>• Fallback for bulk execution in `cost_saving` mode. |
-| **Tier 5: Ultra-Fast Micro-Tier** | **Gemini 3.8 Flash-Lite** | `gemini-3.8-flash-lite` | **$0.0375** | **$0.15** | **$0.01** | `None` | • `observability-and-instrumentation`: Heartbeats, quick linting, documentation formatting.<br>• Near-zero latency execution. |
+| **Tier 1: Frontier Security** | **Gemini 4 Carbon** | `gemini-4-carbon` | **$2.00** *(+$4 Dec 1)* | **$10.00** *(+$20 Dec 1)* | **$0.50** | `low`, `medium`, `high` | • `security-auditor`: Deep OWASP/auth/crypto/CVE/migration audits (Rule 1 invariant).<br>• `critical` complexity & security specs.<br>• Circuit Breaker Stage 3 (`retry_count >= 3`) final escalation. |
+| **Tier 1.5 / 2: SWE Frontier (`mid_frontier`)** | **Gemini 4 Neon (NEW)** | `gemini-4-neon` | **$3.00** | **$15.00** | **$0.15** *(95% off)* | `low`, `medium`, `high`, `xhigh` | • Coding Agent Index #1 (`58.64`), Intelligence `61` (`xhigh`), `~105 tok/s`, native `gemini-pro-orchestrator-neon`.<br>• Replaces Argon & takes over non-security `spec-engineer`, `task-planner`, `code-reviewer`, `debugger`, `performance-auditor`, multi-file `builder` (`>= 4` files), & CB Stage 2 (`retry == 2`) at ~32% lower cost/task than Carbon. |
+| **Tier 2b: Legacy Deep Reasoning** | **Gemini 4 Argon** | `gemini-4-argon` | **$1.25** *(+$4 Dec 1)* | **$5.00** *(+$20 Dec 1)* | **$0.3125** | `low`, `medium`, `high` | • Superseded by `gemini-4-neon` across default SWE routing.<br>• Retained for historical SQLite telemetry & explicit legacy fallback. |
+| **Tier 3: High-Throughput Workhorse** | **Gemini 4 Hydrogen** | `gemini-4-hydrogen` | **$1.50** | **$7.50** | **$0.075** *(95% off)* | `low`, `medium`, `high`, `xhigh` | • Bounded parallel `builder` (`<= 3` files), `ui-builder`, `test-engineer`, `scout` at 198 tok/s (~2x faster than Neon, avoids ~40s TTFT).<br>• `Orchestrator (Neon)` + `Hydrogen` saves ~24% quota.<br>• Circuit Breaker Stage 1 (`retry_count == 1`, `xhigh`). |
+| **Tier 4: Cost-Efficient & Active Micro-Tier** | **Gemini 3.8 Flash** | `gemini-3.8-flash` | **$0.75** *(live)* | **$3.75** *(live)* | **$0.075** | `low`, `medium`, `high` | • Active default for `cost_saving` builders, `doc-generator`, `code-simplifier` (`low`), and `observability` (replaces absent `3.8-flash-lite` default). |
+| **Tier 5: Deprecated / Legacy Alias** | **Gemini 3.8 Flash-Lite** | `gemini-3.8-flash-lite` | **$0.0375** | **$0.15** | **$0.01** | `None` | • Absent from live `swarm` runtime; retained strictly as registry alias for historical DB rows. |
+| **Tier 1.5 / Peer Offload** | **Gemini Desktop App** (`EXTERNAL_WORKERS`) | `gemini-desktop-app` | **$0.00** | **$0.00** | **$0.00** | `None` | • **Conditional 60% Peer Model (`ORCHESTRATOR_DESKTOP_SHARE=0.60`)**: When `desktop-doctor` / `GET /api/desktop/status` reports `ready == true` (macOS/Windows), operates as a first-class peer model (`mode="task"`, `background=True`, `allow_edits=True/False`, `0` focus switches, `$0.00` AGY API spend) for sequential heavy stages (`spec-engineer`, `task-planner`, `code-reviewer`, `debugger`, `performance-auditor`, `doc-generator`) + **at most 1 heavy builder per `parallel_group`**.<br>• Automatically falls back 100% to the pure API fleet when `ready == false` or `--no-desktop` / `--api-only` is set. |
 
 ### Tunable Reasoning Effort Guidelines (`--reasoning-effort` / `--effort`)
-- **`xhigh`** (Exclusively supported on `gemini-4-hydrogen`): Maximum depth thinking for challenging algorithmic edge cases, self-healing test fixes, and complex logic implementation without sacrificing 198 tok/s velocity. *(Clamped to `high` on Carbon/Argon).*
-- **`high`**: Activates deep multi-pass reasoning, autonomous verification loops, and vulnerability fuzzing. Use for `security-auditor` on critical tasks, formal PRD specifications, and high-complexity debugging.
-- **`medium`** (Default): Balanced deep reasoning for architecture design, 5-axis code reviews, and cross-module contracts.
-- **`low`**: Light reasoning check for quick architectural clarifications and sanity checks.
+- **`xhigh`** (Supported on **`gemini-4-neon`** and **`gemini-4-hydrogen`**): Maximum depth thinking for challenging algorithmic edge cases, multi-file debugging, 5-axis quality-first reviews, and Stage 1 self-healing retries. *(Clamped to `high` on Carbon/Argon).*
+- **`high`**: Activates deep multi-pass reasoning, autonomous verification loops, and vulnerability fuzzing. Use for `security-auditor` on Carbon, `spec-engineer` / `code-reviewer` / `debugger` on Neon, and bounded `builder` tasks on Hydrogen.
+- **`medium`** (Default): Balanced deep reasoning for `orchestrator`, `task-planner`, multi-file `builder` (`>= 4` files) on Neon, and bounded `builder`/`test-engineer` on Hydrogen.
+- **`low`**: Light reasoning check for `gemini-3.8-flash` micro-tier tasks, fast Hydrogen `scout` runs, and `speed_first` Neon planning.
 
 ---
 
@@ -130,18 +134,18 @@ To maximize fleet velocity while preserving mathematical correctness and securit
 ### Topology A: Scout-Then-Architect (Token Minimization)
 1. **Parallel Fast Scouting**: The orchestrator dispatches 2 to 4 `gemini-4-hydrogen` scouts (`effort: low`).
 2. **Compact URI Pointers**: Scouts search the codebase using ripgrep and AST tools, returning strictly compact URI pointers (`file:///path/to/file#L10-L25`) and summary cards without dumping raw code files into the chat context.
-3. **Deep Synthesis**: `gemini-4-argon` receives the consolidated pointer summary (< 4,000 tokens), avoiding context bloat, and crafts the master architecture specification and task DAG.
-4. **Efficiency Impact**: Cuts scout phase time from 3 minutes to 45 seconds and slashes prompt context tokens fed to Tier 2 by **80%**.
+3. **Deep Synthesis**: `gemini-4-neon` receives the consolidated pointer summary (< 4,000 tokens), avoiding context bloat, and crafts the master architecture specification and task DAG at `~105 tok/s` (2x Argon speed).
+4. **Efficiency Impact**: Cuts scout phase time from 3 minutes to 45 seconds and slashes prompt context tokens fed to the architect by **80%**.
 
-### Topology B: Fan-Out Hydrogen Builders + Dual Quality Gate
-1. **Contract Locking**: `gemini-4-argon` designs the feature specification and locks disjoint file contracts.
-2. **Massive Parallel Implementation**: Up to 8 `gemini-4-hydrogen` workers (`group: BUILD-PARALLEL`, `effort: medium`/`high`) implement assigned file slices concurrently at 198 tokens/second.
+### Topology B: Fan-Out Hydrogen Builders + Neon Brain + Carbon Security Gate
+1. **Contract Locking**: `gemini-4-neon` (`gemini-pro-orchestrator-neon` / `task-planner`) designs the feature specification and locks disjoint file contracts.
+2. **Massive Parallel Implementation**: Up to 8 `gemini-4-hydrogen` workers (`group: BUILD-PARALLEL`, `file_count <= 3`, `effort: medium`/`high`) implement assigned file slices concurrently at 198 tok/s (~24% quota saved), while complex multi-file refactors (`file_count >= 4` or `complexity == "high"`) route to `gemini-4-neon`.
 3. **High-Speed Test Execution**: A `gemini-4-hydrogen` test engineer executes unit/integration test suites against spec acceptance criteria.
 4. **Dual Quality Gate**:
-   - `gemini-4-argon` performs the 5-axis code quality and architecture review.
-   - `gemini-4-carbon` (`effort: high`) executes the final OWASP security audit before production release.
+   - `gemini-4-neon` (`effort: high`) performs the 5-axis code quality and architecture review (and optional CWE pre-scan).
+   - `gemini-4-carbon` (`effort: high`) executes the final Rule 1 OWASP security audit before production release.
 
-### Topology C: Fast-Retry & Escalation Circuit Breaker
+### Topology C: 3-Stage Fast-Retry & Escalation Circuit Breaker
 ```
             [Hydrogen Builder / Fixer]
                        │
@@ -151,27 +155,31 @@ To maximize fleet velocity while preserving mathematical correctness and securit
                   /        \
                PASS        FAIL
                /              \
-       [Next DAG Stage]     Retry Count < 1?
-                            /            \
-                         YES              NO (or Security Impact)
-                         /                  \
-               Fast Self-Fix Retry       ESCALATE TO CIRCUIT BREAKER
-               (Hydrogen, effort: xhigh)              │
-                                                      ▼
-                                           [Gemini 4 Carbon]
-                                           Reasoning Effort: HIGH
-                                           Deep Root-Cause Diagnosis
+       [Next DAG Stage]    Retry / Security?
+                            /      |       \
+                     retry==1   retry==2   retry>=3 OR Security
+                        /          |             \
+           Stage 1 Self-Fix   Stage 2 Escalation  Stage 3 Trip Hard
+          (Hydrogen, xhigh)   (Neon, high/xhigh)   (Carbon, high)
 ```
 1. **Attempt 0 (`retry_count: 0`)**: Task executes on `gemini-4-hydrogen` (`effort: medium` or `high`).
-2. **Attempt 1 (`retry_count: 1`)**: Fast self-healing retry turn on `gemini-4-hydrogen` with elevated effort (`effort: xhigh`).
-3. **Attempt 2+ (`retry_count >= 2`)**: Trip circuit breaker! The task is automatically escalated to **Gemini 4 Carbon** (`reasoning_effort: high`) for deep root-cause diagnosis.
-4. **Zero-Downgrade Security Guardrail**: If failure logs match security terms (`auth`, `rbac`, `secret`, `leak`, `overflow`, `crypto`), circuit breaker trips immediately to Carbon without intermediate retries.
+2. **Stage 1 (`retry_count: 1`)**: Fast self-healing retry turn on `gemini-4-hydrogen` with elevated effort (`effort: xhigh`).
+3. **Stage 2 (`retry_count: 2`)**: Escalates to **`gemini-4-neon`** (`high`, or `xhigh` if `complexity == "high"`; `status: "escalated_neon"`), resolving tough bugs 2x faster and at 32% lower cost than Carbon.
+4. **Stage 3 (`retry_count >= 3`)**: Trips circuit breaker hard to **`gemini-4-carbon`** (`reasoning_effort: high`, `status: "tripped"`) for final frontier root-cause diagnosis.
+5. **Zero-Downgrade Security Guardrail**: If failure logs match security terms (`auth`, `rbac`, `secret`, `leak`, `overflow`, `crypto`), circuit breaker trips immediately to Carbon without intermediate retries.
 
-### Topology D: Smart Router Budget Modes
-- **`balanced` (Default)**: Builders & Testers on Hydrogen, Specs & Reviews on Argon, Security on Carbon.
-- **`speed_first` / `latency_sensitive`**: All standard development, build, test, and documentation tasks assigned to `gemini-4-hydrogen` (with `xhigh` effort for reviews). Security strictly remains on Carbon.
-- **`quality_first`**: Builders on Argon, Specs/Reviews/Security on Carbon.
-- **`cost_saving` / `cost_first`**: Builders on Gemini 3.8 Flash, Telemetry on Flash-Lite, Security on Carbon.
+### Topology D: Smart Router Budget Modes (including Hybrid Desktop Offload)
+- **`balanced` (Default)**: Orchestrator, Specs, Plans, 5-Axis Reviews, non-critical Debugging, and multi-file Builders (`>= 4` files) on `gemini-4-neon`; bounded Builders (`<= 3` files), Testers & Scouts on `gemini-4-hydrogen` (`198 tok/s`); Micro-tier/Docs on `gemini-3.8-flash` (`low`); Security strictly on `gemini-4-carbon`.
+- **`speed_first` / `latency_sensitive`**: Bounded Builders, Testers, Docs, and medium-complexity Reviews (`xhigh`) on `gemini-4-hydrogen`; Orchestrator/Specs/Plans/Debugging on `gemini-4-neon` (`low`/`medium`); Security strictly on Carbon.
+- **`quality_first`**: Medium Builders & Reviews (`xhigh`) on `gemini-4-neon`; `spec-engineer`, high-complexity planning, and Security on `gemini-4-carbon`.
+- **`cost_saving` / `cost_first`**: Bounded Builders & Micro-tier on `gemini-3.8-flash` (`low`); heavy non-orchestrator roles on `gemini-4-hydrogen` (`xhigh`); Orchestrator on `gemini-4-neon` (`low`); Security strictly on Carbon.
+- **`hybrid_desktop` / `offload_heavy_to_desktop`**: Evaluates **Rule 1.5 (Desktop Offload Gate)** after Rule 1 (Security Guardrail) & Rule 2 (Circuit Breaker), using the **Conditional 60% `gemini-desktop-app` Peer Allocation Policy**:
+  1. **Pre-Flight Detection Gate (`desktop-doctor` / `GET /api/desktop/status`)**:
+     - **When Gemini Desktop App IS installed & ready (`ready == true` on macOS or Windows)**: `gemini-desktop-app` operates as a **first-class peer model** (`mode="task"`, `background=True`, `allow_edits=True/False`, `0` focus switches, `$0.00` AGY API token spend) prioritized for **~60% of total SWE workload** (`ORCHESTRATOR_DESKTOP_SHARE=0.60`):
+       - Sequential heavy stages (`spec-engineer`, `task-planner`, `code-reviewer`, `debugger`, `performance-auditor`, `doc-generator`) + **at most 1 heavy builder per parallel `parallel_group`** (so `Gemini.app`'s single-window FIFO lock NEVER blocks concurrent Fan-Out!).
+       - Remaining **~40%** runs concurrently on AGY API (`gemini-4-hydrogen` `198 tok/s` for sibling parallel builders/testers/scouts, `gemini-4-neon` spillover when the Desktop queue is busy, and `gemini-4-carbon` `high` strictly locked on Rule 1 Security Audits).
+     - **When Gemini Desktop App is NOT installed or NOT ready (`ready == false`, e.g., missing app or locked screen)** — or when `--no-desktop` / `--api-only` is passed: Automatically and seamlessly falls back **100% to the pure API fleet (`Gemini 4 Neon` + `Gemini 4 Hydrogen` + `Gemini 4 Carbon` + `Gemini 3.8 Flash`)**.
+  2. **DAG Peer Allocation (`allocate-dag` / `POST /api/router/allocate-dag`)**: Automatically partitions DAG tasks across `gemini-desktop-app` (~60% target share) and the AGY API fleet (~40% concurrent share) while preserving the single-window FIFO lock and Rule 1 Security Guardrail.
 
 ### Smart Router API & CLI
 Query the smart router before assigning subagents:
@@ -182,6 +190,41 @@ python3 packages/orchestrator/client.py recommend \
   --complexity medium \
   --budget-mode speed_first \
   --retry-count 1
+
+# Hybrid Desktop offload check for heavy read-only synthesis
+python3 packages/orchestrator/client.py recommend \
+  --agent spec-engineer \
+  --complexity high \
+  --budget-mode hybrid_desktop \
+  --desktop-available \
+  --read-only
+
+# Pre-flight & Conditional 60% Peer DAG Allocation (ORCHESTRATOR_DESKTOP_SHARE=0.60)
+python3 packages/orchestrator/client.py desktop-doctor --format text
+python3 packages/orchestrator/client.py allocate-dag --target-desktop-share 0.60 --apply
+
+# Force 100% pure API fleet fallback (disables Desktop allocation)
+python3 packages/orchestrator/client.py allocate-dag --no-desktop --apply
+python3 packages/orchestrator/client.py allocate-dag --api-only --apply
+
+# Dispatch to local Gemini Desktop App ($0.00 AGY API spend, 0 focus switches)
+# Task mode (default) mounts workspace via Folders (ConnectedFolderNSMenu) — reference relative paths concisely
+python3 packages/orchestrator/client.py desktop-ask \
+  --task SPEC-01 \
+  --mode task \
+  --workspace . \
+  --prompt "Inspect docs/specs/draft_brief.md and packages/orchestrator/router.py. Return a read-only critique without editing any files." \
+  --driver auto
+
+# Or standalone Chat mode without mounting a workspace folder
+python3 packages/orchestrator/client.py desktop-dispatch \
+  --task SPEC-02 \
+  --mode chat \
+  --prompt-file docs/specs/draft_brief.md \
+  --async
+
+# REST API: POST /api/desktop/dispatch (Task mode + workspace binding)
+# {"task_id": "SPEC-01", "mode": "task", "workspace": ".", "prompt": "...", "driver": "auto", "async_mode": true}
 
 # Security task always routes to Carbon regardless of budget mode
 python3 packages/orchestrator/client.py recommend \
@@ -219,11 +262,11 @@ python3 packages/orchestrator/client.py recommend \
 The Orchestrator implements a **Condition-Based Directed Acyclic Graph (DAG)** with automated Fan-Out and Fan-In:
 
 ```
-                  ┌──▶ [Parallel Worker 1: Frontend UI] (Hydrogen, 198 tok/s) ──┐
-                  │                                                             │
-[Plan (Argon)] ───┼──▶ [Parallel Worker 2: Backend API] (Hydrogen, 198 tok/s) ──┼──▶ [Barrier Sync & Fan-In]
-                  │                                                             │
-                  └──▶ [Parallel Worker 3: Data Access] (Hydrogen, 198 tok/s) ──┘
+                   ┌──▶ [Parallel Worker 1: Frontend UI] (Hydrogen <=3f, 198 tok/s) ──┐
+                   │                                                                   │
+[Plan (Neon)] ─────┼──▶ [Parallel Worker 2: Backend API] (Hydrogen <=3f, 198 tok/s) ───┼──▶ [Barrier Sync & Fan-In]
+                   │                                                                   │
+                   └──▶ [Parallel Worker 3: Multi-File]  (Neon >=4f, ~105 tok/s) ──────┘
 ```
 
 ### Core Concurrency Invariants:
@@ -273,24 +316,29 @@ ORCHESTRATOR_PORT=9000 python3 packages/orchestrator/server.py
 ```
 
 ### Dashboard Features (`GET http://localhost:8484/`)
-- **Obsidian Emerald Carbon & Electric Cyan Hydrogen Badges**: Visual indicators for `gemini-4-carbon`, `gemini-4-argon`, and electric cyan `#06b6d4` for `gemini-4-hydrogen` with pulsing reasoning pills (including `xhigh`).
-- **5-Tier Financial Ledger**: Dedicated breakdown of token consumption (prompt, completion, cache read), USD spend, VND spend (25,400 VND/USD), and 95% cache savings across Carbon, Argon, Hydrogen, Flash, and Flash-Lite.
+- **Obsidian Emerald Carbon, Neon Violet & Electric Cyan Hydrogen Badges**: Visual indicators for `gemini-4-carbon`, **Neon Violet (`#a855f7`)** for `gemini-4-neon` / `gemini-pro-orchestrator-neon`, `gemini-4-argon` (legacy), and electric cyan `#06b6d4` for `gemini-4-hydrogen` with pulsing reasoning pills (including `xhigh`).
+- **Per-Model Financial Ledger**: Dedicated breakdown of token consumption (prompt, completion, cache read), USD spend, VND spend (25,400 VND/USD), and 95% cache savings across Carbon, Neon (`$3.00 / $15.00 / $0.15`), Hydrogen (`$1.50 / $7.50 / $0.075`), Argon, and 3.8 Flash.
 - **Interactive SVG DAG Visualizer**: Graphical dependency graph displaying task nodes, active glowing pulse rings, and dependency arrows.
-- **Smart Router Interactive Sandbox**: Test model routing recommendations with `speed_first` mode and simulate the Fast-Retry Circuit Breaker with `retry_count >= 2`.
+- **Smart Router Interactive Sandbox**: Test model routing recommendations with `speed_first` mode and simulate the 3-Stage Fast-Retry Circuit Breaker (`retry == 1` Hydrogen `xhigh` ➔ `retry == 2` Neon ➔ `retry >= 3` Carbon).
 - **One-Click Audit Exporter**: Button to instantly download signed Markdown audit post-mortems.
 
 ### REST API Endpoints
 - `GET /`: Dashboard Web UI.
-- `GET /events`: Server-Sent Events stream (`text/event-stream`).
+- `GET /events`: Server-Sent Events stream (`text/event-stream`, including `desktop_job_queued`, `desktop_job_started`, `desktop_job_completed`, `desktop_job_failed`, `desktop_job_cancelled`).
 - `GET /api/state`: Full JSON snapshot of tasks, logs, and metrics.
-- `GET /api/models`: Model registry metadata and pricing rates for all 5 tiers.
-- `POST /api/router/recommend`: Smart model and reasoning effort recommendation (supporting `budget_mode` and `retry_count`).
+- `GET /api/models`: Model registry metadata for all 5 API tiers plus `external_workers` (`gemini-desktop-app`).
+- `POST /api/router/recommend`: Smart model and reasoning effort recommendation (supporting `budget_mode`, `retry_count`, `desktop_available`, `read_only`, and `prefer_desktop`).
+- `POST /api/router/allocate-dag`: Conditional 60% `gemini-desktop-app` peer DAG allocator (`target_desktop_share`, `ORCHESTRATOR_DESKTOP_SHARE`, `apply`, `no_desktop` / `api_only`, automatic 100% pure API fallback when `ready == false`).
 - `GET /api/dag/ready`: Evaluate DAG dependencies and return ready unblocked tasks.
-- `GET /api/analytics/models`: 5-tier per-model token consumption and financial breakdown.
+- `GET /api/analytics/models`: 5-tier per-model token consumption, financial breakdown, and Desktop Worker `AGY Quota Saved` totals.
+- `GET /api/desktop/status`: Cross-platform Gemini Desktop App readiness probe (`macos_ax`, `windows_uia`, `linux_pwa`, `orca`, `mock`).
+- `POST /api/desktop/dispatch`: Enqueue or synchronously execute a secret-redacted, sentinel-framed job on the local Gemini Desktop App (`docs/reports/desktop_worker/{job_id}.md`).
+- `GET /api/desktop/jobs` & `GET /api/desktop/jobs/{job_id}`: Inspect FIFO desktop worker queue and artifact pointers.
+- `POST /api/desktop/cancel` & `POST /api/desktop/jobs/{job_id}/cancel`: Cancel a queued or active desktop job cleanly.
 - `GET /api/audit/export?format=markdown|json`: Export signed mission audit report.
 - `POST /api/tasks`: Upsert task status with `reasoning_effort` (`xhigh`), tokens, and dependencies.
 - `POST /api/logs`: Append log entry.
-- `POST /api/reset`: Reset all task and log states.
+- `POST /api/reset`: Reset all task, log, and desktop job states.
 
 ---
 

@@ -166,9 +166,18 @@ class TestModelCatalogAndPricing(unittest.TestCase):
             self.assertFalse(valid)
             self.assertIsNone(norm)
 
-        # Gemini 3.8 Flash does not support reasoning efforts
+        # Gemini 3.8 Flash supports low, medium, high (and rejects xhigh)
         for effort in ["low", "medium", "high"]:
             valid, norm = validate_reasoning_effort("gemini-3.8-flash", effort)
+            self.assertTrue(valid)
+            self.assertEqual(norm, effort)
+        valid_x, norm_x = validate_reasoning_effort("gemini-3.8-flash", "xhigh")
+        self.assertFalse(valid_x)
+        self.assertIsNone(norm_x)
+
+        # Deprecated Gemini 3.8 Flash-Lite does not support reasoning efforts
+        for effort in ["low", "medium", "high"]:
+            valid, norm = validate_reasoning_effort("gemini-3.8-flash-lite", effort)
             self.assertFalse(valid)
             self.assertIsNone(norm)
 
@@ -479,6 +488,7 @@ class TestCarbonRESTEndpoints(unittest.TestCase):
             "agent_type": "security-auditor",
             "complexity": "critical",
             "has_security_impact": True,
+            "desktop_available": False,
         })
         self.assertEqual(status, 200)
         self.assertEqual(d1["status"], "ok")
@@ -492,6 +502,7 @@ class TestCarbonRESTEndpoints(unittest.TestCase):
             "agent_type": "builder",
             "complexity": "medium",
             "scope": "Fix critical CVE vulnerability in auth module",
+            "desktop_available": False,
         })
         self.assertEqual(d1_kw["recommendation"]["model"], "gemini-4-carbon")
 
@@ -500,28 +511,31 @@ class TestCarbonRESTEndpoints(unittest.TestCase):
             "agent_type": "spec-engineer",
             "complexity": "high",
             "budget_mode": "quality_first",
+            "desktop_available": False,
         })
         self.assertEqual(status, 200)
         rec2_qf = d2_qf["recommendation"]
         self.assertEqual(rec2_qf["model"], "gemini-4-carbon")
         self.assertEqual(rec2_qf["reasoning_effort"], "medium")
 
-        # 2b. High complexity - balanced mode -> Argon medium
+        # 2b. High complexity - balanced mode -> Neon medium (SWE Frontier)
         status, _, d2_bal = self._post("/api/router/recommend", {
             "agent_type": "task-planner",
             "complexity": "high",
             "budget_mode": "balanced",
+            "desktop_available": False,
         })
         self.assertEqual(status, 200)
         rec2_bal = d2_bal["recommendation"]
-        self.assertEqual(rec2_bal["model"], "gemini-4-argon")
+        self.assertEqual(rec2_bal["model"], "gemini-4-neon")
         self.assertEqual(rec2_bal["reasoning_effort"], "medium")
-        self.assertEqual(rec2_bal["tier"], "deep_reasoning")
+        self.assertEqual(rec2_bal["tier"], "swe_frontier")
 
         # 3. Medium complexity / Builder in balanced mode -> Hydrogen high (high_throughput)
         status, _, d3 = self._post("/api/router/recommend", {
             "agent_type": "builder",
             "complexity": "medium",
+            "desktop_available": False,
         })
         self.assertEqual(status, 200)
         rec3 = d3["recommendation"]
@@ -534,6 +548,7 @@ class TestCarbonRESTEndpoints(unittest.TestCase):
             "agent_type": "builder",
             "complexity": "medium",
             "budget_mode": "cost_saving",
+            "desktop_available": False,
         })
         self.assertEqual(status, 200)
         rec3_cost = d3_cost["recommendation"]
@@ -541,16 +556,17 @@ class TestCarbonRESTEndpoints(unittest.TestCase):
         self.assertIsNone(rec3_cost["reasoning_effort"])
         self.assertEqual(rec3_cost["tier"], "cost_efficient")
 
-        # 4. Low complexity / Simplifier -> Flash-Lite None
+        # 4. Low complexity / Simplifier -> Gemini 3.8 Flash (cost_efficient)
         status, _, d4 = self._post("/api/router/recommend", {
             "agent_type": "code-simplifier",
             "complexity": "low",
+            "desktop_available": False,
         })
         self.assertEqual(status, 200)
         rec4 = d4["recommendation"]
-        self.assertEqual(rec4["model"], "gemini-3.8-flash-lite")
+        self.assertEqual(rec4["model"], "gemini-3.8-flash")
         self.assertIsNone(rec4["reasoning_effort"])
-        self.assertEqual(rec4["tier"], "ultra_fast")
+        self.assertEqual(rec4["tier"], "cost_efficient")
 
     def test_dag_ready_queue_and_fan_out(self):
         """GET /api/dag/ready correctly computes ready queue, blocked tasks, and parallel Fan-Out groups."""
@@ -823,17 +839,17 @@ class TestCarbonSDKAndCLI(unittest.TestCase):
         self.assertEqual(res["task"]["model"], "gemini-4-carbon")
         self.assertEqual(res["task"]["reasoning_effort"], "high")
 
-        # 3. recommend_model() and alias recommend()
-        rec1 = client.recommend_model(agent_type="security-auditor", complexity="critical")
+        # 3. recommend_model() and alias recommend() (explicitly pure-API for cross-env determinism)
+        rec1 = client.recommend_model(agent_type="security-auditor", complexity="critical", desktop_available=False)
         self.assertEqual(rec1["status"], "ok")
         self.assertEqual(rec1["recommendation"]["model"], "gemini-4-carbon")
         self.assertEqual(rec1["recommendation"]["reasoning_effort"], "high")
 
-        rec2 = client.recommend(agent_type="builder", complexity="medium")
+        rec2 = client.recommend(agent_type="builder", complexity="medium", desktop_available=False)
         self.assertEqual(rec2["status"], "ok")
         self.assertEqual(rec2["recommendation"]["model"], "gemini-4-hydrogen")
 
-        rec2_cost = client.recommend(agent_type="builder", complexity="medium", budget_mode="cost_saving")
+        rec2_cost = client.recommend(agent_type="builder", complexity="medium", budget_mode="cost_saving", desktop_available=False)
         self.assertEqual(rec2_cost["status"], "ok")
         self.assertEqual(rec2_cost["recommendation"]["model"], "gemini-3.8-flash")
 

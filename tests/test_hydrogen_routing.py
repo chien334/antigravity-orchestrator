@@ -6,7 +6,7 @@ Validates:
    alias normalization, extract_model_and_effort suffix parsing, xhigh clamping policy)
 2. 5-Tier Smart Router & Budget Modes (balanced, speed_first, latency_sensitive, quality_first, cost_saving)
 3. Uncompromised Security Guardrails (has_security_impact=True, security-auditor, auth/crypto/owasp/cve scopes)
-4. Fast-Retry & Escalation Circuit Breaker (retry_count=0, retry_count=1 self-heal, retry_count>=2 trip to Carbon)
+4. Fast-Retry & Escalation Circuit Breaker (retry_count=0, retry_count=1 self-heal, retry_count==2 Stage 2 Neon, retry_count>=3 Stage 3 Carbon)
 5. Server HTTP Endpoints & Dashboard UI Integration (POST /api/tasks, POST /api/router/recommend, GET /index.html)
 6. Python SDK & CLI Subprocess End-to-End (OrchestratorClient and client.py subprocess commands)
 """
@@ -195,9 +195,9 @@ class TestHydrogenCatalogPricingAndEffort(unittest.TestCase):
         self.assertEqual(m6, "gemini-4-hydrogen")
         self.assertIsNone(e6)
 
-        # None defaults to gemini-4-argon
+        # None defaults to gemini-4-neon
         m7, e7 = extract_model_and_effort(None)
-        self.assertEqual(m7, "gemini-4-argon")
+        self.assertEqual(m7, "gemini-4-neon")
         self.assertIsNone(e7)
 
     def test_xhigh_reasoning_effort_and_clamping(self):
@@ -264,28 +264,28 @@ class Test5TierSmartRouterAndBudgetModes(unittest.TestCase):
 
         rec_scout = recommend_model("scout", complexity="low")
         self.assertEqual(rec_scout["recommendation"]["model"], "gemini-4-hydrogen")
-        self.assertEqual(rec_scout["recommendation"]["reasoning_effort"], "medium")
+        self.assertEqual(rec_scout["recommendation"]["reasoning_effort"], "low")
 
         rec_ui = recommend_model("ui-builder", complexity="medium")
         self.assertEqual(rec_ui["recommendation"]["model"], "gemini-4-hydrogen")
 
-        # 2. Spec Engineer, Task Planner, Code Reviewer -> gemini-4-argon
+        # 2. Spec Engineer, Task Planner, Code Reviewer -> gemini-4-neon (supersedes Argon)
         rec_planner = recommend_model("task-planner", complexity="high")
-        self.assertEqual(rec_planner["recommendation"]["model"], "gemini-4-argon")
+        self.assertEqual(rec_planner["recommendation"]["model"], "gemini-4-neon")
         self.assertEqual(rec_planner["recommendation"]["reasoning_effort"], "medium")
-        self.assertEqual(rec_planner["recommendation"]["tier"], "deep_reasoning")
+        self.assertEqual(rec_planner["recommendation"]["tier"], "swe_frontier")
 
         rec_spec = recommend_model("spec-engineer", complexity="high")
-        self.assertEqual(rec_spec["recommendation"]["model"], "gemini-4-argon")
+        self.assertEqual(rec_spec["recommendation"]["model"], "gemini-4-neon")
 
         rec_rev = recommend_model("code-reviewer", complexity="medium")
-        self.assertEqual(rec_rev["recommendation"]["model"], "gemini-4-argon")
+        self.assertEqual(rec_rev["recommendation"]["model"], "gemini-4-neon")
 
-        # 3. Micro-tier / Simplifier -> gemini-3.8-flash-lite
+        # 3. Micro-tier / Simplifier -> gemini-3.8-flash (retired flash-lite default)
         rec_simp = recommend_model("code-simplifier", complexity="low")
-        self.assertEqual(rec_simp["recommendation"]["model"], "gemini-3.8-flash-lite")
+        self.assertEqual(rec_simp["recommendation"]["model"], "gemini-3.8-flash")
         self.assertIsNone(rec_simp["recommendation"]["reasoning_effort"])
-        self.assertEqual(rec_simp["recommendation"]["tier"], "ultra_fast")
+        self.assertEqual(rec_simp["recommendation"]["tier"], "cost_efficient")
 
     def test_router_speed_first_and_latency_sensitive_mode(self):
         """Verify speed_first and latency_sensitive modes route rapid tasks to gemini-4-hydrogen."""
@@ -309,12 +309,12 @@ class Test5TierSmartRouterAndBudgetModes(unittest.TestCase):
         self.assertEqual(rec_rev_ls["recommendation"]["reasoning_effort"], "xhigh")
 
     def test_router_quality_first_mode(self):
-        """Verify quality_first mode upgrades builders to Argon and planners to Carbon."""
-        # Builder medium in quality_first -> gemini-4-argon
+        """Verify quality_first mode upgrades builders & reviewers to Neon and planners to Carbon."""
+        # Builder medium in quality_first -> gemini-4-neon
         rec_b = recommend_model("builder", complexity="medium", budget_mode="quality_first")
-        self.assertEqual(rec_b["recommendation"]["model"], "gemini-4-argon")
-        self.assertEqual(rec_b["recommendation"]["reasoning_effort"], "medium")
-        self.assertEqual(rec_b["recommendation"]["tier"], "deep_reasoning")
+        self.assertEqual(rec_b["recommendation"]["model"], "gemini-4-neon")
+        self.assertEqual(rec_b["recommendation"]["reasoning_effort"], "high")
+        self.assertEqual(rec_b["recommendation"]["tier"], "swe_frontier")
 
         # Spec engineer in quality_first -> gemini-4-carbon
         rec_spec = recommend_model("spec-engineer", complexity="high", budget_mode="quality_first")
@@ -322,12 +322,13 @@ class Test5TierSmartRouterAndBudgetModes(unittest.TestCase):
         self.assertEqual(rec_spec["recommendation"]["reasoning_effort"], "medium")
         self.assertEqual(rec_spec["recommendation"]["tier"], "frontier")
 
-        # Code reviewer in quality_first -> gemini-4-carbon
+        # Code reviewer in quality_first -> gemini-4-neon (xhigh)
         rec_rev = recommend_model("code-reviewer", complexity="medium", budget_mode="quality_first")
-        self.assertEqual(rec_rev["recommendation"]["model"], "gemini-4-carbon")
+        self.assertEqual(rec_rev["recommendation"]["model"], "gemini-4-neon")
+        self.assertEqual(rec_rev["recommendation"]["reasoning_effort"], "xhigh")
 
     def test_router_cost_saving_mode(self):
-        """Verify cost_saving mode routes implementation to Flash while preserving architecture."""
+        """Verify cost_saving mode routes implementation to Flash and planning to Hydrogen (xhigh)."""
         # Builder in cost_saving -> gemini-3.8-flash
         rec_b = recommend_model("builder", complexity="medium", budget_mode="cost_saving")
         self.assertEqual(rec_b["recommendation"]["model"], "gemini-3.8-flash")
@@ -338,9 +339,10 @@ class Test5TierSmartRouterAndBudgetModes(unittest.TestCase):
         rec_t = recommend_model("test-engineer", complexity="medium", budget_mode="cost_first")
         self.assertEqual(rec_t["recommendation"]["model"], "gemini-3.8-flash")
 
-        # Task planner high complexity preserves Argon deep reasoning
+        # Task planner high complexity offloads to Hydrogen (xhigh) in cost_saving
         rec_p = recommend_model("task-planner", complexity="high", budget_mode="cost_saving")
-        self.assertEqual(rec_p["recommendation"]["model"], "gemini-4-argon")
+        self.assertEqual(rec_p["recommendation"]["model"], "gemini-4-hydrogen")
+        self.assertEqual(rec_p["recommendation"]["reasoning_effort"], "xhigh")
 
 
 class TestSecurityGuardrailsUncompromised(unittest.TestCase):
@@ -377,7 +379,7 @@ class TestSecurityGuardrailsUncompromised(unittest.TestCase):
 
         rec_high = recommend_model("security-auditor", complexity="high")
         self.assertEqual(rec_high["recommendation"]["model"], "gemini-4-carbon")
-        self.assertEqual(rec_high["recommendation"]["reasoning_effort"], "medium")
+        self.assertEqual(rec_high["recommendation"]["reasoning_effort"], "high")
 
         rec_deb = recommend_model("debugger", complexity="critical")
         self.assertEqual(rec_deb["recommendation"]["model"], "gemini-4-carbon")
@@ -414,7 +416,7 @@ class TestFastRetryCircuitBreaker(unittest.TestCase):
         self.assertEqual(cb["status"], "active")
         self.assertEqual(cb["retry_count"], 0)
         self.assertEqual(cb["max_self_retries"], 1)
-        self.assertEqual(cb["escalate_to"], "gemini-4-carbon")
+        self.assertEqual(cb["escalate_to"], "gemini-4-neon")
         self.assertEqual(cb["escalate_effort"], "high")
 
     def test_circuit_breaker_attempt_1_fast_self_heal(self):
@@ -428,30 +430,35 @@ class TestFastRetryCircuitBreaker(unittest.TestCase):
         self.assertEqual(cb["retry_count"], 1)
 
     def test_circuit_breaker_attempt_2_tripped_to_carbon(self):
-        """Verify retry_count=2 trips the Circuit Breaker and auto-escalates to gemini-4-carbon (high)."""
+        """Verify retry_count=2 trips Stage 2 of the Circuit Breaker and escalates to gemini-4-neon (high)."""
         rec = recommend_model("builder", complexity="medium", retry_count=2)
-        self.assertEqual(rec["recommendation"]["model"], "gemini-4-carbon")
+        self.assertEqual(rec["recommendation"]["model"], "gemini-4-neon")
         self.assertEqual(rec["recommendation"]["reasoning_effort"], "high")
-        self.assertEqual(rec["recommendation"]["tier"], "frontier")
+        self.assertEqual(rec["recommendation"]["tier"], "swe_frontier")
         self.assertIn("circuit_breaker", rec["recommendation"])
         cb = rec["recommendation"]["circuit_breaker"]
         self.assertEqual(cb["status"], "tripped")
+        self.assertEqual(cb["stage"], 2)
         self.assertEqual(cb["retries"], 2)
         self.assertEqual(cb["escalated_from"], "gemini-4-hydrogen")
-        self.assertIn("Circuit breaker tripped after 2 failed attempts", rec["recommendation"]["rationale"])
+        self.assertEqual(cb["escalated_to"], "gemini-4-neon")
+        self.assertIn("Circuit breaker Stage 2 tripped after 2 failed attempts", rec["recommendation"]["rationale"])
 
     def test_circuit_breaker_attempt_3_or_higher_overrides_budget_mode(self):
-        """Verify retry_count>=2 trips circuit breaker even when budget_mode is cost_saving or speed_first."""
+        """Verify retry_count>=3 trips Stage 3 circuit breaker to Carbon even in cost_saving or speed_first."""
         rec_cost = recommend_model("builder", complexity="medium", retry_count=3, budget_mode="cost_saving")
         self.assertEqual(rec_cost["recommendation"]["model"], "gemini-4-carbon")
         self.assertEqual(rec_cost["recommendation"]["reasoning_effort"], "high")
         cb_cost = rec_cost["recommendation"]["circuit_breaker"]
         self.assertEqual(cb_cost["status"], "tripped")
+        self.assertEqual(cb_cost["stage"], 3)
         self.assertEqual(cb_cost["retries"], 3)
+        self.assertEqual(cb_cost["escalated_from"], "gemini-4-neon")
 
         rec_speed = recommend_model("builder", complexity="medium", retry_count=4, budget_mode="speed_first")
         self.assertEqual(rec_speed["recommendation"]["model"], "gemini-4-carbon")
         self.assertEqual(rec_speed["recommendation"]["reasoning_effort"], "high")
+        self.assertEqual(rec_speed["recommendation"]["circuit_breaker"]["stage"], 3)
 
 
 class TestHydrogenE2ERESTAndDashboard(unittest.TestCase):
@@ -561,11 +568,12 @@ class TestHydrogenE2ERESTAndDashboard(unittest.TestCase):
 
     def test_post_router_recommend_with_retry_and_circuit_breaker(self):
         """POST /api/router/recommend tests retry_count and budget_mode via HTTP."""
-        # 1. Normal builder
+        # 1. Normal builder (explicit pure-API mode for portable determinism)
         status, _, d1 = self._post("/api/router/recommend", {
             "agent_type": "builder",
             "complexity": "medium",
             "retry_count": 0,
+            "desktop_available": False,
         })
         self.assertEqual(status, 200)
         self.assertEqual(d1["recommendation"]["model"], "gemini-4-hydrogen")
@@ -576,21 +584,37 @@ class TestHydrogenE2ERESTAndDashboard(unittest.TestCase):
             "agent_type": "builder",
             "complexity": "medium",
             "retry_count": 1,
+            "desktop_available": False,
         })
         self.assertEqual(status, 200)
         self.assertEqual(d2["recommendation"]["model"], "gemini-4-hydrogen")
         self.assertEqual(d2["recommendation"]["reasoning_effort"], "xhigh")
 
-        # 3. Builder retry_count=2 -> Circuit Breaker Tripped to Carbon
+        # 3. Builder retry_count=2 -> Circuit Breaker Stage 2 Escalated to Neon
         status, _, d3 = self._post("/api/router/recommend", {
             "agent_type": "builder",
             "complexity": "medium",
             "retry_count": 2,
+            "desktop_available": False,
         })
         self.assertEqual(status, 200)
-        self.assertEqual(d3["recommendation"]["model"], "gemini-4-carbon")
+        self.assertEqual(d3["recommendation"]["model"], "gemini-4-neon")
         self.assertEqual(d3["recommendation"]["reasoning_effort"], "high")
         self.assertEqual(d3["recommendation"]["circuit_breaker"]["status"], "tripped")
+        self.assertEqual(d3["recommendation"]["circuit_breaker"]["stage"], 2)
+
+        # 4. Builder retry_count=3 -> Circuit Breaker Stage 3 Tripped to Carbon
+        status, _, d4 = self._post("/api/router/recommend", {
+            "agent_type": "builder",
+            "complexity": "medium",
+            "retry_count": 3,
+            "desktop_available": False,
+        })
+        self.assertEqual(status, 200)
+        self.assertEqual(d4["recommendation"]["model"], "gemini-4-carbon")
+        self.assertEqual(d4["recommendation"]["reasoning_effort"], "high")
+        self.assertEqual(d4["recommendation"]["circuit_breaker"]["status"], "tripped")
+        self.assertEqual(d4["recommendation"]["circuit_breaker"]["stage"], 3)
 
     def test_dashboard_html_contains_hydrogen_and_cyan(self):
         """GET / and GET /index.html serve dashboard with Hydrogen Cyan (#06b6d4) elements."""
@@ -657,20 +681,25 @@ class TestHydrogenSDKAndCLISubprocess(unittest.TestCase):
         self.assertEqual(res["task"]["model"], "gemini-4-hydrogen")
         self.assertEqual(res["task"]["reasoning_effort"], "xhigh")
 
-        # 2. recommend with budget_mode="speed_first"
-        rec_spd = client.recommend(agent_type="builder", budget_mode="speed_first")
+        # 2. recommend with budget_mode="speed_first" (explicit pure-API mode)
+        rec_spd = client.recommend(agent_type="builder", budget_mode="speed_first", desktop_available=False)
         self.assertEqual(rec_spd["status"], "ok")
         self.assertEqual(rec_spd["recommendation"]["model"], "gemini-4-hydrogen")
 
         # 3. recommend with retry_count=1 -> elevated xhigh
-        rec_retry1 = client.recommend(agent_type="builder", retry_count=1)
+        rec_retry1 = client.recommend(agent_type="builder", retry_count=1, desktop_available=False)
         self.assertEqual(rec_retry1["recommendation"]["model"], "gemini-4-hydrogen")
         self.assertEqual(rec_retry1["recommendation"]["reasoning_effort"], "xhigh")
 
-        # 4. recommend with retry_count=2 -> Circuit breaker tripped to Carbon
-        rec_retry2 = client.recommend(agent_type="builder", retry_count=2)
-        self.assertEqual(rec_retry2["recommendation"]["model"], "gemini-4-carbon")
+        # 4. recommend with retry_count=2 -> Circuit breaker Stage 2 escalated to Neon
+        rec_retry2 = client.recommend(agent_type="builder", retry_count=2, desktop_available=False)
+        self.assertEqual(rec_retry2["recommendation"]["model"], "gemini-4-neon")
         self.assertEqual(rec_retry2["recommendation"]["reasoning_effort"], "high")
+
+        # 5. recommend with retry_count=3 -> Circuit breaker Stage 3 tripped to Carbon
+        rec_retry3 = client.recommend(agent_type="builder", retry_count=3, desktop_available=False)
+        self.assertEqual(rec_retry3["recommendation"]["model"], "gemini-4-carbon")
+        self.assertEqual(rec_retry3["recommendation"]["reasoning_effort"], "high")
 
     def test_cli_subprocess_hydrogen_commands(self):
         """Verify client.py CLI commands via subprocess with Hydrogen flags and Circuit Breaker."""
@@ -707,13 +736,30 @@ class TestHydrogenSDKAndCLISubprocess(unittest.TestCase):
         self.assertEqual(res["status"], "ok")
         self.assertIn("gemini-4-hydrogen", res["models"])
 
-        # 3. CLI recommend --budget-mode speed_first --retry-count 2 --json (Circuit Breaker Tripped)
+        # 3. CLI recommend --budget-mode speed_first --retry-count 2 --no-desktop --json (Circuit Breaker Stage 2 -> Neon)
         proc = subprocess.run([
             sys.executable, cli_path, "--url", self.base_url, "recommend",
             "--agent", "builder",
             "--complexity", "medium",
             "--budget-mode", "speed_first",
             "--retry-count", "2",
+            "--no-desktop",
+            "--json",
+        ], capture_output=True, text=True, check=True)
+        res = json.loads(proc.stdout)
+        self.assertEqual(res["status"], "ok")
+        self.assertEqual(res["recommendation"]["model"], "gemini-4-neon")
+        self.assertEqual(res["recommendation"]["reasoning_effort"], "high")
+        self.assertEqual(res["recommendation"]["circuit_breaker"]["status"], "tripped")
+        self.assertEqual(res["recommendation"]["circuit_breaker"]["stage"], 2)
+
+        # 3b. CLI recommend --retry-count 3 --no-desktop --json (Circuit Breaker Stage 3 -> Carbon)
+        proc = subprocess.run([
+            sys.executable, cli_path, "--url", self.base_url, "recommend",
+            "--agent", "builder",
+            "--complexity", "medium",
+            "--retry-count", "3",
+            "--no-desktop",
             "--json",
         ], capture_output=True, text=True, check=True)
         res = json.loads(proc.stdout)
@@ -721,13 +767,15 @@ class TestHydrogenSDKAndCLISubprocess(unittest.TestCase):
         self.assertEqual(res["recommendation"]["model"], "gemini-4-carbon")
         self.assertEqual(res["recommendation"]["reasoning_effort"], "high")
         self.assertEqual(res["recommendation"]["circuit_breaker"]["status"], "tripped")
+        self.assertEqual(res["recommendation"]["circuit_breaker"]["stage"], 3)
 
-        # 4. CLI recommend --retry-count 1 --json (Fast Self-Heal with xhigh)
+        # 4. CLI recommend --retry-count 1 --no-desktop --json (Fast Self-Heal with xhigh)
         proc = subprocess.run([
             sys.executable, cli_path, "--url", self.base_url, "recommend",
             "--agent", "builder",
             "--complexity", "medium",
             "--retry-count", "1",
+            "--no-desktop",
             "--json",
         ], capture_output=True, text=True, check=True)
         res = json.loads(proc.stdout)

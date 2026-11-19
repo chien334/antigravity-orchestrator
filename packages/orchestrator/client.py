@@ -2,7 +2,8 @@
 """
 Multi-Agent Orchestrator Client
 Python library and CLI utility for sending telemetry, task updates, and logs to the Orchestrator Server.
-Features Gemini 4 Carbon and Gemini 4 Hydrogen evolution: 5-tier smart model routing, Circuit Breaker escalation, DAG ready-queue querying, model analytics, and audit exporting.
+Features Gemini 4 Carbon, Gemini 4 Neon (#1 SWE Coding Agent), and Gemini 4 Hydrogen evolution:
+smart SWE model routing, 3-Stage Circuit Breaker escalation, DAG ready-queue querying, model analytics, and audit exporting.
 """
 
 import argparse
@@ -11,9 +12,41 @@ import os
 import sys
 from typing import Any, Dict, List, Optional, Union
 import urllib.error
+import urllib.parse
 import urllib.request
 
 DEFAULT_BASE_URL = os.environ.get("ORCHESTRATOR_URL", "http://localhost:8484").rstrip("/")
+
+
+def _fmt_rate(val: Any) -> str:
+    """Format per-1M token USD rate cleanly (e.g. $3.00, $15.00, $0.15, $0.075)."""
+    try:
+        num = float(val or 0.0)
+    except (TypeError, ValueError):
+        return "$0.00"
+    trimmed = f"{num:.6f}".rstrip("0").rstrip(".")
+    if "." not in trimmed or len(trimmed.split(".")[1]) < 2:
+        return f"${num:.2f}"
+    return f"${trimmed}"
+
+
+def _normalize_desktop_driver(driver: Optional[str]) -> str:
+    """Normalize driver aliases (e.g. linux_x11 -> linux_pwa) while preserving defaults."""
+    val = (driver or "auto").strip()
+    if val == "linux_x11":
+        return "linux_pwa"
+    return val
+
+
+def _to_pct(val: Any, default_ratio: float = 0.0) -> int:
+    """Convert a 0.0-1.0 ratio or 0-100 percentage into a rounded integer percentage."""
+    try:
+        num = float(default_ratio if val is None else val)
+    except (TypeError, ValueError):
+        num = default_ratio
+    if 0.0 <= num <= 1.0:
+        return int(round(num * 100))
+    return int(round(num))
 
 
 class OrchestratorClient:
@@ -22,29 +55,57 @@ class OrchestratorClient:
     def __init__(self, base_url: Optional[str] = None):
         self.base_url = (base_url or DEFAULT_BASE_URL).rstrip("/")
 
-    def _post(self, path: str, payload: dict) -> dict:
+    def _request(
+        self,
+        method: str,
+        path: str,
+        payload: Optional[dict] = None,
+        timeout: int = 10,
+    ) -> dict:
         url = f"{self.base_url}{path}"
-        data = json.dumps(payload).encode("utf-8")
+        data = None
+        headers = {}
+        if payload is not None:
+            data = json.dumps(payload).encode("utf-8")
+            headers["Content-Type"] = "application/json"
+
         req = urllib.request.Request(
             url,
             data=data,
-            headers={"Content-Type": "application/json"},
-            method="POST",
+            headers=headers,
+            method=method.upper(),
         )
         try:
-            with urllib.request.urlopen(req, timeout=10) as response:
-                return json.loads(response.read().decode("utf-8"))
-        except urllib.error.URLError as e:
+            with urllib.request.urlopen(req, timeout=timeout) as response:
+                raw = response.read().decode("utf-8")
+                try:
+                    return json.loads(raw)
+                except json.JSONDecodeError as je:
+                    return {"error": f"Invalid JSON response from {url}: {je}"}
+        except urllib.error.HTTPError as e:
+            err_body = ""
+            try:
+                err_body = e.read().decode("utf-8", errors="replace")
+            except Exception:
+                pass
+            if err_body:
+                try:
+                    parsed = json.loads(err_body)
+                    if isinstance(parsed, dict):
+                        if "error" not in parsed:
+                            parsed["error"] = parsed.get("message") or f"HTTP {e.code} from {url}"
+                        return parsed
+                except json.JSONDecodeError:
+                    pass
+            return {"error": f"HTTP {e.code} from {url}: {err_body or e.reason}"}
+        except (urllib.error.URLError, TimeoutError, OSError) as e:
             return {"error": f"Failed to connect to Orchestrator at {url}: {e}"}
 
-    def _get(self, path: str) -> dict:
-        url = f"{self.base_url}{path}"
-        req = urllib.request.Request(url, method="GET")
-        try:
-            with urllib.request.urlopen(req, timeout=10) as response:
-                return json.loads(response.read().decode("utf-8"))
-        except urllib.error.URLError as e:
-            return {"error": f"Failed to connect to Orchestrator at {url}: {e}"}
+    def _post(self, path: str, payload: dict, timeout: int = 10) -> dict:
+        return self._request("POST", path, payload=payload, timeout=timeout)
+
+    def _get(self, path: str, timeout: int = 10) -> dict:
+        return self._request("GET", path, payload=None, timeout=timeout)
 
     def update_task(
         self,
@@ -141,13 +202,23 @@ class OrchestratorClient:
         has_security_impact: bool = False,
         budget_mode: str = "balanced",
         retry_count: int = 0,
+        desktop_available: Optional[bool] = None,
+        read_only: bool = False,
+        prefer_desktop: bool = False,
+        desktop_target_share: float = 0.60,
+        desktop_queue_busy: Optional[bool] = None,
         **kwargs,
     ) -> dict:
         """Call POST /api/router/recommend to dynamically recommend model and reasoning effort."""
         files = kwargs.get("files", file_count)
         sec_impact = kwargs.get("security_impact", has_security_impact)
         retries = kwargs.get("retries", retry_count)
-        payload = {
+        desk_avail = kwargs.get("desktop_available", desktop_available)
+        ro = kwargs.get("read_only", read_only)
+        pref_desk = kwargs.get("prefer_desktop", prefer_desktop)
+        target_share = kwargs.get("target_desktop_share", desktop_target_share)
+        queue_busy = kwargs.get("queue_busy", desktop_queue_busy)
+        payload: dict[str, Any] = {
             "agent_type": agent_type,
             "complexity": complexity,
             "scope": scope,
@@ -155,7 +226,16 @@ class OrchestratorClient:
             "has_security_impact": sec_impact,
             "budget_mode": budget_mode,
             "retry_count": retries,
+            "desktop_target_share": float(target_share if target_share is not None else 0.60),
         }
+        if desk_avail is not None:
+            payload["desktop_available"] = bool(desk_avail)
+        if queue_busy is not None:
+            payload["desktop_queue_busy"] = bool(queue_busy)
+        if ro:
+            payload["read_only"] = True
+        if pref_desk:
+            payload["prefer_desktop"] = True
         return self._post("/api/router/recommend", payload)
 
     def recommend(
@@ -167,12 +247,22 @@ class OrchestratorClient:
         security_impact: bool = False,
         budget_mode: str = "balanced",
         retry_count: int = 0,
+        desktop_available: Optional[bool] = None,
+        read_only: bool = False,
+        prefer_desktop: bool = False,
+        desktop_target_share: float = 0.60,
+        desktop_queue_busy: Optional[bool] = None,
         **kwargs,
     ) -> dict:
         """Alias for recommend_model matching plan specification."""
-        file_count = kwargs.get("file_count", files)
-        has_sec = kwargs.get("has_security_impact", security_impact)
-        retries = kwargs.get("retries", retry_count)
+        file_count = kwargs.pop("file_count", files)
+        has_sec = kwargs.pop("has_security_impact", security_impact)
+        retries = kwargs.pop("retries", retry_count)
+        desk_avail = kwargs.pop("desktop_available", desktop_available)
+        ro = kwargs.pop("read_only", read_only)
+        pref_desk = kwargs.pop("prefer_desktop", prefer_desktop)
+        target_share = kwargs.pop("target_desktop_share", desktop_target_share)
+        queue_busy = kwargs.pop("queue_busy", desktop_queue_busy)
         return self.recommend_model(
             agent_type=agent_type,
             complexity=complexity,
@@ -181,8 +271,50 @@ class OrchestratorClient:
             has_security_impact=has_sec,
             budget_mode=budget_mode,
             retry_count=retries,
+            desktop_available=desk_avail,
+            read_only=ro,
+            prefer_desktop=pref_desk,
+            desktop_target_share=target_share,
+            desktop_queue_busy=queue_busy,
             **kwargs,
         )
+
+    def allocate_dag(
+        self,
+        tasks: Optional[List[Dict[str, Any]]] = None,
+        desktop_available: Optional[bool] = None,
+        desktop_target_share: float = 0.60,
+        apply: bool = False,
+        budget_mode: str = "balanced",
+        desktop_queue_busy: Optional[bool] = None,
+    ) -> dict:
+        """Allocate pending DAG tasks across Gemini Desktop App and API models (POST /api/router/allocate-dag)."""
+        if tasks is None:
+            state = self.get_state()
+            if isinstance(state, dict) and "error" in state:
+                return state
+            raw_tasks = state.get("tasks", []) if isinstance(state, dict) else []
+            if isinstance(raw_tasks, dict):
+                raw_tasks = list(raw_tasks.values())
+            task_list = [
+                t for t in raw_tasks
+                if isinstance(t, dict) and str(t.get("status", "pending")).lower() == "pending"
+            ]
+        else:
+            task_list = list(tasks)
+
+        payload: dict[str, Any] = {
+            "tasks": task_list,
+            "desktop_target_share": float(desktop_target_share if desktop_target_share is not None else 0.60),
+            "apply": bool(apply),
+            "budget_mode": budget_mode,
+        }
+        if desktop_available is not None:
+            payload["desktop_available"] = bool(desktop_available)
+        if desktop_queue_busy is not None:
+            payload["desktop_queue_busy"] = bool(desktop_queue_busy)
+
+        return self._post("/api/router/allocate-dag", payload)
 
     def get_ready_tasks(self) -> dict:
         """Retrieve ready and unblocked tasks from the DAG Ready Queue (GET /api/dag/ready)."""
@@ -238,6 +370,99 @@ class OrchestratorClient:
                 return {"error": f"Failed to write audit report to {target_path}: {e}"}
 
         return data
+
+    def desktop_status(
+        self,
+        driver: str = "auto",
+        target_os: str = "auto",
+        app_path: Optional[str] = None,
+        os_override: Optional[str] = None,
+    ) -> dict:
+        """Probe cross-platform Gemini Desktop App readiness and driver health (GET /api/desktop/status)."""
+        eff_driver = _normalize_desktop_driver(driver)
+        eff_os = (os_override if os_override is not None else target_os) or "auto"
+        params: dict[str, str] = {
+            "driver": eff_driver,
+            "target_os": eff_os,
+        }
+        if app_path:
+            params["app_path"] = app_path
+        query = urllib.parse.urlencode(params)
+        return self._get(f"/api/desktop/status?{query}", timeout=15)
+
+    def desktop_dispatch(
+        self,
+        prompt: str,
+        task_id: Optional[str] = None,
+        driver: str = "auto",
+        timeout_sec: int = 240,
+        output_path: Optional[str] = None,
+        redact_secrets: bool = True,
+        strict_secrets: bool = False,
+        restore_clipboard: bool = True,
+        new_chat: bool = True,
+        async_mode: bool = False,
+        target_os: str = "auto",
+        app_path: Optional[str] = None,
+        metadata: Optional[dict] = None,
+        job_id: Optional[str] = None,
+        mode: str = "task",
+        workspace_path: Optional[str] = None,
+        no_workspace: bool = False,
+        background: bool = True,
+        allow_edits: bool = False,
+    ) -> dict:
+        """Dispatch a bounded prompt to the local Gemini Desktop Worker (POST /api/desktop/dispatch)."""
+        eff_mode = (mode or "task").strip().lower() or "task"
+        eff_workspace = None if no_workspace else workspace_path
+        payload: dict[str, Any] = {
+            "prompt": prompt,
+            "driver": _normalize_desktop_driver(driver),
+            "target_os": target_os or "auto",
+            "timeout_sec": int(timeout_sec),
+            "redact_secrets": bool(redact_secrets),
+            "strict_secrets": bool(strict_secrets),
+            "restore_clipboard": bool(restore_clipboard),
+            "new_chat": bool(new_chat),
+            "async_mode": bool(async_mode),
+            "mode": eff_mode,
+            "workspace_path": eff_workspace,
+            "no_workspace": bool(no_workspace),
+            "background": bool(background),
+            "allow_edits": bool(allow_edits),
+        }
+        if task_id is not None:
+            payload["task_id"] = task_id
+        if output_path is not None:
+            payload["output_path"] = output_path
+        if app_path is not None:
+            payload["app_path"] = app_path
+        if metadata is not None:
+            payload["metadata"] = metadata
+        if job_id is not None:
+            payload["job_id"] = job_id
+
+        req_timeout = 15 if async_mode else max(30, int(timeout_sec) + 20)
+        return self._post("/api/desktop/dispatch", payload, timeout=req_timeout)
+
+    def desktop_jobs(
+        self,
+        job_id: Optional[str] = None,
+        status: Optional[str] = None,
+        limit: int = 50,
+    ) -> dict:
+        """List queued, running, or completed desktop worker jobs (GET /api/desktop/jobs)."""
+        params: dict[str, Any] = {"limit": int(limit)}
+        if job_id:
+            params["job_id"] = job_id
+        if status:
+            params["status"] = status
+        query = urllib.parse.urlencode(params)
+        return self._get(f"/api/desktop/jobs?{query}")
+
+    def desktop_cancel(self, job_id: str) -> dict:
+        """Cancel a queued or running desktop worker job (POST /api/desktop/cancel)."""
+        return self._post("/api/desktop/cancel", {"job_id": job_id})
 
 
 def auto_detect_tokens_and_conv(conv_id=None, in_tok=None, out_tok=None, cache_tok=None):
@@ -314,7 +539,11 @@ def main():
         "--model",
         type=str,
         default=None,
-        help="Assigned Model (e.g. gemini-4-carbon, carbon, gemini-4-argon, pro, gemini-4-hydrogen, hydrogen, gemini-3.8-flash, flash, flash_lite)",
+        help=(
+            "Assigned Model (e.g. gemini-4-neon, neon, gemini-pro-orchestrator-neon, "
+            "gemini-4-carbon, carbon, gemini-4-hydrogen, hydrogen, "
+            "gemini-4-argon, pro, gemini-3.8-flash, flash, flash_lite)"
+        ),
     )
     update_parser.add_argument(
         "--reasoning-effort",
@@ -394,7 +623,11 @@ def main():
         "recommend",
         help="Recommend optimal model and reasoning effort via Smart Router",
     )
-    recommend_parser.add_argument("--agent", required=True, help="Agent persona name (e.g. security-auditor, builder, spec-engineer)")
+    recommend_parser.add_argument(
+        "--agent",
+        required=True,
+        help="Agent persona name (e.g. security-auditor, spec-engineer, task-planner, code-reviewer, builder, test-engineer)",
+    )
     recommend_parser.add_argument(
         "--complexity",
         type=str,
@@ -415,8 +648,18 @@ def main():
         "--budget-mode",
         type=str,
         default="balanced",
-        choices=["balanced", "quality_first", "speed_first", "latency_sensitive", "cost_saving"],
-        help="Routing optimization mode (balanced, quality_first, speed_first, latency_sensitive, cost_saving, default: balanced)",
+        choices=[
+            "balanced",
+            "quality_first",
+            "speed_first",
+            "latency_sensitive",
+            "cost_saving",
+            "cost_first",
+            "hybrid_desktop",
+            "offload_heavy_to_desktop",
+            "api_only",
+        ],
+        help="Routing optimization mode (balanced, quality_first, speed_first, latency_sensitive, cost_saving, cost_first, hybrid_desktop, offload_heavy_to_desktop, api_only, default: balanced)",
     )
     recommend_parser.add_argument(
         "--retry-count",
@@ -424,7 +667,50 @@ def main():
         dest="retry_count",
         type=int,
         default=0,
-        help="Prior failure retry count for Circuit Breaker escalation (default: 0)",
+        help="Prior failure retry count for 3-Stage Circuit Breaker (0=Hydrogen, 1=Hydrogen xhigh, 2=Neon high, 3+=Carbon high, default: 0)",
+    )
+    rec_desktop_group = recommend_parser.add_mutually_exclusive_group()
+    rec_desktop_group.add_argument(
+        "--desktop-available",
+        dest="desktop_available",
+        action="store_const",
+        const=True,
+        default=None,
+        help="Indicate local Gemini Desktop App bridge is ready for offload",
+    )
+    rec_desktop_group.add_argument(
+        "--no-desktop",
+        "--api-only",
+        dest="desktop_available",
+        action="store_const",
+        const=False,
+        help="Disable Desktop App offload and force pure API model routing",
+    )
+    recommend_parser.add_argument(
+        "--target-desktop-share",
+        dest="target_desktop_share",
+        type=float,
+        default=0.60,
+        help="Target Gemini Desktop App peer share ratio 0.0-1.0 (default: 0.60)",
+    )
+    recommend_parser.add_argument(
+        "--desktop-queue-busy",
+        "--queue-busy",
+        dest="desktop_queue_busy",
+        action="store_const",
+        const=True,
+        default=None,
+        help="Indicate local Gemini Desktop App queue is currently busy",
+    )
+    recommend_parser.add_argument(
+        "--read-only",
+        action="store_true",
+        help="Indicate task is strictly non-mutating / read-only",
+    )
+    recommend_parser.add_argument(
+        "--prefer-desktop",
+        action="store_true",
+        help="Prefer offloading eligible non-mutating synthesis to Gemini Desktop App",
     )
     recommend_parser.add_argument("--json", action="store_true", help="Output raw JSON response")
     recommend_parser.add_argument(
@@ -432,6 +718,49 @@ def main():
         choices=["json", "text"],
         default="json",
         help="Output format (json, text, default: json)",
+    )
+
+    # allocate-dag
+    allocate_dag_parser = subparsers.add_parser(
+        "allocate-dag",
+        aliases=["allocate_dag"],
+        help="Allocate pending DAG tasks across Gemini Desktop App (60%% target) and API models",
+    )
+    allocate_dag_parser.add_argument(
+        "--target-desktop-share",
+        dest="target_desktop_share",
+        type=float,
+        default=0.60,
+        help="Target Gemini Desktop App peer share ratio 0.0-1.0 (default: 0.60)",
+    )
+    alloc_desktop_group = allocate_dag_parser.add_mutually_exclusive_group()
+    alloc_desktop_group.add_argument(
+        "--desktop-available",
+        dest="desktop_available",
+        action="store_const",
+        const=True,
+        default=None,
+        help="Assume local Gemini Desktop App bridge is ready",
+    )
+    alloc_desktop_group.add_argument(
+        "--no-desktop",
+        "--api-only",
+        dest="desktop_available",
+        action="store_const",
+        const=False,
+        help="Disable Desktop App offload and route 100%% to API models",
+    )
+    allocate_dag_parser.add_argument(
+        "--apply",
+        action="store_true",
+        help="Persist assigned models to pending tasks on the Orchestrator server",
+    )
+    allocate_dag_parser.add_argument("--json", action="store_true", help="Output raw JSON response")
+    allocate_dag_parser.add_argument(
+        "--format",
+        choices=["text", "json"],
+        default="text",
+        help="Output format (text, json, default: text)",
     )
 
     # next-ready
@@ -484,6 +813,160 @@ def main():
         type=str,
         default=None,
         help="Output file path to save report (writes to stdout if omitted)",
+    )
+
+    # desktop-status / desktop-doctor
+    desktop_status_parser = subparsers.add_parser(
+        "desktop-status",
+        aliases=["desktop-doctor"],
+        help="Check cross-platform Gemini Desktop App readiness, permissions, and active driver",
+    )
+    desktop_status_parser.add_argument(
+        "--driver",
+        type=str,
+        default="auto",
+        choices=["auto", "macos_ax", "orca", "windows_uia", "linux_pwa", "linux_x11", "mock"],
+        help="Desktop automation driver to probe (default: auto)",
+    )
+    desktop_status_parser.add_argument(
+        "--target-os",
+        "--os",
+        dest="target_os",
+        type=str,
+        default="auto",
+        choices=["auto", "darwin", "win32", "linux"],
+        help="Target OS platform override for diagnostics (default: auto)",
+    )
+    desktop_status_parser.add_argument(
+        "--app-path",
+        type=str,
+        default=None,
+        help="Explicit path to Gemini Desktop App bundle or executable",
+    )
+    desktop_status_parser.add_argument("--json", action="store_true", help="Output raw JSON response")
+    desktop_status_parser.add_argument(
+        "--format",
+        choices=["json", "text"],
+        default="json",
+        help="Output format (json, text, default: json)",
+    )
+
+    # desktop-dispatch / desktop-ask
+    desktop_dispatch_parser = subparsers.add_parser(
+        "desktop-dispatch",
+        aliases=["desktop-ask"],
+        help="Dispatch a bounded read-only analysis task to the local Gemini Desktop App",
+    )
+    desktop_dispatch_parser.add_argument("--prompt", type=str, default=None, help="Prompt text to send")
+    desktop_dispatch_parser.add_argument("--prompt-file", type=str, default=None, help="Path to Markdown/text file containing prompt")
+    desktop_dispatch_parser.add_argument(
+        "--context-file",
+        action="append",
+        default=None,
+        help="Optional context file path(s) to append to the prompt",
+    )
+    desktop_dispatch_parser.add_argument("--task", "--task-id", dest="task", type=str, default=None, help="Optional Orchestrator task ID")
+    desktop_dispatch_parser.add_argument("--agent", type=str, default=None, help="Optional requesting agent persona metadata")
+    desktop_dispatch_parser.add_argument(
+        "--driver",
+        type=str,
+        default="auto",
+        choices=["auto", "macos_ax", "orca", "windows_uia", "linux_pwa", "linux_x11", "mock"],
+        help="Desktop automation driver (default: auto)",
+    )
+    desktop_dispatch_parser.add_argument(
+        "--target-os",
+        "--os",
+        dest="target_os",
+        type=str,
+        default="auto",
+        choices=["auto", "darwin", "win32", "linux"],
+        help="Target OS override (default: auto)",
+    )
+    desktop_dispatch_parser.add_argument("--app-path", type=str, default=None, help="Explicit Gemini app path")
+    desktop_dispatch_parser.add_argument(
+        "--mode",
+        type=str,
+        default="task",
+        choices=["task", "chat"],
+        help="Execution mode in Gemini Desktop App: task (Workspace Agent, default) or chat (Quick Q&A)",
+    )
+    desktop_dispatch_parser.add_argument(
+        "-w",
+        "--workspace",
+        dest="workspace",
+        type=str,
+        default=None,
+        help="Workspace directory path to attach in task mode (defaults to current working directory unless --no-workspace)",
+    )
+    desktop_dispatch_parser.add_argument(
+        "--no-workspace",
+        action="store_true",
+        help="Disable automatic current working directory workspace attachment",
+    )
+    desktop_dispatch_parser.add_argument(
+        "--background",
+        dest="background",
+        action="store_true",
+        default=True,
+        help="Run silently in background without stealing mouse/clipboard/focus (default)",
+    )
+    desktop_dispatch_parser.add_argument(
+        "--allow-foreground",
+        dest="background",
+        action="store_false",
+        help="Allow foreground UI interaction (only needed once to bookmark a new workspace folder)",
+    )
+    desktop_dispatch_parser.add_argument(
+        "--allow-edits",
+        action="store_true",
+        default=False,
+        help="Authorize Gemini.app Task mode to edit specified files inside --workspace directly (and silently approve edit confirmation cards in background)",
+    )
+    desktop_dispatch_parser.add_argument("--timeout", type=int, default=240, help="Job timeout in seconds (default: 240)")
+    desktop_dispatch_parser.add_argument("--output", "--out", dest="output", type=str, default=None, help="Optional output Markdown artifact path inside docs/reports/")
+    desktop_dispatch_parser.add_argument("--no-redact", action="store_true", help="Disable pre-flight secret redaction")
+    desktop_dispatch_parser.add_argument("--strict-secrets", action="store_true", help="Reject job if any secret pattern is detected")
+    desktop_dispatch_parser.add_argument("--no-restore-clipboard", action="store_true", help="Do not restore prior OS clipboard after paste")
+    desktop_dispatch_parser.add_argument("--no-new-chat", action="store_true", help="Reuse active chat instead of opening a new chat")
+    desktop_dispatch_parser.add_argument("--async", dest="async_mode", action="store_true", help="Queue job asynchronously and return immediately")
+    desktop_dispatch_parser.add_argument("--json", action="store_true", help="Output raw JSON response")
+    desktop_dispatch_parser.add_argument(
+        "--format",
+        choices=["json", "text"],
+        default="json",
+        help="Output format (json, text, default: json)",
+    )
+
+    # desktop-jobs
+    desktop_jobs_parser = subparsers.add_parser(
+        "desktop-jobs",
+        help="List queued, running, and completed Gemini Desktop Worker jobs",
+    )
+    desktop_jobs_parser.add_argument("--job-id", type=str, default=None, help="Filter by specific desktop job ID")
+    desktop_jobs_parser.add_argument("--status", type=str, default=None, help="Filter by job status (queued, running, completed, failed, timed_out, cancelled, rejected_secrets)")
+    desktop_jobs_parser.add_argument("--limit", type=int, default=50, help="Maximum number of jobs to return (default: 50)")
+    desktop_jobs_parser.add_argument("--json", action="store_true", help="Output raw JSON response")
+    desktop_jobs_parser.add_argument(
+        "--format",
+        choices=["json", "text"],
+        default="json",
+        help="Output format (json, text, default: json)",
+    )
+
+    # desktop-cancel
+    desktop_cancel_parser = subparsers.add_parser(
+        "desktop-cancel",
+        help="Cancel a queued or running Gemini Desktop Worker job",
+    )
+    desktop_cancel_parser.add_argument("pos_job_id", nargs="?", metavar="job_id", default=None, help="Desktop job ID to cancel")
+    desktop_cancel_parser.add_argument("--job-id", dest="job_id", type=str, default=None, help="Desktop job ID to cancel")
+    desktop_cancel_parser.add_argument("--json", action="store_true", help="Output raw JSON response")
+    desktop_cancel_parser.add_argument(
+        "--format",
+        choices=["json", "text"],
+        default="json",
+        help="Output format (json, text, default: json)",
     )
 
     args = parser.parse_args()
@@ -554,13 +1037,29 @@ def main():
             sys.exit(1)
         if args.format == "text" and not args.json:
             models = res.get("models", {})
-            print(f"{'Model':<24} {'Tier':<18} {'Rates ($ in/out/cache per 1M)':<32} {'Reasoning Efforts':<26}")
-            print("-" * 102)
+            print(f"{'Model':<24} {'Tier':<18} {'Rates ($ in/out/cache per 1M)':<32} {'Reasoning Efforts':<28} {'Notes'}")
+            print("-" * 130)
             for m_id, m_data in models.items():
                 rates = m_data.get("rates", {})
-                rate_str = f"${rates.get('in', 0):.3f} / ${rates.get('out', 0):.2f} / ${rates.get('cache', 0):.4f}"
-                efforts = ", ".join(m_data.get("supported_reasoning_efforts", [])) or "None"
-                print(f"{m_id:<24} {m_data.get('tier', ''):<18} {rate_str:<32} {efforts:<26}")
+                rate_str = f"{_fmt_rate(rates.get('in', 0))} / {_fmt_rate(rates.get('out', 0))} / {_fmt_rate(rates.get('cache', 0))}"
+                efforts = "|".join(m_data.get("supported_reasoning_efforts", [])) or "None"
+                note = ""
+                if "neon" in m_id.lower():
+                    note = "* #1 SWE Coding Agent | 95% cache savings"
+                elif "hydrogen" in m_id.lower():
+                    note = "198 tok/s fast workers | 95% cache savings"
+                elif "carbon" in m_id.lower():
+                    note = "Frontier security & CB Stage 3"
+                print(f"{m_id:<24} {m_data.get('tier', ''):<18} {rate_str:<32} {efforts:<28} {note}")
+            print("\n3-Stage Circuit Breaker: Retry 0=Hydrogen -> Retry 1=Hydrogen(xhigh) -> Retry 2=Gemini 4 Neon(high) -> Retry 3+=Gemini 4 Carbon(high)")
+            external_workers = res.get("external_workers", {})
+            if external_workers:
+                print("\n=== External Workers ===")
+                for w_id, w_data in external_workers.items():
+                    rates = w_data.get("rates", {})
+                    rate_str = f"{_fmt_rate(rates.get('in', 0))} / {_fmt_rate(rates.get('out', 0))} / {_fmt_rate(rates.get('cache', 0))}"
+                    mode = w_data.get("execution_mode", "desktop_bridge")
+                    print(f"{w_id:<24} {w_data.get('tier', 'external_desktop'):<18} {rate_str:<32} mode={mode}")
         else:
             print(json.dumps(res, indent=2))
 
@@ -573,6 +1072,11 @@ def main():
             has_security_impact=args.security_impact,
             budget_mode=args.budget_mode,
             retry_count=args.retry_count,
+            desktop_available=args.desktop_available,
+            read_only=args.read_only,
+            prefer_desktop=args.prefer_desktop,
+            desktop_target_share=args.target_desktop_share,
+            desktop_queue_busy=args.desktop_queue_busy,
         )
         if "error" in res:
             print(json.dumps(res, indent=2))
@@ -583,18 +1087,107 @@ def main():
             if rec.get("reasoning_effort"):
                 print(f"Reasoning Effort:  {rec.get('reasoning_effort')}")
             print(f"Tier:              {rec.get('tier', 'unknown')}")
+            if rec.get("execution_mode"):
+                print(f"Execution Mode:    {rec.get('execution_mode')}")
             print(f"Cost Tier:         {rec.get('estimated_cost_tier', '-')}")
             print(f"Fallback Model:    {rec.get('fallback_model', '-')}")
+            if str(rec.get("model", "")).lower() == "gemini-desktop-app":
+                cur_raw = rec.get("desktop_share", rec.get("current_desktop_share", res.get("desktop_share", 0.0)))
+                tgt_raw = rec.get("desktop_target_share", rec.get("target_desktop_share", args.target_desktop_share))
+                cur_pct = _to_pct(cur_raw)
+                tgt_pct = _to_pct(tgt_raw)
+                fallback_m = rec.get("fallback_model", "-")
+                allow_edits = bool(rec.get("allow_edits", rec.get("desktop_allow_edits", False)))
+                print(
+                    f"Desktop Share: current {cur_pct}% / target {tgt_pct}% | "
+                    f"Fallback: {fallback_m} | Allow Edits: {allow_edits}"
+                )
             if rec.get("circuit_breaker"):
                 cb = rec["circuit_breaker"]
-                cb_status = str(cb.get("status", "unknown")).upper()
-                if cb.get("status") == "tripped":
-                    print(f"Circuit Breaker:   TRIPPED (retries: {cb.get('retries', 0)}, escalated from: {cb.get('escalated_from', 'gemini-4-hydrogen')})")
-                elif cb.get("status") == "retrying":
-                    print(f"Circuit Breaker:   RETRYING (retry #{cb.get('retry_count', 1)}, escalating to: {cb.get('escalate_to', 'gemini-4-carbon')})")
+                cb_status = str(cb.get("status", "unknown")).lower()
+                retries = cb.get("retries", cb.get("retry_count", 0))
+                stage = cb.get("stage")
+                if cb_status == "tripped":
+                    s_lbl = f"Stage {stage if stage is not None else 3}/3 | "
+                    print(f"Circuit Breaker:   TRIPPED ({s_lbl}retries: {retries}, escalated from: {cb.get('escalated_from', 'gemini-4-neon')})")
+                elif cb_status == "escalated_neon":
+                    s_lbl = f"Stage {stage if stage is not None else 2}/3 | "
+                    print(
+                        f"Circuit Breaker:   ESCALATED_NEON ({s_lbl}retry #{retries}, "
+                        f"escalated from: {cb.get('escalated_from', 'gemini-4-hydrogen')}, "
+                        f"next trip: {cb.get('escalate_to', 'gemini-4-carbon')})"
+                    )
+                elif cb_status == "retrying":
+                    s_lbl = f"Stage {stage if stage is not None else 1}/3 | "
+                    print(f"Circuit Breaker:   RETRYING ({s_lbl}retry #{retries}, escalating to: {cb.get('escalate_to', 'gemini-4-neon')})")
                 else:
-                    print(f"Circuit Breaker:   {cb_status} (retries: {cb.get('retry_count', 0)})")
+                    s_lbl = f"Stage {stage if stage is not None else 0}/3 | "
+                    print(f"Circuit Breaker:   {cb_status.upper()} ({s_lbl}retries: {retries}, escalate_to: {cb.get('escalate_to', 'gemini-4-neon')})")
             print(f"Rationale:         {rec.get('rationale', '')}")
+        else:
+            print(json.dumps(res, indent=2))
+
+    elif args.command in ("allocate-dag", "allocate_dag"):
+        res = client.allocate_dag(
+            tasks=None,
+            desktop_available=args.desktop_available,
+            desktop_target_share=args.target_desktop_share,
+            apply=args.apply,
+        )
+        if "error" in res:
+            print(json.dumps(res, indent=2))
+            sys.exit(1)
+        if args.format == "text" and not args.json:
+            allocs = res.get("allocations") or res.get("assignments") or res.get("tasks") or []
+            summary = res.get("summary") or {}
+            total_cnt = summary.get("total_tasks", len(allocs))
+            desktop_cnt = summary.get(
+                "desktop_tasks",
+                summary.get(
+                    "desktop_count",
+                    sum(1 for a in allocs if "desktop" in str(a.get("assigned_model") or a.get("model") or "").lower()),
+                ),
+            )
+            achieved_raw = summary.get(
+                "achieved_desktop_share",
+                summary.get(
+                    "desktop_share",
+                    res.get("achieved_desktop_share", (desktop_cnt / total_cnt) if total_cnt > 0 else 0.0),
+                ),
+            )
+            target_raw = summary.get(
+                "target_desktop_share",
+                summary.get("desktop_target_share", res.get("desktop_target_share", args.target_desktop_share)),
+            )
+            achieved_pct = _to_pct(achieved_raw)
+            target_pct = _to_pct(target_raw)
+            pg_safe = summary.get("parallel_group_safe", summary.get("concurrency_safe", res.get("concurrency_safe", True)))
+            desk_ready = summary.get("desktop_available", res.get("desktop_available"))
+
+            print("=== DAG Multi-Model Peer Allocation ===")
+            print(
+                f"Desktop Ready: {desk_ready if desk_ready is not None else 'auto'} | "
+                f"Achieved Desktop Share: {achieved_pct}% ({desktop_cnt}/{total_cnt} tasks) vs {target_pct}% target | "
+                f"Parallel-Group Safety: {'SAFE' if pg_safe else 'CONFLICT'}"
+            )
+            if args.apply or summary.get("applied") or res.get("applied"):
+                print("Applied:       True (persisted assigned models to pending tasks on server)")
+            print()
+            if not allocs:
+                print("No pending tasks to allocate.")
+            else:
+                print(f"{'Task ID':<12} {'Agent':<20} {'Assigned Model':<22} {'Effort':<8} {'Group':<18} {'Concurrency':<14} {'Mode'}")
+                print("-" * 112)
+                for a in allocs:
+                    tid = str(a.get("task_id", "-"))
+                    agent = str(a.get("agent_type", "-"))
+                    model = str(a.get("assigned_model") or a.get("model") or "-")
+                    effort = str(a.get("reasoning_effort") or "-")
+                    group = str(a.get("parallel_group") or "-")
+                    mode = str(a.get("execution_mode") or ("desktop_bridge" if "desktop" in model.lower() else "api"))
+                    safe_val = a.get("concurrency_safe", a.get("parallel_safe", True))
+                    safety_note = a.get("concurrency_note") or ("SAFE" if safe_val else "SERIALIZED")
+                    print(f"{tid:<12} {agent:<20} {model:<22} {effort:<8} {group:<18} {str(safety_note):<14} {mode}")
         else:
             print(json.dumps(res, indent=2))
 
@@ -648,6 +1241,179 @@ def main():
                 print(res)
         else:
             print(f"Audit report successfully exported to {args.output}")
+
+    elif args.command in ("desktop-status", "desktop-doctor"):
+        res = client.desktop_status(
+            driver=args.driver,
+            target_os=args.target_os,
+            app_path=args.app_path,
+        )
+        if "error" in res:
+            print(json.dumps(res, indent=2))
+            sys.exit(1)
+        if args.format == "text" and not args.json:
+            d = res.get("desktop", res)
+            print("=== Gemini Desktop Worker Status ===")
+            print(f"OS Platform:   {d.get('os_platform', '-')}")
+            print(f"Active Driver: {d.get('driver_name', '-')}")
+            print(f"Ready:         {d.get('ready', False)}")
+            print(f"App Detected:  {d.get('app_detected', False)}")
+            print(f"App Name:      {d.get('app_name') or '-'}")
+            print(f"App Path:      {d.get('app_path') or '-'}")
+            print(f"Bundle ID:     {d.get('bundle_id') or '-'}")
+            print(f"App Version:   {d.get('app_version') or '-'}")
+            print(f"App Running:   {d.get('app_running', False)}")
+            perms = d.get("permissions") or {}
+            perm_str = ", ".join(f"{k}={v}" for k, v in perms.items()) if perms else "-"
+            print(f"Permissions:   {perm_str}")
+            print(f"Queue Depth:   {res.get('queue_depth', d.get('queue_depth', 0))}")
+            print(f"Lock Busy:     {d.get('lock_busy', False)}")
+            print(f"Quota Saved:   ${res.get('quota_saved_usd', 0.0):.4f} ({res.get('quota_saved_vnd', 0):,} VND)")
+            print("Supported Modes: task (default), chat")
+            if d.get("warnings"):
+                print("Warnings:")
+                for w in d["warnings"]:
+                    print(f"  - {w}")
+            if d.get("remediation_steps"):
+                print("Setup / Remediation Hints:")
+                for step in d["remediation_steps"]:
+                    print(f"  * {step}")
+        else:
+            print(json.dumps(res, indent=2))
+
+    elif args.command in ("desktop-dispatch", "desktop-ask"):
+        parts: list[str] = []
+        if args.prompt:
+            parts.append(args.prompt)
+        if args.prompt_file:
+            try:
+                with open(args.prompt_file, "r", encoding="utf-8") as f:
+                    parts.append(f.read())
+            except Exception as e:
+                print(json.dumps({"error": f"Failed to read --prompt-file '{args.prompt_file}': {e}"}, indent=2))
+                sys.exit(1)
+        if args.context_file:
+            for ctx_path in args.context_file:
+                try:
+                    with open(ctx_path, "r", encoding="utf-8") as f:
+                        parts.append(f"--- CONTEXT FILE: {ctx_path} ---\n{f.read()}")
+                except Exception as e:
+                    print(json.dumps({"error": f"Failed to read --context-file '{ctx_path}': {e}"}, indent=2))
+                    sys.exit(1)
+
+        full_prompt = "\n\n".join(p for p in parts if p and p.strip())
+        if not full_prompt.strip():
+            print(json.dumps({"error": "Must provide --prompt, --prompt-file, or --context-file"}, indent=2))
+            sys.exit(2)
+
+        eff_mode = (args.mode or "task").strip().lower()
+        if args.no_workspace or eff_mode == "chat":
+            resolved_workspace = None
+        elif args.workspace:
+            resolved_workspace = os.path.abspath(os.path.expanduser(args.workspace))
+        else:
+            resolved_workspace = os.getcwd()
+
+        metadata = {"agent_type": args.agent} if args.agent else None
+        res = client.desktop_dispatch(
+            prompt=full_prompt,
+            task_id=args.task,
+            driver=args.driver,
+            timeout_sec=args.timeout,
+            output_path=args.output,
+            redact_secrets=not args.no_redact,
+            strict_secrets=args.strict_secrets,
+            restore_clipboard=not args.no_restore_clipboard,
+            new_chat=not args.no_new_chat,
+            async_mode=args.async_mode,
+            target_os=args.target_os,
+            app_path=args.app_path,
+            metadata=metadata,
+            mode=eff_mode,
+            workspace_path=resolved_workspace,
+            no_workspace=args.no_workspace,
+            background=args.background,
+            allow_edits=bool(args.allow_edits),
+        )
+        if "error" in res:
+            print(json.dumps(res, indent=2))
+            sys.exit(1)
+        if args.format == "text" and not args.json:
+            job = res.get("job", res)
+            job_mode = job.get("mode") or eff_mode or "task"
+            job_ws = job.get("workspace_path") if "workspace_path" in job else resolved_workspace
+            ws_display = f"{job_ws} (attached)" if job_ws else "none"
+            is_bg = bool(job.get("background", args.background))
+            exec_display = "background (silent)" if is_bg else "foreground"
+            is_edits = bool(job.get("allow_edits", args.allow_edits))
+            print("=== Desktop Worker Dispatch ===")
+            print(f"Job ID:            {job.get('job_id', '-')}")
+            print(f"Status:            {job.get('status', res.get('status', '-'))}")
+            print(f"Mode: {job_mode} | Workspace: {ws_display} | Allow Edits: {is_edits}")
+            print(f"Execution: {exec_display}")
+            print(f"Driver / OS:       {job.get('driver_used') or job.get('driver_name', '-')} ({job.get('os_platform', '-')})")
+            print(f"Artifact Path:     {job.get('artifact_path') or '-'}")
+            print(f"Duration:          {job.get('duration_ms', 0)} ms")
+            saved_usd = job.get("estimated_saved_usd", 0.0)
+            saved_vnd = job.get("estimated_saved_vnd", 0)
+            print(f"AGY Quota Saved:   ${saved_usd:.4f} ({saved_vnd:,} VND)")
+            redactions = job.get("redactions") or {}
+            red_count = sum(redactions.values()) if isinstance(redactions, dict) else job.get("redaction_count", 0)
+            print(f"Redactions:        {red_count}")
+            if job.get("error") or job.get("error_message"):
+                print(f"Error:             {job.get('error') or job.get('error_message')}")
+            if job.get("summary_excerpt"):
+                print(f"\n--- Summary Excerpt ---\n{job['summary_excerpt']}")
+        else:
+            print(json.dumps(res, indent=2))
+
+    elif args.command == "desktop-jobs":
+        res = client.desktop_jobs(
+            job_id=args.job_id,
+            status=args.status,
+            limit=args.limit,
+        )
+        if "error" in res:
+            print(json.dumps(res, indent=2))
+            sys.exit(1)
+        if args.format == "text" and not args.json:
+            summary = res.get("summary", {})
+            jobs = res.get("jobs", [])
+            print(f"=== Desktop Jobs ({len(jobs)}) ===")
+            if summary:
+                print(
+                    f"Total: {summary.get('total', len(jobs))} | "
+                    f"Completed: {summary.get('completed', 0)} | "
+                    f"Total Saved: ${summary.get('total_saved_usd', 0.0):.4f}"
+                )
+            for j in jobs:
+                j_mode = j.get("mode") or "task"
+                j_ws = j.get("workspace_path")
+                j_ws_display = f"{j_ws} (attached)" if j_ws else "none"
+                print(
+                    f"  [{j.get('job_id', '-')}] status={j.get('status', '-')} "
+                    f"Mode: {j_mode} | Workspace: {j_ws_display} "
+                    f"driver={j.get('driver_name', '-')} task={j.get('task_id') or '-'} "
+                    f"saved=${j.get('estimated_saved_usd', 0.0):.4f} "
+                    f"artifact={j.get('artifact_path') or '-'}"
+                )
+        else:
+            print(json.dumps(res, indent=2))
+
+    elif args.command == "desktop-cancel":
+        target_job_id = args.job_id or args.pos_job_id
+        if not target_job_id:
+            print(json.dumps({"error": "Missing job_id: provide --job-id or positional job_id"}, indent=2))
+            sys.exit(2)
+        res = client.desktop_cancel(job_id=target_job_id)
+        if "error" in res:
+            print(json.dumps(res, indent=2))
+            sys.exit(1)
+        if args.format == "text" and not args.json:
+            job = res.get("job", res)
+            print(f"Cancelled desktop job {job.get('job_id', target_job_id)}: status={job.get('status', 'cancelled')}")
+        else:
+            print(json.dumps(res, indent=2))
 
 
 if __name__ == "__main__":

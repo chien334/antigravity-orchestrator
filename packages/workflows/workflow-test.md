@@ -7,10 +7,10 @@ description: Stage 4 Testing Workflow - Implement tests matching acceptance crit
 
 ## 1. Objective & Persona
 - **Persona**: `test-engineer`
-- **Model Engine**: ✦ **Gemini 4 Hydrogen** (`model: gemini-4-hydrogen`, `reasoning_effort: medium | high`)  
-  *High-throughput test authoring and sandbox test execution (198 tok/s, 2.5x speed) with 95% cache savings ($0.075 / 1M cache tokens).*  
-  *(Fallback to ⚡ **Gemini 3.8 Flash** in `cost_saving` mode).*  
-  *(**Fast-Retry Circuit Breaker**: If unexpected test failures occur, allow 1 fast self-healing turn on Hydrogen with `effort: xhigh`. If regressions persist after 2 attempts (`retry_count >= 2`), trip the circuit breaker and escalate diagnostic responsibility to `debugger` with ✦ **Gemini 4 Carbon** and `reasoning_effort: high`).*
+- **Model Engine**: ⚡ **Gemini 4 Hydrogen** (`model: gemini-4-hydrogen`, `reasoning_effort: medium | high`)  
+  *High-throughput test authoring and sandbox test execution (198 tok/s, ~2x faster than Neon) with 95% cache savings ($0.075 / 1M cache tokens).*  
+  *(Fallback to ⚡ **Gemini 3.8 Flash** (`low`) in `cost_saving` mode; **Gemini 4 Neon** (`medium`) in `quality_first` mode).*  
+  *(**3-Stage Fast-Retry Circuit Breaker**: If unexpected test failures occur, allow 1 fast self-healing turn on Hydrogen with `effort: xhigh` (`retry_count == 1`). At `retry_count == 2`, escalate to ⚡✦ **Gemini 4 Neon** (`high`, or `xhigh` if `complexity == "high"`). If regressions persist at `retry_count >= 3` or implicate security boundaries, trip the circuit breaker hard to `debugger` with ✦ **Gemini 4 Carbon** and `reasoning_effort: high`).*
 - **Primary Skill**: `test-driven-development`
 
 ---
@@ -41,11 +41,12 @@ description: Stage 4 Testing Workflow - Implement tests matching acceptance crit
 2. **Implement Test Scenarios**:
    - Write comprehensive unit tests for every branch, boundary condition, and edge case defined in the spec.
    - Use standard frameworks (e.g. `unittest`, `pytest`, `jest`, `vitest`).
-3. **Execute Test Suite & Fast-Retry Circuit Breaker**:
+3. **Execute Test Suite & 3-Stage Fast-Retry Circuit Breaker**:
    - Run tests and capture machine-readable output.
    - If tests fail:
-     * **Attempt 1 (`retry_count: 1`)**: Fast self-healing retry turn on `gemini-4-hydrogen` with elevated reasoning (`--effort xhigh`).
-     * **Attempt 2+ (`retry_count >= 2`)**: Trip circuit breaker! Escalate to `debugger` with **Gemini 4 Carbon** (`--effort high`) for deep failure isolation.
+     * **Stage 1 (`retry_count == 1`)**: Fast self-healing retry turn on `gemini-4-hydrogen` with elevated reasoning (`--effort xhigh`).
+     * **Stage 2 (`retry_count == 2`)**: Escalate to `debugger` / fixer on **Gemini 4 Neon** (`--model gemini-4-neon --effort high`, or `xhigh` if `complexity == "high"`).
+     * **Stage 3 (`retry_count >= 3` or security impact)**: Trip circuit breaker hard! Escalate to `debugger` with **Gemini 4 Carbon** (`--model gemini-4-carbon --effort high`) for final frontier failure isolation.
    - All tests must achieve 100% pass rate before advancing.
 4. **Artifact Generation**: Produce `docs/reports/test_report.json`.
 5. **Emit Completion Telemetry**:

@@ -2,7 +2,7 @@
 
 Bộ công cụ thiết lập và điều phối đội ngũ AI Agent tự động hóa (**Multi-Agent Orchestrator Swarm**) dành cho Google Antigravity (`agy`), được đóng gói độc lập để chia sẻ và cài đặt dễ dàng cho các thành viên trong đội ngũ kỹ thuật.
 
-Phiên bản mới nâng cấp toàn diện lên **Kiến Trúc Đội Ngũ 5 Tầng Bảng Tuần Hoàn (5-Tier Periodic Table Fleet Architecture)** bổ sung tích hợp hạng nhất cho **Gemini 4 Hydrogen** (High-Throughput Agentic Workhorse — 198 tok/s, 2.5x speed, tiết kiệm 95% chi phí cache) song hành cùng **Gemini 4 Carbon** (Frontier Reasoning) và **Gemini 4 Argon** (Deep Architectural Reasoning), hệ thống ngắt mạch tự phục hồi (**Fast-Retry Circuit Breaker**), hàng đợi sẵn sàng DAG tự động (**DAG Ready-Queue Evaluator**), bảng phân tích tài chính theo từng model (**5-Tier Financial Analytics**), và cơ chế xuất biên bản kiểm toán (**Mission Audit Exporter**).
+Phiên bản mới nâng cấp toàn diện lên **Kiến Trúc Đội Ngũ Bảng Tuần Hoàn Tối Ưu SWE với Gemini 4 Neon (Periodic Table SWE Fleet Architecture)** — bổ sung tích hợp hạng nhất cho **Gemini 4 Neon** (Nguyên tố #10 `Ne` — SWE Frontier & Bộ Não Điều Phối `gemini-pro-orchestrator-neon`: Coding Agent Index #1 `58.64`, Intelligence `61` `xhigh`, `~105 tok/s` nhanh gấp 2x Carbon/Argon, `$3.00/$15.00/$0.15` tiết kiệm 95% cache, giảm ~32% chi phí/tác vụ so với Carbon) song hành cùng **Gemini 4 Hydrogen** (`198 tok/s`, tiết kiệm ~24% quota khi ghép đôi với Neon) và **Gemini 4 Carbon** (bảo vệ tuyệt đối Stage 6 Security Audit & Circuit Breaker Stage 3), đi kèm hệ thống ngắt mạch 3 tầng (**3-Stage Fast-Retry Circuit Breaker**), hàng đợi sẵn sàng DAG tự động (**DAG Ready-Queue Evaluator**), bảng phân tích tài chính theo từng model, và cơ chế xuất biên bản kiểm toán (**Mission Audit Exporter**).
 
 ---
 
@@ -10,22 +10,31 @@ Phiên bản mới nâng cấp toàn diện lên **Kiến Trúc Đội Ngũ 5 T�
 
 - **Kiến trúc 1-Agent = 1-Skill**: Phân quyền rành mạch giữa các persona chuyên biệt (`spec-engineer`, `task-planner`, `builder`, `test-engineer`, `code-reviewer`, `security-auditor`, `debugger`, `observability`).
 - **Chuỗi Handoff Không Loãng Ngữ Cảnh (Zero Context Bloat)**: Output của Bước N tự động trở thành Input con trỏ (`file:///...`) cho Bước N+1 thông qua các Artifact chuẩn hóa (`.spec.md` ➔ `.plan.md` ➔ Code ➔ `test_report.json` ➔ `review_signoff.md` ➔ `security_audit.md`).
-- **Định Tuyến Model 5 Tầng Bảng Tuần Hoàn (5-Tier Periodic Table Routing)**:
-  - ✦ **Tier 1: Gemini 4 Carbon** (`gemini-4-carbon`, Frontier Reasoning): Dành cho kiểm toán an ninh mạng chuyên sâu, phân tích lỗ hổng OWASP/CVE, đặc tả kiến trúc PRD mức độ phức tạp cao, và cô lập lỗi đa thành phần. Hỗ trợ `reasoning_effort` (`low`, `medium`, `high`). Giá: $2.00 in / $10.00 out / $0.50 cache (USD / 1M tokens).
-  - ✦ **Tier 2: Gemini 4 Argon** (`gemini-4-argon`, Deep Reasoning): Dành cho lập kế hoạch kiến trúc hệ thống, phân rã Task DAG, review code 5 trục chất lượng, và điều phối fleet. Hỗ trợ `reasoning_effort: medium | high`. Giá: $1.25 in / $5.00 out / $0.3125 cache.
-  - ✦ **Tier 3: Gemini 4 Hydrogen** (`gemini-4-hydrogen`, High-Throughput Workhorse - MỚI): Ngựa thồ tốc độ cao (198 tok/s, nhanh hơn 2.5x so với Flash) dành cho parallel builders, sinh test suite tự động, trinh sát codebase, và lặp giao diện UI. Hỗ trợ mức tư duy sâu **`xhigh`** độc quyền. Đơn giá đọc cache siêu rẻ **$0.075 / 1M tokens** (tiết kiệm tới 95%). Giá: $1.50 in / $7.50 out / $0.075 cache.
-  - ⚡ **Tier 4: Gemini 3.8 Flash** (`gemini-3.8-flash`, Cost-Efficient Builder / Bulk): Dành cho các worker viết code và sinh bộ test song song ở chế độ tiết kiệm chi phí (`cost_saving`). Giá: $0.075 in / $0.30 out / $0.01875 cache.
-  - ⚡ **Tier 5: Gemini 3.8 Flash-Lite** (`gemini-3.8-flash-lite`, Ultra-Fast Micro-Tier): Dành cho logging nhịp tim telemetry, định dạng tài liệu, và linting nhanh. Giá: $0.0375 in / $0.15 out / $0.01 cache.
-- **Mô Hình "Fast Hands, Deep Brain" & Fast-Retry Circuit Breaker**:
-  - *Scout-Then-Architect*: Hydrogen trinh sát thần tốc codebase, trả về URI con trỏ gọn nhẹ (`file:///...#L10-L40`), giúp Argon nhận ngữ cảnh cô đọng (<4k tokens, giảm 80% chi phí).
-  - *Fan-Out Song Song + Dual Quality Gate*: Lên tới 8 Hydrogen builder cùng test-engineer chạy song song ở vận tốc 198 tok/s, sau đó nghiệm thu qua 2 cổng gác: Review 5 trục chất lượng (Argon) và Quét bảo mật OWASP (Carbon).
-  - *Fast-Retry Circuit Breaker*: Nếu gặp lỗi, Hydrogen tự sửa 1 lượt với `reasoning_effort: xhigh`. Nếu lỗi tiếp tục lặp lại (`retry_count >= 2`), kích hoạt ngắt mạch tự động leo thang lên Gemini 4 Carbon (`high` effort) để chẩn đoán gốc rễ.
+- **Định Tuyến Model Bảng Tuần Hoàn (Gemini 4 Neon SWE Fleet Routing)**:
+  - ✦ **Tier 1: Gemini 4 Carbon** (`gemini-4-carbon`, Frontier Security & Escalation): Khóa chặt cho Stage 6 Security Audit, tác vụ auth/crypto/OWASP/CVE/migration (`has_security_impact`, `complexity == "critical"`), và Circuit Breaker Stage 3 (`retry_count >= 3`). Hỗ trợ `reasoning_effort` (`low`, `medium`, `high`). Giá: $2.00 in / $10.00 out / $0.50 cache *(tăng lên $4/$20 từ 01/12/2026)*.
+  - ⚡✦ **Tier 1.5 / 2: Gemini 4 Neon** (`gemini-4-neon` / `gemini-pro-orchestrator-neon`, SWE Frontier & Orchestrator Brain - MỚI): Nguyên tố #10 — Coding Agent Index #1 (`58.64`), Intelligence `61` (hỗ trợ **`xhigh`**), tốc độ `~105 tok/s` (gấp 2x Carbon/Argon), tiết kiệm ~32% chi phí/tác vụ so với Carbon. **Thay thế hoàn toàn `gemini-4-argon`** ở `orchestrator`, `task-planner`, `code-reviewer`, đồng thời **đảm nhận** `spec-engineer` (phi bảo mật), `debugger`, `performance-auditor`, `builder` đa file (`>= 4` files), và Circuit Breaker Stage 2 (`retry_count == 2`). Giá: **$3.00 in / $15.00 out / $0.15 cache** (giảm 95% cache read).
+  - ✦ **Tier 2b: Gemini 4 Argon** (`gemini-4-argon`, Legacy Deep Reasoning): Đã được thay thế bởi `gemini-4-neon` trong luồng SWE mặc định; giữ lại làm entry tương thích lịch sử & fallback dự phòng. Giá legacy: $1.25 in / $5.00 out / $0.3125 cache *(giá API chính thức $2/$10 ➔ $4/$20 từ 01/12/2026)*.
+  - ⚡ **Tier 3: Gemini 4 Hydrogen** (`gemini-4-hydrogen`, High-Throughput Workhorse): Đôi tay tốc độ cao (**198 tok/s**, nhanh gấp ~2x Neon và tránh độ trễ TTFT ~40s) ghép đôi cùng `Orchestrator (Neon)` (tiết kiệm ~24% quota) cho các `builder` phạm vi gọn (`<= 3` files), `test-engineer`, `scout`, và lặp giao diện UI. Hỗ trợ **`xhigh`** cho lượt tự sửa lỗi Stage 1. Giá: $1.50 in / $7.50 out / $0.075 cache (giảm 95% cache).
+  - ⚡ **Tier 4: Gemini 3.8 Flash** (`gemini-3.8-flash`, Cost-Efficient & Active Micro-Tier): Mặc định hiện hành (`low` effort) cho chế độ `cost_saving`, scaffolding, `doc-generator`, `code-simplifier`, và telemetry/linting (thay thế `gemini-3.8-flash-lite` không có trong runtime thực tế). Giá live: $0.75 in / $3.75 out / $0.075 cache. *(Legacy `gemini-3.8-flash-lite` chỉ còn là alias lịch sử cho DB).*
+- **Mô Hình "Fast Hands, Deep Brain" & 3-Stage Fast-Retry Circuit Breaker**:
+  - *Scout-Then-Architect*: Hydrogen trinh sát thần tốc codebase, trả về URI con trỏ gọn nhẹ (`file:///...#L10-L40`), giúp **Gemini 4 Neon** nhận ngữ cảnh cô đọng (<4k tokens, giảm 80% chi phí).
+  - *Fan-Out Song Song + Dual Quality Gate*: Lên tới 8 Hydrogen builder (`<= 3` files) cùng `test-engineer` chạy song song ở 198 tok/s (các refactor `>= 4` files giao cho Neon), sau đó nghiệm thu qua 2 cổng gác: Review 5 trục chất lượng (**Gemini 4 Neon**) và Quét bảo mật OWASP (**Gemini 4 Carbon**).
+  - *3-Stage Fast-Retry Circuit Breaker*: Nếu gặp lỗi, Stage 1 (`retry_count == 1`) Hydrogen tự sửa 1 lượt với `reasoning_effort: xhigh`; Stage 2 (`retry_count == 2`) leo thang lên **Gemini 4 Neon** (`high`/`xhigh`); Stage 3 (`retry_count >= 3` hoặc chạm ranh giới bảo mật) ngắt mạch cứng lên **Gemini 4 Carbon** (`high` effort).
 - **Tự Động Hóa Hàng Đợi Sẵn Sàng DAG (Automated DAG Ready-Queue)**: Endpoint `GET /api/dag/ready` và lệnh `client.py next-ready` tự động phân tích điều kiện phụ thuộc `depends_on`, phát hiện ngay các task đủ điều kiện để kích hoạt Fan-Out đồng thời trong cùng một lượt.
 - **Thực Thi Song Song (Parallel Worker Fan-Out / Fan-In)**: Hỗ trợ worker chạy đồng thời trên các phạm vi file tách biệt (`parallel_group`, `depends_on`) đảm bảo bất biến không xung đột file (**Decoupled File Scope Invariant**).
-- **Phân Tích Tài Chính 5 Tầng Model (Per-Model Financial Analytics)**: Đo lường chi tiết số token (Input, Output, Cache Read), chi phí quy đổi USD & VNĐ (tỷ giá cố định 25.400 VND/USD), và tỷ lệ trúng bộ nhớ đệm (Cache Hit Rate %) riêng biệt cho Carbon, Argon, Hydrogen, Flash, và Flash-Lite.
+- **Phân Tích Tài Chính Theo Model (Per-Model Financial Analytics)**: Đo lường chi tiết số token (Input, Output, Cache Read), chi phí quy đổi USD & VNĐ (tỷ giá cố định 25.400 VND/USD), và tỷ lệ trúng bộ nhớ đệm (Cache Hit Rate %) riêng biệt cho Carbon, Neon, Argon, Hydrogen, và 3.8 Flash.
 - **Xuất Báo Cáo Kiểm Toán Tự Động (Mission Audit Exporter)**: Endpoint `GET /api/audit/export?format=markdown|json` và lệnh `client.py export` tạo báo cáo nghiệm thu hoàn chỉnh sau mỗi chiến dịch phát triển.
-- **Web Dashboard Thời Gian Thực (SSE & SQLite)**: Giao diện tối Dark-mode hiện đại, huy hiệu Obsidian Emerald cho Carbon, huy hiệu Electric Cyan (`#06b6d4`) cho Hydrogen, nhãn nhịp đập tư duy (`xhigh`), biểu đồ DAG trực quan bằng SVG, và modal Sandbox thử nghiệm Smart Router kèm mô phỏng Circuit Breaker.
-- **Zero Dependency Runtime**: Hoạt động hoàn toàn trên Python Standard Library (`sqlite3`, `http.server`, `urllib`, `json`, `argparse`, `threading`), không yêu cầu cài đặt thêm bất kỳ thư viện pip nào.
+- **Web Dashboard Thời Gian Thực (SSE & SQLite)**: Giao diện tối Dark-mode hiện đại, huy hiệu Obsidian Emerald cho Carbon, **Neon Violet (`#a855f7`) cho Gemini 4 Neon / `gemini-pro-orchestrator-neon`**, huy hiệu Electric Cyan (`#06b6d4`) cho Hydrogen, huy hiệu Teal cho **Gemini Desktop App**, nhãn nhịp đập tư duy (`xhigh`), biểu đồ DAG trực quan bằng SVG, modal Sandbox thử nghiệm Smart Router kèm mô phỏng 3-Stage Circuit Breaker, và bảng theo dõi hàng đợi **Desktop Worker + AGY Quota Saved**.
+- **Cầu Nối Gemini Desktop App Đa Nền Tảng & Chính Sách Phân Bổ Ngang Hàng Có Điều Kiện 60% (`ORCHESTRATOR_DESKTOP_SHARE=0.60`)**:
+  - **Cổng Kiểm Tra Tiền Khởi Động (`desktop-doctor` / `GET /api/desktop/status`)**:
+    - **Khi Gemini Desktop App ĐÃ cài đặt & sẵn sàng (`ready == true` trên macOS hoặc Windows)**: `gemini-desktop-app` vận hành như một **mô hình ngang hàng hạng nhất (first-class peer model)** (`mode="task"`, `background=True`, `allow_edits=True/False`, `0` lần chuyển focus, `$0.00` chi phí token API AGY), được ưu tiên **~60% tổng khối lượng công việc SWE** (`ORCHESTRATOR_DESKTOP_SHARE=0.60`): đảm nhận các giai đoạn nặng tuần tự (`spec-engineer`, `task-planner`, `code-reviewer`, `debugger`, `performance-auditor`, `doc-generator`) + **tối đa 1 builder nặng cho mỗi `parallel_group`** (đảm bảo khóa FIFO một cửa sổ của `Gemini.app` KHÔNG BAO GIỜ chặn Fan-Out song song!). Phần **~40% còn lại** chạy đồng thời trên AGY API (`gemini-4-hydrogen` `198 tok/s` cho các builder/tester/scout song song còn lại, `gemini-4-neon` xử lý tràn tải khi hàng đợi Desktop bận, và `gemini-4-carbon` `high` khóa chặt Rule 1 Security Audits).
+    - **Khi Gemini Desktop App CHƯA cài đặt hoặc CHƯA sẵn sàng (`ready == false`, ví dụ thiếu app hoặc màn hình đang khóa)** — hoặc truyền `--no-desktop` / `--api-only`: Tự động chuyển về **100% đội hình API thuần (`Gemini 4 Neon` + `Gemini 4 Hydrogen` + `Gemini 4 Carbon` + `Gemini 3.8 Flash`)** một cách mượt mà như trước đây!
+  - **Thực Thi Nền Im Lặng (`--background`, mặc định `True`) — 0% cướp focus cửa sổ**:
+    - **macOS (`macos_ax`)**: Tự động phát hiện `com.google.GeminiMacOS` / `com.google.gemini` (`/Applications/Gemini.app`), mở phiên mới qua deep link `googlegemini://newchat?ext_src=app_shortcut`, hỗ trợ **2 chế độ tương tác**: **`Task` mode (Mặc định — `--mode task`)** gắn trực tiếp thư mục dự án (`--workspace <path>`, tự động mặc định `os.getcwd()`) qua daemon-thread `AXPress` trên menu `Folders` (`ConnectedFolderNSMenu`, không di chuyển con trỏ `CGEvent`) giúp Gemini App đọc/xử lý file theo đường dẫn tương đối (`allow_edits=False` cho phân tích chỉ đọc, hoặc `allow_edits=True` cho tối đa 1 builder nặng/nhóm), và **`Chat` mode (`--mode chat`)** cho prompt độc lập. Trong chế độ nền mặc định (`background=True`), hệ thống ghi trực tiếp `AXValue` + bấm gửi `AXPress` (không gõ phím, không chạm clipboard), theo dõi thụ động `~/Library/Caches/com.google.GeminiMacOS/Logs/diagnostic*.log` suốt 15–240 giây (**0% gián đoạn focus** khi bạn làm việc ở ứng dụng khác), trích xuất nguyên văn `AXStaticText.AXDescription`, và khôi phục tức thì `AXFrontmost` nếu `OmnichatWindow` từng bị ẩn. Cờ **`--allow-foreground` (chỉ bật khi cần)** chỉ dùng đúng 1 lần khi đăng ký thư mục mới chưa có bookmark qua hộp thoại macOS `NSOpenPanel` (`Add new folder…`).
+    - **Windows (`windows_uia`)**: Tự động tìm `Gemini.exe` (`%LOCALAPPDATA%\Programs\Gemini\Gemini.exe`, Start Menu, Edge/Chrome PWA) và chạy PowerShell `-Sta -WindowStyle Minimized` sử dụng thuần `.NET UIAutomation` (**`ValuePattern` + `InvokePattern` + `TextPattern`**) với **`0` `SetForegroundWindow`, `0` `SendKeys`, `0` `Clipboard`** thông qua file tạm riêng tư (`0600`).
+    - **Linux (`linux_pwa`) & CI (`mock`)**: Hỗ trợ Chromium/Edge PWA (`--app=https://gemini.google.com`) trên X11/Wayland (`wl-copy`/`xclip`/`xdotool`) và trình giả lập `MockGeminiDriver` cho CI/headless.
+    - **Lá Chắn Bảo Mật & Chống Cắt Xén**: `SecretRedactor` (ẩn tự động 8 loại khóa API/JWT/PEM/DSN trước khi gửi hoặc lưu SQLite `prompt_preview`, hỗ trợ `--strict-secrets`), **Zero-Clipboard Silent Mode** (không chạm clipboard khi chạy `AXValue`/`UIAutomation` nền; giữ **Clipboard Save/Restore** `try...finally <= 300ms` cho đường fallback), **Split-Literal Sentinel Protocol** (`<<<AGY_DESKTOP_START:{job_id}>>>` / `<<<AGY_DESKTOP_DONE:{job_id}>>>` + `>= 500ms` stability debounce), khóa cửa sổ đơn (`threading.Lock` + `fcntl.flock`/`msvcrt.locking` + hàng đợi FIFO `desktop_jobs`), và xuất kết quả chuẩn hóa về `docs/reports/desktop_worker/{job_id}.md`.
+- **Zero Dependency Runtime**: Hoạt động hoàn toàn trên Python Standard Library (`sqlite3`, `http.server`, `urllib`, `json`, `argparse`, `threading`, `plistlib`), không yêu cầu cài đặt thêm bất kỳ thư viện pip nào.
 
 ---
 
@@ -44,18 +53,21 @@ antigravity-orchestrator/
 │   ├── specs/                     # Nơi lưu trữ tài liệu đặc tả (Output Stage 1)
 │   ├── plans/                     # Nơi lưu trữ kiến trúc kỹ thuật & Task DAG (Output Stage 2)
 │   ├── reports/                   # Nơi lưu trữ kết quả kiểm thử tự động JSON (Output Stage 4)
+│   │   └── desktop_worker/        # Báo cáo phân tích từ Gemini Desktop App Worker ({job_id}.md)
 │   ├── reviews/                   # Nơi lưu trữ biên bản nghiệm thu code review (Output Stage 5)
 │   └── security/                  # Nơi lưu trữ báo cáo quét bảo mật OWASP (Output Stage 6)
 ├── packages/
 │   ├── orchestrator/
-│   │   ├── models.py              # Model Registry 5 tầng, bảng giá & tính toán chi phí token
-│   │   ├── router.py              # Smart Router (speed_first, circuit breaker), DAG Ready & Audit
-│   │   ├── server.py              # Server Dashboard SSE + SQLite DB + REST API Endpoints
-│   │   ├── dashboard.py           # Single-page Web Console HTML/JS + SVG DAG Visualizer (Cyan styling)
-│   │   ├── client.py              # Python SDK & CLI điều phối telemetry (hỗ trợ xhigh, retry-count)
+│   │   ├── models.py              # Model Registry 5 tầng + EXTERNAL_WORKERS (gemini-desktop-app) & Quota Saved
+│   │   ├── router.py              # Smart Router (hybrid_desktop, speed_first, circuit breaker), DAG Ready & Audit
+│   │   ├── desktop_worker.py      # Cross-Platform Gemini Desktop App Bridge (macOS/Windows/Linux/Mock + SecretRedactor)
+│   │   ├── server.py              # Server Dashboard SSE + SQLite DB (tasks, logs, desktop_jobs) + REST API Endpoints
+│   │   ├── dashboard.py           # Single-page Web Console HTML/JS + SVG DAG + Desktop Worker Modal & Quota Saved KPI
+│   │   ├── client.py              # Python SDK & CLI điều phối telemetry + desktop-doctor/ask/jobs/cancel
 │   │   └── requirements.txt       # Zero dependency (sử dụng thư viện chuẩn Python)
-│   ├── skills/                    # Thư viện 20 Gói Agent Skills (Chuẩn 1-Agent = 1-Skill của addyosmani)
+│   ├── skills/                    # Thư viện Gói Agent Skills (Chuẩn 1-Agent = 1-Skill của addyosmani)
 │   │   ├── multi-agent-orchestrator/   # Skill trung tâm điều phối 5 tầng và theo dõi telemetry
+│   │   ├── gemini-desktop-worker/      # Skill offload tác vụ phân tích nặng sang Gemini Desktop App ($0.00 API)
 │   │   ├── spec-driven-development/    # spec-engineer: Đặc tả, user stories, acceptance criteria
 │   │   ├── planning-and-task-breakdown/# task-planner: Phân rã kiến trúc, DAG, parallel groups
 │   │   ├── api-and-interface-design/   # task-planner: Thiết kế contract, schemas, boundary types
@@ -76,13 +88,13 @@ antigravity-orchestrator/
 │   │   ├── doubt-driven-development/   # Thẩm định phản biện các quyết định quan trọng
 │   │   └── observability-and-instrumentation/ # Giám sát, logging, metrics sản xuất
 │   ├── workflows/                 # Danh sách slash commands tích hợp trong Antigravity
-│   │   ├── orchestrator.md        # /orchestrator (Khởi tạo phiên điều phối 5 tầng)
+│   │   ├── orchestrator.md        # /orchestrator (Khởi tạo phiên điều phối Neon SWE Fleet)
 │   │   ├── workflow-pipeline.md   # /workflow-pipeline (Chạy liên hoàn xuyên suốt)
-│   │   ├── workflow-spec.md       # /workflow-spec (Stage 1: Gemini 4 Carbon)
-│   │   ├── workflow-plan.md       # /workflow-plan (Stage 2: Gemini 4 Argon)
-│   │   ├── workflow-build.md      # /workflow-build (Stage 3: Gemini 4 Hydrogen 198 tok/s)
+│   │   ├── workflow-spec.md       # /workflow-spec (Stage 1: Gemini 4 Neon / Carbon nếu bảo mật)
+│   │   ├── workflow-plan.md       # /workflow-plan (Stage 2: Gemini 4 Neon)
+│   │   ├── workflow-build.md      # /workflow-build (Stage 3: Hydrogen <=3f 198 tok/s | Neon >=4f)
 │   │   ├── workflow-test.md       # /workflow-test (Stage 4: Gemini 4 Hydrogen kiểm thử)
-│   │   ├── workflow-review.md     # /workflow-review (Stage 5: Gemini 4 Argon nghiệm thu)
+│   │   ├── workflow-review.md     # /workflow-review (Stage 5: Gemini 4 Neon nghiệm thu 5 trục)
 │   │   └── workflow-security.md   # /workflow-security (Stage 6: Gemini 4 Carbon quét bảo mật)
 │   └── commands/
 │       └── orchestrator.toml      # Cấu hình slash command TOML
@@ -196,7 +208,7 @@ python3 packages/orchestrator/client.py recommend \
   --budget-mode speed_first \
   --retry-count 0
 
-# Kiểm tra cơ chế ngắt mạch (Circuit Breaker Tripped khi retry >= 2)
+# Kiểm tra cơ chế ngắt mạch 3 tầng (retry=2 leo thang lên Neon, retry>=3 lên Carbon)
 python3 packages/orchestrator/client.py recommend \
   --agent builder \
   --complexity medium \
@@ -228,23 +240,84 @@ python3 packages/orchestrator/client.py export --format markdown --out docs/repo
 python3 packages/orchestrator/client.py export --format json --out docs/reports/mission_audit_report.json
 ```
 
+### 6. Gemini Desktop App Worker Bridge & 60% Peer Allocation (`desktop-doctor`, `allocate-dag`, `desktop-ask`, `desktop-jobs`, `desktop-cancel`)
+```bash
+# 1. Cổng kiểm tra tính sẵn sàng của Gemini Desktop App trên macOS / Windows / Linux / Mock
+python3 packages/orchestrator/client.py desktop-doctor --format text
+
+# 2. Tự động phân bổ DAG theo tỷ lệ 60% Desktop Peer / 40% AGY API (tự động fallback 100% API nếu ready == false)
+ORCHESTRATOR_DESKTOP_SHARE=0.60 python3 packages/orchestrator/client.py allocate-dag \
+  --target-desktop-share 0.60 \
+  --apply
+
+#    Ép dùng 100% đội hình API thuần (tắt phân bổ Desktop)
+python3 packages/orchestrator/client.py allocate-dag --no-desktop --apply
+python3 packages/orchestrator/client.py allocate-dag --api-only --apply
+
+# 3. Đề xuất định tuyến Hybrid Desktop cho tác vụ phân tích chỉ đọc
+python3 packages/orchestrator/client.py recommend \
+  --agent spec-engineer \
+  --complexity high \
+  --budget-mode hybrid_desktop \
+  --desktop-available \
+  --read-only
+
+# 3. Gửi tác vụ phân tích nặng sang Gemini Desktop App ($0.00 chi phí API AGY)
+#    Chạy nền im lặng mặc định (--background, background=True): 0% cướp focus & 0 chạm clipboard!
+#    Task mode (mặc định) gắn workspace qua Folders (ConnectedFolderNSMenu) — chỉ cần đường dẫn tương đối
+python3 packages/orchestrator/client.py desktop-ask \
+  --task SPEC-01 \
+  --mode task \
+  --workspace . \
+  --background \
+  --prompt "Inspect docs/specs/my_large_spec.md and packages/orchestrator/router.py (read-only, zero edits)." \
+  --driver auto \
+  --timeout 180
+
+#    Đăng ký thư mục mới chưa có bookmark trên macOS (chỉ cần --allow-foreground đúng 1 lần cho NSOpenPanel "Add new folder…")
+python3 packages/orchestrator/client.py desktop-ask \
+  --task SPEC-01B \
+  --mode task \
+  --workspace /path/to/new-project \
+  --allow-foreground \
+  --prompt "Inspect README.md (read-only)." \
+  --driver auto
+
+#    Hoặc Chat mode độc lập không gắn thư mục workspace
+python3 packages/orchestrator/client.py desktop-dispatch \
+  --task SPEC-02 \
+  --mode chat \
+  --prompt-file docs/specs/my_large_spec.md \
+  --async
+
+# 4. Theo dõi hàng đợi desktop_jobs hoặc hủy job đang chạy
+python3 packages/orchestrator/client.py desktop-jobs --limit 20 --format text
+python3 packages/orchestrator/client.py desktop-cancel --job-id dsk-20261117-a1b2
+```
+
 ---
 
 ## 🌐 Danh Sách REST Endpoints
 
 | Phương thức | Đường dẫn | Chức năng | Tham số / Body |
 |---|---|---|---|
-| `GET` | `/` | Giao diện Web Console Dark-mode (Cyan & Emerald) | Không |
-| `GET` | `/events` | Luồng dữ liệu Server-Sent Events (SSE) | Không |
-| `GET` | `/api/state` | Trả về toàn bộ trạng thái tasks, logs, metrics | Không |
-| `GET` | `/api/models` | Trả về danh mục mô hình 5 tầng trong `MODEL_REGISTRY` | Không |
-| `POST` | `/api/router/recommend` | Đề xuất model, mức tư duy và trạng thái Circuit Breaker | `{"agent_type": "...", "complexity": "...", "budget_mode": "speed_first", "retry_count": 0, "has_security_impact": false}` |
+| `GET` | `/` | Giao diện Web Console Dark-mode (Cyan, Emerald & Teal Desktop Pill) | Không |
+| `GET` | `/events` | Luồng dữ liệu Server-Sent Events (SSE) gồm `desktop_job_*` | Không |
+| `GET` | `/api/state` | Trả về toàn bộ trạng thái tasks, logs, metrics (kèm `desktop_quota_saved_*`) | Không |
+| `GET` | `/api/models` | Trả về danh mục mô hình 5 tầng (`MODEL_REGISTRY`) + `external_workers` | Không |
+| `POST` | `/api/router/recommend` | Đề xuất model, mức tư duy, Circuit Breaker & `hybrid_desktop` offload | `{"agent_type": "...", "complexity": "...", "budget_mode": "hybrid_desktop", "desktop_available": true, "read_only": true}` |
+| `POST` | `/api/router/allocate-dag` | Phân bổ DAG có điều kiện 60% `gemini-desktop-app` (`ORCHESTRATOR_DESKTOP_SHARE`) hoặc tự động fallback 100% API khi `ready == false` | `{"target_desktop_share": 0.60, "apply": true, "no_desktop": false, "api_only": false}` |
+| `GET` | `/api/desktop/status` | Kiểm tra trạng thái Gemini Desktop App theo OS & quota đã tiết kiệm | `?driver=auto&target_os=auto&app_path=...` |
+| `POST` | `/api/desktop/dispatch` | Đưa job phân tích (mặc định `mode: "task"`, `background: true` chạy nền không cướp focus, đã scrub secrets & bọc Sentinel) vào hàng đợi Desktop | `{"prompt": "...", "task_id": "...", "mode": "task", "workspace": ".", "background": true, "allow_foreground": false, "driver": "auto", "redact_secrets": true, "async_mode": true}` |
+| `GET` | `/api/desktop/jobs` | Liệt kê danh sách `desktop_jobs` & tổng hợp `AGY Quota Saved` | `?job_id=...&status=...&limit=50` |
+| `GET` | `/api/desktop/jobs/{job_id}` | Truy xuất chi tiết một desktop job và con trỏ `artifact_path` | Path param `job_id` |
+| `POST` | `/api/desktop/cancel` | Hủy job desktop đang chờ hoặc đang chạy (hoặc `POST /api/desktop/jobs/{job_id}/cancel`) | `{"job_id": "..."}` |
 | `GET` | `/api/dag/ready` | Tính toán các task không bị chặn trong DAG | Không |
-| `GET` | `/api/analytics/models` | Báo cáo chi tiêu token và VNĐ theo 5 model | Không |
+| `GET` | `/api/analytics/models` | Báo cáo chi tiêu token, VNĐ theo 5 model & `desktop_saved_usd` | Không |
 | `GET` | `/api/audit/export` | Xuất biên bản kiểm toán nhiệm vụ | `?format=markdown` hoặc `?format=json` |
 | `POST` | `/api/tasks` | Tạo mới hoặc cập nhật trạng thái task | `{"task_id": "...", "status": "...", "reasoning_effort": "xhigh", ...}` |
 | `POST` | `/api/logs` | Ghi nhận một log telemetry mới | `{"task_id": "...", "level": "info", "message": "..."}` |
-| `POST` | `/api/reset` | Xóa sạch trạng thái DB và logs | Không |
+| `POST` | `/api/reset` | Xóa sạch trạng thái DB (`tasks`, `logs`, `desktop_jobs`) | Không |
 
 ---
 

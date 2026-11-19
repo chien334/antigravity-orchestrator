@@ -38,6 +38,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
               900: '#064e3b',
               950: '#022c22',
             },
+            neon: {
+              300: '#fda4af',
+              400: '#fb7185',
+              500: '#f43f5e',
+              900: '#881337',
+              950: '#4c0519',
+            },
             hydrogen: {
               300: '#67e8f9',
               400: '#22d3ee',
@@ -72,6 +79,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     .glow-hydrogen, .glow-cyan {
       animation: glow-cyan 3s ease-in-out infinite;
     }
+    @keyframes glow-rose {
+      0%, 100% { box-shadow: 0 0 14px rgba(244, 63, 94, 0.28), inset 0 0 8px rgba(244, 63, 94, 0.12); }
+      50% { box-shadow: 0 0 24px rgba(244, 63, 94, 0.6), inset 0 0 12px rgba(244, 63, 94, 0.22); }
+    }
+    .glow-neon, .glow-rose {
+      animation: glow-rose 2.8s ease-in-out infinite;
+    }
     ::-webkit-scrollbar {
       width: 6px;
       height: 6px;
@@ -103,6 +117,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           <div class="flex items-center space-x-2 flex-wrap">
             <h1 class="text-base font-bold tracking-tight text-white whitespace-nowrap">Hospital Suite - Multi-Agent Orchestrator</h1>
             <span class="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 font-semibold border border-emerald-500/30">Gemini 4 Carbon</span>
+            <span class="text-[10px] px-2 py-0.5 rounded-full bg-rose-500/15 text-rose-300 font-semibold border border-rose-500/50 flex items-center gap-1 shadow-sm shadow-rose-500/20" style="border-color: rgba(244, 63, 94, 0.5); box-shadow: 0 0 10px rgba(244, 63, 94, 0.22);"><span class="w-1.5 h-1.5 rounded-full bg-rose-400 animate-pulse" style="background-color: #f43f5e;"></span>✦ Gemini 4 Neon</span>
             <span class="text-[10px] px-2 py-0.5 rounded-full bg-cyan-500/15 text-cyan-300 font-semibold border border-cyan-500/40 flex items-center gap-1 shadow-sm shadow-cyan-500/10"><span class="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" style="background-color: #06b6d4;"></span>⚡ Gemini 4 Hydrogen</span>
             <span class="text-[10px] px-2 py-0.5 rounded-full bg-indigo-500/10 text-indigo-400 font-medium border border-indigo-500/20">5-Tier Fleet</span>
           </div>
@@ -111,6 +126,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       </div>
       
       <div class="flex items-center space-x-2.5 sm:space-x-3 shrink-0">
+        <!-- Desktop Worker Status Pill -->
+        <button id="desktop-status-pill" onclick="openDesktopModal()" class="px-3 py-1.5 rounded-lg bg-teal-950/50 hover:bg-teal-900/60 text-teal-200 border border-teal-500/40 text-xs font-semibold flex items-center space-x-2 transition shadow-sm shadow-teal-500/10" title="Open Cross-Platform Gemini Desktop Worker Bridge ($0.00 AGY API)">
+          <span id="desktop-pill-dot" class="h-2 w-2 rounded-full bg-amber-400 pulse-slow"></span>
+          <span id="desktop-pill-label" class="whitespace-nowrap">🖥️ Checking Desktop...</span>
+        </button>
+
         <!-- Smart Router Sandbox Trigger Button -->
         <button onclick="openRouterModal()" class="px-3 py-1.5 rounded-lg bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/40 text-xs font-semibold flex items-center space-x-1.5 transition shadow-sm" title="Open Smart Model & Reasoning Effort Recommendation Sandbox">
           <span>🧠 Router Sandbox</span>
@@ -288,12 +309,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             <div class="h-2 w-2 rounded-full bg-cyan-400"></div>
             <h2 class="text-xs font-semibold tracking-wider text-slate-300 uppercase">Token Consumption, Financial Cost &amp; Context Cache Telemetry</h2>
           </div>
-          <div class="flex items-center space-x-2">
+          <div class="flex items-center space-x-2 flex-wrap gap-y-1">
+            <span id="desktop-share-badge" onclick="openRouterModal()" class="cursor-pointer px-2.5 py-0.5 rounded-full bg-slate-800/80 text-slate-400 text-xs font-semibold border border-slate-700 font-mono transition" title="Live Gemini Desktop App Offload Share vs 60% Peer Target">API-Only Mode (App Offline)</span>
             <span class="text-xs text-slate-400">Context Cache Hit Rate:</span>
             <span id="metric-cache-rate" class="px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 text-xs font-bold border border-emerald-500/20 font-mono">0%</span>
           </div>
         </div>
-        <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+        <div class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
           <!-- Input Tokens -->
           <div class="bg-slate-950/60 border border-slate-800/60 rounded-xl p-3">
             <div class="text-[11px] text-slate-400 font-medium flex items-center justify-between">
@@ -363,6 +385,19 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             <div class="mt-1 flex flex-col">
               <span id="metric-saved-usd" class="text-lg sm:text-xl font-bold font-mono text-emerald-400">$0.00</span>
               <span id="metric-saved-vnd" class="text-[10px] text-emerald-300/80 font-mono">~ 0 ₫ saved</span>
+            </div>
+          </div>
+
+          <!-- Desktop Offload AGY Quota Saved -->
+          <div onclick="openDesktopModal()" class="cursor-pointer bg-gradient-to-br from-teal-950/50 to-slate-950/80 border border-teal-500/40 hover:border-teal-400/70 rounded-xl p-3 shadow-sm transition" title="Estimated AGY API spend saved by offloading heavy analysis to Gemini Desktop App ($0.00 AGY API burn)">
+            <div class="text-[11px] text-teal-300 font-medium flex items-center justify-between">
+              <span>AGY Quota Saved</span>
+              <span class="text-teal-300 text-[10px] font-mono font-bold px-1.5 py-0.2 rounded bg-teal-500/15 border border-teal-500/30">$0.00 API</span>
+            </div>
+            <div class="mt-1 flex flex-col">
+              <span id="metric-desktop-saved-usd" class="text-lg sm:text-xl font-bold font-mono text-teal-300">$0.00</span>
+              <span id="metric-desktop-saved-vnd" class="text-[10px] text-teal-300/80 font-mono">~ 0 ₫ saved</span>
+              <span id="metric-desktop-jobs" class="text-[10px] text-slate-400 font-mono mt-0.5">0 desktop jobs</span>
             </div>
           </div>
         </div>
@@ -477,7 +512,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             <span class="text-xs text-slate-400">1 USD = 25,400 VND Baseline</span>
           </div>
           <h2 class="text-lg font-bold text-white mt-1">Multi-Model Token Consumption &amp; Cache Savings Analytics</h2>
-          <p class="text-xs text-slate-300 mt-0.5">Granular telemetry tracking frontier Gemini 4 Carbon, Argon deep reasoning, high-throughput Gemini 4 Hydrogen, Flash, and Flash-Lite tiers.</p>
+          <p class="text-xs text-slate-300 mt-0.5">Granular telemetry tracking frontier Gemini 4 Carbon, #1 SWE Gemini 4 Neon (95% cache), Argon, high-throughput Gemini 4 Hydrogen, Flash, and Flash-Lite tiers.</p>
         </div>
         <div class="flex items-center space-x-2">
           <button onclick="refreshModelAnalytics()" class="px-3 py-1.5 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/40 text-xs font-semibold flex items-center space-x-1.5 transition">
@@ -487,9 +522,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         </div>
       </div>
 
-      <!-- 5-Model Comparative Cards Grid -->
-      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4" id="model-analytics-cards">
-        <!-- Rendered dynamically: Carbon, Argon, Hydrogen, Flash, Flash-Lite -->
+      <!-- 6-Model Comparative Cards Grid -->
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4" id="model-analytics-cards">
+        <!-- Rendered dynamically: Carbon, Neon, Argon, Hydrogen, Flash, Flash-Lite -->
       </div>
 
       <!-- Total Spend Distribution Visual Progress Bar -->
@@ -500,6 +535,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         </div>
         <div class="w-full bg-slate-950 rounded-full h-3 overflow-hidden flex" id="spend-distribution-bar">
           <div id="bar-carbon" class="bg-emerald-500 h-full transition-all duration-300" style="width: 0%;" title="Carbon: $0.00"></div>
+          <div id="bar-neon" class="bg-rose-500 h-full transition-all duration-300" style="width: 0%; background-color: #f43f5e;" title="Neon: $0.00"></div>
           <div id="bar-argon" class="bg-indigo-500 h-full transition-all duration-300" style="width: 0%;" title="Argon: $0.00"></div>
           <div id="bar-hydrogen" class="bg-cyan-500 h-full transition-all duration-300" style="width: 0%; background-color: #06b6d4;" title="Hydrogen: $0.00"></div>
           <div id="bar-flash" class="bg-amber-500 h-full transition-all duration-300" style="width: 0%;" title="Flash: $0.00"></div>
@@ -507,10 +543,43 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         </div>
         <div class="flex flex-wrap items-center justify-between gap-2 text-xs pt-1">
           <div class="flex items-center space-x-1.5"><span class="w-3 h-3 rounded bg-emerald-500"></span><span class="text-emerald-300 font-mono text-[11px]" id="legend-carbon">Carbon: $0.00 (0%)</span></div>
+          <div class="flex items-center space-x-1.5"><span class="w-3 h-3 rounded bg-rose-500" style="background-color: #f43f5e;"></span><span class="text-rose-300 font-mono text-[11px]" id="legend-neon">Neon: $0.00 (0%)</span></div>
           <div class="flex items-center space-x-1.5"><span class="w-3 h-3 rounded bg-indigo-500"></span><span class="text-indigo-300 font-mono text-[11px]" id="legend-argon">Argon: $0.00 (0%)</span></div>
           <div class="flex items-center space-x-1.5"><span class="w-3 h-3 rounded bg-cyan-500" style="background-color: #06b6d4;"></span><span class="text-cyan-300 font-mono text-[11px]" id="legend-hydrogen">Hydrogen: $0.00 (0%)</span></div>
           <div class="flex items-center space-x-1.5"><span class="w-3 h-3 rounded bg-amber-500"></span><span class="text-amber-300 font-mono text-[11px]" id="legend-flash">Flash: $0.00 (0%)</span></div>
           <div class="flex items-center space-x-1.5"><span class="w-3 h-3 rounded bg-slate-500"></span><span class="text-slate-300 font-mono text-[11px]" id="legend-lite">Flash-Lite: $0.00 (0%)</span></div>
+        </div>
+      </div>
+
+      <!-- Desktop Worker Offload Summary Bar -->
+      <div id="analytics-desktop-summary" class="bg-gradient-to-r from-teal-950/40 via-slate-900 to-emerald-950/30 border border-teal-500/30 rounded-2xl p-4 shadow-lg flex flex-wrap items-center justify-between gap-4">
+        <div class="flex items-center space-x-3">
+          <div class="h-9 w-9 rounded-xl bg-teal-500/15 border border-teal-500/30 flex items-center justify-center text-lg">🖥️</div>
+          <div>
+            <div class="flex items-center space-x-2 flex-wrap gap-y-1">
+              <span class="text-xs font-bold text-teal-300 uppercase tracking-wider">Gemini Desktop Worker Offload</span>
+              <span class="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-teal-500/20 text-teal-200 border border-teal-500/40">$0.00 AGY API Burn</span>
+              <span id="analytics-desktop-share-badge" class="px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold bg-slate-800/80 text-slate-400 border border-slate-700">API-Only Mode (App Offline)</span>
+            </div>
+            <p class="text-[11px] text-slate-400 mt-0.5">Non-mutating heavy synthesis &amp; second-opinion jobs offloaded to local Gemini Desktop App</p>
+          </div>
+        </div>
+        <div class="flex items-center space-x-6 font-mono text-xs">
+          <div>
+            <div class="text-[10px] text-slate-400 uppercase">Offloaded Jobs</div>
+            <div id="analytics-desktop-jobs-count" class="text-base font-bold text-white">0</div>
+          </div>
+          <div>
+            <div class="text-[10px] text-slate-400 uppercase">Est. Quota Saved</div>
+            <div id="analytics-desktop-saved-usd" class="text-base font-bold text-teal-300">$0.00</div>
+          </div>
+          <div>
+            <div class="text-[10px] text-slate-400 uppercase">VND Equivalent</div>
+            <div id="analytics-desktop-saved-vnd" class="text-sm font-semibold text-teal-400/90">~ 0 ₫</div>
+          </div>
+          <button onclick="openDesktopModal()" class="px-3 py-1.5 rounded-lg bg-teal-600/20 hover:bg-teal-600/30 text-teal-200 border border-teal-500/40 text-xs font-sans font-semibold transition">
+            Open Control Center &rarr;
+          </button>
         </div>
       </div>
 
@@ -623,10 +692,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             <select id="hist-filter-model" onchange="renderHistoryTable()" class="bg-slate-800/80 border border-slate-700/80 rounded-xl px-2.5 py-1.5 text-slate-200 text-xs focus:outline-none focus:border-emerald-500">
               <option value="all">All Models</option>
               <option value="carbon">Gemini 4 Carbon (Frontier)</option>
+              <option value="neon">Gemini 4 Neon (#1 SWE)</option>
               <option value="argon">Gemini 4 Argon (Pro)</option>
               <option value="hydrogen">Gemini 4 Hydrogen (Ultra-Fast)</option>
               <option value="flash">Gemini 3.8 Flash</option>
               <option value="lite">Gemini 3.8 Flash-Lite</option>
+              <option value="desktop">Gemini Desktop App ($0 API)</option>
             </select>
           </div>
 
@@ -864,6 +935,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
               <option value="spec-engineer">spec-engineer (Product &amp; Spec Specialist)</option>
               <option value="task-planner">task-planner (Architecture &amp; DAG Planner)</option>
               <option value="code-reviewer">code-reviewer (Code Quality &amp; Multi-Axis)</option>
+              <option value="orchestrator">orchestrator (Tech Lead &amp; Coordinator)</option>
+              <option value="performance-auditor">performance-auditor (Query &amp; Perf Optimization)</option>
               <option value="builder" selected>builder (Software Implementation)</option>
               <option value="ui-builder">ui-builder (Rapid UI &amp; Dashboard Iteration)</option>
               <option value="frontend-engineer">frontend-engineer (Frontend &amp; UI Specialist)</option>
@@ -897,7 +970,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           <!-- File count -->
           <div>
             <label class="block text-slate-300 font-semibold mb-1">Estimated Files</label>
-            <input type="number" id="router-files" value="3" min="1" max="100" class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-slate-200 focus:outline-none focus:border-emerald-500">
+            <input type="number" id="router-files" value="3" min="0" max="100" class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-slate-200 focus:outline-none focus:border-emerald-500">
           </div>
 
           <!-- Budget Mode -->
@@ -910,17 +983,20 @@ DASHBOARD_HTML = """<!DOCTYPE html>
               <option value="quality_first">Quality First (Prefer Frontier Carbon)</option>
               <option value="cost_saving">Cost Saving (Bulk Flash Scaffolding)</option>
               <option value="cost_first">Cost First (Max Flash Savings)</option>
+              <option value="hybrid_desktop">Hybrid Desktop (Offload Heavy Synthesis)</option>
+              <option value="offload_heavy_to_desktop">Offload Heavy to Desktop ($0 API)</option>
+              <option value="api_only">API Only (100% Pure Cloud API)</option>
             </select>
           </div>
 
-          <!-- Retry Count (Circuit Breaker Simulation) -->
+          <!-- Retry Count (3-Stage Circuit Breaker Simulation) -->
           <div>
-            <label class="block text-slate-300 font-semibold mb-1" title="Simulates Fast-Retry Circuit Breaker failure threshold">Retry Count</label>
+            <label class="block text-slate-300 font-semibold mb-1" title="Simulates 3-Stage SWE Fast-Retry Circuit Breaker escalation">Retry Count</label>
             <select id="router-retries" class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-slate-200 focus:outline-none focus:border-cyan-500 font-mono">
-              <option value="0" selected>0 (First Turn)</option>
-              <option value="1">1 (Self-Heal Retry)</option>
-              <option value="2">2 (CB Tripped &rarr; Carbon)</option>
-              <option value="3">3+ (Escalated High)</option>
+              <option value="0" selected>0 (First Turn &rarr; Hydrogen)</option>
+              <option value="1">1 (Self-Heal &rarr; Hydrogen XHigh)</option>
+              <option value="2">2 (Stage 2 &rarr; Gemini 4 Neon High)</option>
+              <option value="3">3+ (CB Tripped &rarr; Carbon High)</option>
             </select>
           </div>
 
@@ -930,6 +1006,39 @@ DASHBOARD_HTML = """<!DOCTYPE html>
               <input type="checkbox" id="router-security" class="rounded bg-slate-800 border-slate-700 text-emerald-500 focus:ring-0 w-4 h-4">
               <span class="text-slate-300 font-medium">Security Impact / CVE</span>
             </label>
+          </div>
+        </div>
+
+        <!-- Desktop Offload & Read-Only Controls -->
+        <div class="space-y-3 bg-slate-950/50 border border-slate-800/80 rounded-xl p-3">
+          <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+            <label class="flex items-center space-x-2 cursor-pointer select-none">
+              <input type="checkbox" id="router-read-only" class="rounded bg-slate-800 border-slate-700 text-teal-500 focus:ring-0 w-4 h-4">
+              <span class="text-slate-300 font-medium">Read-Only / Non-Mutating</span>
+            </label>
+            <label class="flex items-center space-x-2 cursor-pointer select-none">
+              <input type="checkbox" id="router-desktop-available" class="rounded bg-slate-800 border-slate-700 text-teal-500 focus:ring-0 w-4 h-4">
+              <span class="text-slate-300 font-medium">Desktop App Available</span>
+            </label>
+            <label class="flex items-center space-x-2 cursor-pointer select-none">
+              <input type="checkbox" id="router-prefer-desktop" class="rounded bg-slate-800 border-slate-700 text-teal-500 focus:ring-0 w-4 h-4">
+              <span class="text-slate-300 font-medium">Prefer Desktop ($0 API)</span>
+            </label>
+            <label class="flex items-center space-x-2 cursor-pointer select-none">
+              <input type="checkbox" id="router-queue-busy" class="rounded bg-slate-800 border-slate-700 text-amber-500 focus:ring-0 w-4 h-4">
+              <span class="text-slate-300 font-medium">Desktop Queue Busy</span>
+            </label>
+          </div>
+          <div class="pt-2 border-t border-slate-800/70 flex flex-wrap items-center justify-between gap-3">
+            <label for="router-target-share" class="text-slate-300 font-semibold flex items-center space-x-2">
+              <span>🎯 Target Desktop Peer Share:</span>
+              <span id="router-target-share-label" class="px-2 py-0.5 rounded bg-teal-500/20 text-teal-300 border border-teal-500/30 font-mono font-bold">60%</span>
+            </label>
+            <div class="flex items-center space-x-2 flex-1 max-w-xs">
+              <span class="text-[10px] font-mono text-slate-500">0%</span>
+              <input type="range" id="router-target-share" min="0" max="100" step="5" value="60" oninput="onRouterTargetShareChange(this.value)" class="w-full accent-teal-400 cursor-pointer">
+              <span class="text-[10px] font-mono text-slate-500">100%</span>
+            </div>
           </div>
         </div>
 
@@ -965,7 +1074,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           <p id="router-rationale" class="text-xs text-slate-300 leading-relaxed font-sans bg-slate-900/60 p-3 rounded-lg border border-slate-800/80"></p>
 
           <div class="flex items-center justify-between text-[11px] text-slate-400 pt-1">
-            <span>Fallback Tier: <strong id="router-fallback" class="text-slate-200 font-mono">gemini-4-argon</strong></span>
+            <span>Fallback Tier: <strong id="router-fallback" class="text-slate-200 font-mono">gemini-4-neon</strong></span>
             <button onclick="copyRouterCliCommand()" class="text-emerald-400 hover:text-emerald-300 font-mono flex items-center space-x-1">
               <span>📋 Copy CLI dispatch args</span>
             </button>
@@ -978,6 +1087,164 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       <div class="px-6 py-3 border-t border-slate-800 bg-slate-950/70 flex items-center justify-between text-xs text-slate-400">
         <span>POST /api/router/recommend</span>
         <button onclick="closeRouterModal()" class="px-4 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium transition">Đóng</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- =================================================================== -->
+  <!-- MODAL: CROSS-PLATFORM GEMINI DESKTOP WORKER CONTROL CENTER -->
+  <!-- =================================================================== -->
+  <div id="desktop-worker-modal" class="fixed inset-0 z-50 hidden flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md">
+    <div class="relative w-full max-w-5xl max-h-[92vh] bg-slate-900 border border-teal-500/40 rounded-2xl shadow-2xl flex flex-col overflow-hidden">
+      <!-- Modal Header -->
+      <div class="px-6 py-4 border-b border-slate-800 bg-slate-950/75 flex items-center justify-between gap-4">
+        <div class="flex items-center space-x-3">
+          <div class="h-9 w-9 rounded-xl bg-teal-500/15 border border-teal-500/40 flex items-center justify-center text-lg">🖥️</div>
+          <div>
+            <h3 class="text-sm font-bold text-white flex items-center gap-2 flex-wrap">
+              <span>Gemini Desktop Worker Control Center</span>
+              <span class="text-[10px] px-2 py-0.5 rounded-full bg-teal-500/20 text-teal-300 border border-teal-500/40 font-mono">$0.00 AGY API Burn</span>
+              <span id="desktop-modal-os-badge" class="text-[10px] px-2 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700 font-mono">Detecting OS...</span>
+            </h3>
+            <p class="text-xs text-slate-400">Offload non-mutating heavy synthesis &amp; second-opinion reasoning to the local Gemini Desktop App</p>
+          </div>
+        </div>
+        <div class="flex items-center space-x-2">
+          <button onclick="refreshDesktopStatus(); refreshDesktopJobs();" class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-medium flex items-center space-x-1.5 transition">
+            <span>🔄 Refresh</span>
+          </button>
+          <button onclick="closeDesktopModal()" class="text-slate-400 hover:text-white p-1.5 rounded-lg hover:bg-slate-800 transition">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
+          </button>
+        </div>
+      </div>
+
+      <!-- Scrollable Body -->
+      <div class="flex-1 overflow-y-auto p-6 space-y-5 text-xs">
+
+        <!-- Live OS & Driver Doctor Banner -->
+        <div id="desktop-doctor-banner" class="p-4 rounded-xl border border-slate-800 bg-slate-950/70 space-y-2">
+          <div class="flex items-center justify-between text-slate-300">
+            <span class="font-semibold">Loading OS &amp; Driver Doctor diagnostics (GET /api/desktop/status)...</span>
+          </div>
+        </div>
+
+        <!-- Heavy Analysis Dispatch Form -->
+        <div class="bg-slate-950/60 border border-slate-800/90 rounded-xl p-4 space-y-3">
+          <div class="flex items-center justify-between border-b border-slate-800/80 pb-2">
+            <div class="flex items-center space-x-2">
+              <span class="h-2 w-2 rounded-full bg-teal-400"></span>
+              <h4 class="font-bold text-slate-200 uppercase tracking-wider text-[11px]">Dispatch Heavy Read-Only Analysis</h4>
+            </div>
+            <span class="text-[11px] font-mono text-teal-400">POST /api/desktop/dispatch</span>
+          </div>
+
+          <div>
+            <label for="desktop-prompt" class="block text-slate-300 font-semibold mb-1">Analysis Prompt</label>
+            <textarea id="desktop-prompt" rows="4" placeholder="Paste large architecture synthesis, multi-file root-cause question, or 5-axis design critique prompt here..." class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-slate-200 font-mono text-xs focus:outline-none focus:border-teal-500"></textarea>
+          </div>
+
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label for="desktop-dispatch-mode" class="block text-slate-300 font-semibold mb-1">Execution Mode</label>
+              <select id="desktop-dispatch-mode" onchange="onDesktopDispatchModeChange()" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-slate-200 font-mono focus:outline-none focus:border-teal-500">
+                <option value="task" selected>⚡ Task Mode (Workspace Agent — Default)</option>
+                <option value="chat">💬 Chat Mode (Quick Q&amp;A)</option>
+              </select>
+            </div>
+            <div id="desktop-dispatch-workspace-group">
+              <label for="desktop-dispatch-workspace" class="block text-slate-300 font-semibold mb-1">Workspace Directory (Optional)</label>
+              <input type="text" id="desktop-dispatch-workspace" placeholder="Auto: Active Server Workspace (or enter /path/to/repo)" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-slate-200 font-mono focus:outline-none focus:border-teal-500">
+            </div>
+          </div>
+
+          <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div>
+              <label for="desktop-task-id" class="block text-slate-300 font-semibold mb-1">Linked Task ID (Optional)</label>
+              <input type="text" id="desktop-task-id" placeholder="e.g. TASK-23" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-slate-200 font-mono focus:outline-none focus:border-teal-500">
+            </div>
+            <div>
+              <label for="desktop-driver" class="block text-slate-300 font-semibold mb-1">OS Driver</label>
+              <select id="desktop-driver" onchange="refreshDesktopStatus(this.value)" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-slate-200 font-mono focus:outline-none focus:border-teal-500">
+                <option value="auto" selected>auto (Detect Host OS)</option>
+                <option value="macos_ax">macos_ax (macOS Accessibility)</option>
+                <option value="windows_uia">windows_uia (Windows UIA)</option>
+                <option value="linux_pwa">linux_pwa (Linux X11 / Wayland PWA)</option>
+                <option value="orca">orca (Orca GUI Bridge)</option>
+                <option value="mock">mock (Deterministic CI Simulator)</option>
+              </select>
+            </div>
+            <div>
+              <label for="desktop-timeout" class="block text-slate-300 font-semibold mb-1">Timeout (sec)</label>
+              <input type="number" id="desktop-timeout" value="240" min="10" max="900" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-slate-200 font-mono focus:outline-none focus:border-teal-500">
+            </div>
+          </div>
+
+          <div class="flex flex-wrap items-center justify-between gap-3 pt-1">
+            <div class="flex flex-wrap items-center gap-4">
+              <label class="flex items-center space-x-2 cursor-pointer select-none">
+                <input type="checkbox" id="desktop-dispatch-background" checked class="rounded bg-slate-800 border-slate-700 text-teal-500 focus:ring-0 w-4 h-4">
+                <span class="text-slate-300 font-medium">🔇 Chạy ngầm / Background Mode — Không chiếm chuột & màn hình</span>
+              </label>
+              <label class="flex items-center space-x-2 cursor-pointer select-none">
+                <input type="checkbox" id="desktop-redact" checked class="rounded bg-slate-800 border-slate-700 text-teal-500 focus:ring-0 w-4 h-4">
+                <span class="text-slate-300 font-medium">Redact Secrets (Pre-Flight)</span>
+              </label>
+              <label class="flex items-center space-x-2 cursor-pointer select-none">
+                <input type="checkbox" id="desktop-strict-secrets" class="rounded bg-slate-800 border-slate-700 text-rose-500 focus:ring-0 w-4 h-4">
+                <span class="text-slate-300 font-medium">Strict Secret Block</span>
+              </label>
+              <label class="flex items-center space-x-2 cursor-pointer select-none">
+                <input type="checkbox" id="desktop-async" checked class="rounded bg-slate-800 border-slate-700 text-teal-500 focus:ring-0 w-4 h-4">
+                <span class="text-slate-300 font-medium">Async FIFO Queue</span>
+              </label>
+            </div>
+
+            <button id="desktop-dispatch-btn" onclick="dispatchDesktopJob()" class="px-4 py-2 rounded-xl bg-gradient-to-r from-teal-600 to-emerald-600 hover:from-teal-500 hover:to-emerald-500 text-white font-bold shadow-lg shadow-teal-600/20 transition flex items-center space-x-2">
+              <span>🚀 Dispatch to Gemini App</span>
+            </button>
+          </div>
+
+          <div id="desktop-dispatch-feedback" class="hidden p-3 rounded-lg border text-xs font-mono"></div>
+        </div>
+
+        <!-- Live Desktop Jobs Queue & History Table -->
+        <div class="bg-slate-950/60 border border-slate-800/90 rounded-xl overflow-hidden">
+          <div class="px-4 py-3 border-b border-slate-800/80 bg-slate-900/70 flex items-center justify-between">
+            <div class="flex items-center space-x-2">
+              <span class="h-2 w-2 rounded-full bg-teal-400"></span>
+              <h4 class="font-bold text-slate-200 uppercase tracking-wider text-[11px]">Desktop Jobs Queue &amp; Artifact History</h4>
+              <span id="desktop-jobs-count-badge" class="px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 text-[10px] font-mono">0 jobs</span>
+            </div>
+            <span class="text-[11px] font-mono text-slate-400">GET /api/desktop/jobs</span>
+          </div>
+          <div class="overflow-x-auto max-h-72">
+            <table class="w-full text-left text-xs">
+              <thead class="bg-slate-900/90 text-slate-400 uppercase tracking-wider text-[10px] font-semibold border-b border-slate-800/80 sticky top-0">
+                <tr>
+                  <th scope="col" class="py-2.5 px-3">Job / Task</th>
+                  <th scope="col" class="py-2.5 px-3">OS / Driver</th>
+                  <th scope="col" class="py-2.5 px-3">Status</th>
+                  <th scope="col" class="py-2.5 px-3">Artifact Pointer &amp; Summary Excerpt</th>
+                  <th scope="col" class="py-2.5 px-3 font-mono">Quota Saved</th>
+                  <th scope="col" class="py-2.5 px-3 text-center">Action</th>
+                </tr>
+              </thead>
+              <tbody id="desktop-jobs-tbody" class="divide-y divide-slate-800/50 text-slate-300">
+                <tr>
+                  <td colspan="6" class="py-6 text-center text-slate-500">No desktop worker jobs recorded yet.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Modal Footer -->
+      <div class="px-6 py-3 border-t border-slate-800 bg-slate-950/75 flex items-center justify-between text-xs text-slate-400">
+        <span>FIFO Single-Window Guard &middot; Clipboard Safe Restore &middot; Secret Redactor</span>
+        <button onclick="closeDesktopModal()" class="px-4 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium transition">Close</button>
       </div>
     </div>
   </div>
@@ -1003,6 +1270,15 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         color: 'emerald',
         efforts: ['low', 'medium', 'high'],
         desc: 'Frontier deep reasoning model for vulnerability audits, architectural synthesis, and complex DAG execution.'
+      },
+      'gemini-4-neon': {
+        name: 'Gemini 4 Neon',
+        tier: 'mid_frontier',
+        tag: '#1 Coding Agent & SWE Workhorse',
+        rates: { in: 3.00, out: 15.00, cache: 0.15 },
+        color: 'rose',
+        efforts: ['low', 'medium', 'high', 'xhigh'],
+        desc: '#1 Coding Agent (58.6 AA, 65.2% Terminal-Bench, 95% cache savings) for orchestration, specs, planning, 5-axis reviews, and multi-file builds.'
       },
       'gemini-4-argon': {
         name: 'Gemini 4 Argon',
@@ -1050,9 +1326,15 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       metrics: {
         total: 0, pending: 0, running: 0, completed: 0, blocked: 0, cancelled: 0, active_agents: 0,
         total_input_tokens: 0, total_output_tokens: 0, total_cache_tokens: 0, grand_total_tokens: 0,
-        total_cost_usd: 0, total_cost_vnd: 0, total_saved_usd: 0, total_saved_vnd: 0, cache_rate: 0
+        total_cost_usd: 0, total_cost_vnd: 0, total_saved_usd: 0, total_saved_vnd: 0, cache_rate: 0,
+        desktop_jobs_total: 0, desktop_jobs_queued: 0, desktop_jobs_running: 0, desktop_jobs_completed: 0,
+        desktop_quota_saved_usd: 0, desktop_quota_saved_vnd: 0
       },
-      modelAnalytics: null
+      modelAnalytics: null,
+      desktopStatus: null,
+      desktopJobs: [],
+      desktopSummary: { quota_saved_usd: 0, quota_saved_vnd: 0, queue_depth: 0 },
+      routerDesktopTouched: false
     };
 
     function switchTab(tab) {
@@ -1222,6 +1504,25 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       document.getElementById('metric-saved-vnd').textContent = `~ ${formatMoneyVND(savedVnd)} saved`;
       document.getElementById('tab-cost-badge').textContent = formatMoneyUSD(costUsd);
 
+      // Desktop Offload AGY Quota Saved Telemetry
+      const desktopSavedUsd = (metrics.desktop_quota_saved_usd !== undefined) ? metrics.desktop_quota_saved_usd : (state.desktopSummary?.quota_saved_usd || 0.0);
+      const desktopSavedVnd = (metrics.desktop_quota_saved_vnd !== undefined) ? metrics.desktop_quota_saved_vnd : (state.desktopSummary?.quota_saved_vnd || 0);
+      const desktopCompleted = (metrics.desktop_jobs_completed !== undefined) ? metrics.desktop_jobs_completed : (state.desktopJobs ? state.desktopJobs.filter(j => j.status === 'completed').length : 0);
+      const elDesktopUsd = document.getElementById('metric-desktop-saved-usd');
+      const elDesktopVnd = document.getElementById('metric-desktop-saved-vnd');
+      const elDesktopJobs = document.getElementById('metric-desktop-jobs');
+      if (elDesktopUsd) elDesktopUsd.textContent = formatMoneyUSD(desktopSavedUsd);
+      if (elDesktopVnd) elDesktopVnd.textContent = `~ ${formatMoneyVND(desktopSavedVnd)} saved`;
+      if (elDesktopJobs) elDesktopJobs.textContent = `${desktopCompleted} desktop ${desktopCompleted === 1 ? 'job' : 'jobs'}`;
+
+      const elAnalyticsDeskJobs = document.getElementById('analytics-desktop-jobs-count');
+      const elAnalyticsDeskUsd = document.getElementById('analytics-desktop-saved-usd');
+      const elAnalyticsDeskVnd = document.getElementById('analytics-desktop-saved-vnd');
+      if (elAnalyticsDeskJobs) elAnalyticsDeskJobs.textContent = String(desktopCompleted);
+      if (elAnalyticsDeskUsd) elAnalyticsDeskUsd.textContent = formatMoneyUSD(desktopSavedUsd);
+      if (elAnalyticsDeskVnd) elAnalyticsDeskVnd.textContent = `~ ${formatMoneyVND(desktopSavedVnd)}`;
+      if (typeof updateDesktopShareBadge === 'function') updateDesktopShareBadge();
+
       // Historical tab header cards
       const histCostUsd = document.getElementById('hist-total-cost-usd');
       if (histCostUsd) {
@@ -1287,11 +1588,18 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const m = (model || '').toLowerCase();
       let badge = '';
 
-      if (m.includes('carbon')) {
+      if (m.includes('carbon') || m === 'gemini-pro-orchestrator' || m === 'orchestrator-carbon') {
         badge = `
           <span class="px-2 py-0.5 rounded text-[11px] font-mono border bg-emerald-950/60 text-emerald-300 border-emerald-500/40 flex items-center gap-1.5 inline-flex shadow-sm shadow-emerald-500/10">
             <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
             <span class="font-bold">Gemini 4 Carbon</span>
+          </span>
+        `;
+      } else if (m.includes('neon') || m.includes('neco')) {
+        badge = `
+          <span class="px-2 py-0.5 rounded text-[11px] font-mono border bg-rose-950/60 text-rose-300 border-rose-500/50 flex items-center gap-1.5 inline-flex shadow-sm shadow-rose-500/25 glow-neon" style="border-color: rgba(244, 63, 94, 0.55); box-shadow: 0 0 12px rgba(244, 63, 94, 0.28);">
+            <span class="w-1.5 h-1.5 rounded-full bg-rose-400 animate-pulse" style="background-color: #f43f5e;"></span>
+            <span class="font-bold">✦ Gemini 4 Neon</span>
           </span>
         `;
       } else if (m.includes('argon') || m.includes('pro')) {
@@ -1321,6 +1629,15 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           <span class="px-2 py-0.5 rounded text-[11px] font-mono border bg-amber-950/40 text-amber-300 border-amber-500/40 flex items-center gap-1 inline-flex">
             <span class="text-[9px] text-amber-400">⚡</span>
             <span>Gemini 3.8 Flash</span>
+          </span>
+        `;
+      } else if (m.includes('desktop')) {
+        badge = `
+          <span class="px-2 py-0.5 rounded text-[11px] font-mono border bg-teal-950/60 text-teal-300 border-teal-500/40 flex items-center gap-1.5 inline-flex shadow-sm shadow-teal-500/10">
+            <span class="w-1.5 h-1.5 rounded-full bg-teal-400"></span>
+            <span>🖥️</span>
+            <span class="font-bold">Gemini Desktop App</span>
+            <span class="text-[9px] px-1 rounded bg-teal-500/20 text-teal-200 border border-teal-500/30">$0</span>
           </span>
         `;
       } else {
@@ -1780,8 +2097,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
       Object.values(state.tasks).forEach(t => {
         const rawM = (t.model || '').toLowerCase();
-        let canon = 'gemini-4-argon';
-        if (rawM.includes('carbon')) canon = 'gemini-4-carbon';
+        let canon = 'gemini-4-neon';
+        if (rawM.includes('desktop')) canon = 'gemini-desktop-app';
+        else if (rawM.includes('carbon') || rawM === 'gemini-pro-orchestrator' || rawM === 'orchestrator-carbon') canon = 'gemini-4-carbon';
+        else if (rawM.includes('neon') || rawM.includes('neco')) canon = 'gemini-4-neon';
         else if (rawM.includes('argon') || rawM.includes('pro')) canon = 'gemini-4-argon';
         else if (rawM.includes('hydrogen')) canon = 'gemini-4-hydrogen';
         else if (rawM.includes('flash-lite') || rawM.includes('lite')) canon = 'gemini-3.8-flash-lite';
@@ -1812,11 +2131,21 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
       const totalSpendUsd = Number(Object.values(stats).reduce((acc, s) => acc + s.cost_usd, 0).toFixed(4));
       const totalSpendVnd = Object.values(stats).reduce((acc, s) => acc + s.cost_vnd, 0);
+      const completedDesktop = (state.desktopJobs || []).filter(j => j.status === 'completed');
+      const desktopJobsCount = completedDesktop.length;
+      const desktopSavedUsd = Number(completedDesktop.reduce((acc, j) => acc + (j.estimated_saved_usd || 0), 0).toFixed(4)) || (state.desktopSummary?.quota_saved_usd || 0);
+      const desktopSavedVnd = completedDesktop.reduce((acc, j) => acc + (j.estimated_saved_vnd || 0), 0) || (state.desktopSummary?.quota_saved_vnd || 0);
 
       renderModelAnalyticsView({
         status: 'ok',
         models: stats,
-        summary: { total_spend_usd: totalSpendUsd, total_spend_vnd: totalSpendVnd }
+        summary: {
+          total_spend_usd: totalSpendUsd,
+          total_spend_vnd: totalSpendVnd,
+          desktop_jobs_count: desktopJobsCount,
+          desktop_saved_usd: desktopSavedUsd,
+          desktop_saved_vnd: desktopSavedVnd
+        }
       });
     }
 
@@ -1827,7 +2156,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const tbody = document.getElementById('analytics-tbody');
       if (!container || !tbody) return;
 
-      // 1. Render 5 model cards
+      // 1. Render model comparative cards
       container.innerHTML = Object.keys(MODEL_SPECS).map(key => {
         const spec = MODEL_SPECS[key];
         const stat = models[key] || { task_count: 0, input_tokens: 0, output_tokens: 0, cache_tokens: 0, total_tokens: 0, cost_usd: 0.0, cost_vnd: 0, saved_usd: 0.0, cache_hit_rate: 0.0 };
@@ -1839,6 +2168,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           cardBorder = 'border-emerald-500/40 bg-gradient-to-br from-emerald-950/40 to-slate-900 shadow-lg shadow-emerald-500/10';
           titleColor = 'text-emerald-300';
           accentGlow = 'glow-carbon';
+        } else if (key === 'gemini-4-neon') {
+          cardBorder = 'border-rose-500/50 bg-gradient-to-br from-rose-950/40 to-slate-900 shadow-lg shadow-rose-500/15';
+          titleColor = 'text-rose-300';
+          accentGlow = 'glow-neon';
         } else if (key === 'gemini-4-argon') {
           cardBorder = 'border-indigo-500/30 bg-gradient-to-br from-indigo-950/30 to-slate-900';
           titleColor = 'text-indigo-300';
@@ -1899,13 +2232,25 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const totalSpend = summary.total_spend_usd || 0.0;
       document.getElementById('spend-dist-summary').textContent = `Total Spend: ${formatMoneyUSD(totalSpend)} (~${formatMoneyVND(summary.total_spend_vnd || 0)})`;
 
+      const deskJobsCount = summary.desktop_jobs_count !== undefined ? summary.desktop_jobs_count : (state.metrics?.desktop_jobs_completed || 0);
+      const deskSavedUsd = summary.desktop_saved_usd !== undefined ? summary.desktop_saved_usd : (state.desktopSummary?.quota_saved_usd || state.metrics?.desktop_quota_saved_usd || 0);
+      const deskSavedVnd = summary.desktop_saved_vnd !== undefined ? summary.desktop_saved_vnd : (state.desktopSummary?.quota_saved_vnd || state.metrics?.desktop_quota_saved_vnd || 0);
+      const elDeskCnt = document.getElementById('analytics-desktop-jobs-count');
+      const elDeskUsd = document.getElementById('analytics-desktop-saved-usd');
+      const elDeskVnd = document.getElementById('analytics-desktop-saved-vnd');
+      if (elDeskCnt) elDeskCnt.textContent = String(deskJobsCount);
+      if (elDeskUsd) elDeskUsd.textContent = formatMoneyUSD(deskSavedUsd);
+      if (elDeskVnd) elDeskVnd.textContent = `~ ${formatMoneyVND(deskSavedVnd)}`;
+
       const cSpend = (models['gemini-4-carbon']?.cost_usd || 0);
+      const nSpend = (models['gemini-4-neon']?.cost_usd || 0);
       const aSpend = (models['gemini-4-argon']?.cost_usd || 0);
       const hSpend = (models['gemini-4-hydrogen']?.cost_usd || 0);
       const fSpend = (models['gemini-3.8-flash']?.cost_usd || 0);
       const lSpend = (models['gemini-3.8-flash-lite']?.cost_usd || 0);
 
       const cPct = totalSpend > 0 ? (cSpend / totalSpend * 100) : 0;
+      const nPct = totalSpend > 0 ? (nSpend / totalSpend * 100) : 0;
       const aPct = totalSpend > 0 ? (aSpend / totalSpend * 100) : 0;
       const hPct = totalSpend > 0 ? (hSpend / totalSpend * 100) : 0;
       const fPct = totalSpend > 0 ? (fSpend / totalSpend * 100) : 0;
@@ -1913,6 +2258,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
       const barCarbon = document.getElementById('bar-carbon');
       if (barCarbon) barCarbon.style.width = `${cPct}%`;
+      const barNeon = document.getElementById('bar-neon');
+      if (barNeon) barNeon.style.width = `${nPct}%`;
       const barArgon = document.getElementById('bar-argon');
       if (barArgon) barArgon.style.width = `${aPct}%`;
       const barHydrogen = document.getElementById('bar-hydrogen');
@@ -1924,6 +2271,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
       const legCarbon = document.getElementById('legend-carbon');
       if (legCarbon) legCarbon.textContent = `Carbon: ${formatMoneyUSD(cSpend)} (${cPct.toFixed(1)}%)`;
+      const legNeon = document.getElementById('legend-neon');
+      if (legNeon) legNeon.textContent = `Neon: ${formatMoneyUSD(nSpend)} (${nPct.toFixed(1)}%)`;
       const legArgon = document.getElementById('legend-argon');
       if (legArgon) legArgon.textContent = `Argon: ${formatMoneyUSD(aSpend)} (${aPct.toFixed(1)}%)`;
       const legHydrogen = document.getElementById('legend-hydrogen');
@@ -1970,11 +2319,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         if (statusFilter !== 'all' && t.status !== statusFilter) return false;
         if (modelFilter !== 'all') {
           const m = (t.model || '').toLowerCase();
-          if (modelFilter === 'carbon' && !m.includes('carbon')) return false;
-          if (modelFilter === 'argon' && !m.includes('argon') && !m.includes('pro')) return false;
+          if (modelFilter === 'carbon' && !m.includes('carbon') && m !== 'gemini-pro-orchestrator' && m !== 'orchestrator-carbon') return false;
+          if (modelFilter === 'neon' && !m.includes('neon') && !m.includes('neco')) return false;
+          if (modelFilter === 'argon' && !m.includes('argon') && !(m.includes('pro') && !m.includes('neon') && m !== 'gemini-pro-orchestrator')) return false;
           if (modelFilter === 'hydrogen' && !m.includes('hydrogen')) return false;
           if (modelFilter === 'flash' && (!m.includes('flash') || m.includes('lite'))) return false;
           if (modelFilter === 'lite' && !m.includes('lite')) return false;
+          if (modelFilter === 'desktop' && !m.includes('desktop')) return false;
         }
         if (effortFilter !== 'all') {
           const eff = (t.reasoning_effort || '').toLowerCase();
@@ -2149,7 +2500,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       });
       md.push("");
       md.push("## 2. Compliance & Verification Signatures");
-      md.push("- **Model Taxonomy**: Verified Gemini 4 Carbon, Argon, Hydrogen, Flash, Flash-Lite pricing.");
+      md.push("- **Model Taxonomy**: Verified Gemini 4 Carbon, Neon ($3.00/$15.00/$0.15, 95% cache savings), Argon, Hydrogen, Flash, Flash-Lite pricing.");
       md.push("- **Disjoint Scope Verification**: Verified non-overlapping parallel builder workspaces.");
       md.push("- **Mission Status**: PASS (Automated Audit Signoff)");
       md.push("");
@@ -2177,9 +2528,68 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     // ---------------------------------------------------------------------------
     let lastRouterRecommendation = null;
 
+    function getRouterTargetSharePct() {
+      const el = document.getElementById('router-target-share');
+      if (!el) return 60;
+      const raw = parseFloat(el.value);
+      if (isNaN(raw)) return 60;
+      if (raw > 0 && raw <= 1 && String(el.value).includes('.')) {
+        return Math.max(0, Math.min(100, Math.round(raw * 100)));
+      }
+      return Math.max(0, Math.min(100, Math.round(raw)));
+    }
+
+    function onRouterTargetShareChange(val) {
+      const pct = getRouterTargetSharePct();
+      const lbl = document.getElementById('router-target-share-label');
+      if (lbl) lbl.textContent = `${pct}%`;
+      updateDesktopShareBadge();
+    }
+
+    function computeCurrentDesktopSharePct() {
+      if (state.metrics && state.metrics.desktop_share !== undefined && state.metrics.desktop_share !== null) {
+        const raw = Number(state.metrics.desktop_share);
+        if (!isNaN(raw)) return (raw >= 0 && raw <= 1) ? Math.round(raw * 100) : Math.round(raw);
+      }
+      const tasks = Object.values(state.tasks || {});
+      if (tasks.length === 0) return 0;
+      const deskCount = tasks.filter(t => String(t.model || '').toLowerCase().includes('desktop')).length;
+      return Math.round((deskCount / tasks.length) * 100);
+    }
+
+    function updateDesktopShareBadge() {
+      const isReady = Boolean(state.desktopStatus && state.desktopStatus.ready);
+      const currentPct = computeCurrentDesktopSharePct();
+      const targetPct = getRouterTargetSharePct();
+      const badges = [
+        document.getElementById('desktop-share-badge'),
+        document.getElementById('analytics-desktop-share-badge')
+      ];
+      badges.forEach((badge, idx) => {
+        if (!badge) return;
+        const textSize = idx === 0 ? 'text-xs' : 'text-[10px]';
+        if (isReady) {
+          badge.textContent = `🎯 Desktop Offload: ${currentPct}% / ${targetPct}% Target`;
+          badge.className = `${idx === 0 ? 'cursor-pointer px-2.5 py-0.5' : 'px-2 py-0.5'} rounded-full bg-teal-500/15 text-teal-300 ${textSize} font-bold border border-teal-500/40 font-mono transition`;
+        } else {
+          badge.textContent = 'API-Only Mode (App Offline)';
+          badge.className = `${idx === 0 ? 'cursor-pointer px-2.5 py-0.5' : 'px-2 py-0.5'} rounded-full bg-slate-800/80 text-slate-400 ${textSize} font-semibold border border-slate-700 font-mono transition`;
+        }
+      });
+    }
+
     function openRouterModal() {
       const modal = document.getElementById('router-modal');
       if (modal) modal.classList.remove('hidden');
+      const availEl = document.getElementById('router-desktop-available');
+      if (availEl && !state.routerDesktopTouched && state.desktopStatus) {
+        availEl.checked = Boolean(state.desktopStatus.ready);
+      }
+      const queueEl = document.getElementById('router-queue-busy');
+      if (queueEl && state.desktopStatus && state.desktopStatus.lock_busy !== undefined) {
+        queueEl.checked = Boolean(state.desktopStatus.lock_busy || (state.desktopSummary && state.desktopSummary.queue_depth > 0));
+      }
+      onRouterTargetShareChange();
     }
 
     function closeRouterModal() {
@@ -2195,6 +2605,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const security = document.getElementById('router-security').checked;
       const budget = document.getElementById('router-budget').value;
       const retries = parseInt(document.getElementById('router-retries')?.value || '0', 10);
+      const readOnly = Boolean(document.getElementById('router-read-only')?.checked);
+      const desktopAvail = Boolean(document.getElementById('router-desktop-available')?.checked);
+      const preferDesktop = Boolean(document.getElementById('router-prefer-desktop')?.checked);
+      const queueBusy = Boolean(document.getElementById('router-queue-busy')?.checked);
+      const targetSharePct = getRouterTargetSharePct();
+      const desktopTargetShare = Number((targetSharePct / 100).toFixed(2));
 
       const payload = {
         agent_type: persona,
@@ -2203,7 +2619,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         file_count: files,
         has_security_impact: security,
         budget_mode: budget,
-        retry_count: retries
+        retry_count: retries,
+        read_only: readOnly,
+        desktop_available: desktopAvail,
+        prefer_desktop: preferDesktop,
+        desktop_target_share: desktopTargetShare,
+        desktop_queue_busy: queueBusy
       };
 
       fetch('/api/router/recommend', {
@@ -2233,6 +2654,15 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const scopeLower = (p.scope || '').toLowerCase();
       const budget = (p.budget_mode || 'balanced').toLowerCase().trim();
       const retries = Math.max(0, parseInt(p.retry_count || 0, 10));
+      const readOnly = Boolean(p.read_only);
+      const desktopAvail = Boolean(p.desktop_available);
+      const preferDesktop = Boolean(p.prefer_desktop);
+      const queueBusy = Boolean(p.desktop_queue_busy);
+      const rawTarget = (p.desktop_target_share !== undefined && p.desktop_target_share !== null) ? Number(p.desktop_target_share) : 0.60;
+      const targetShare = isNaN(rawTarget) ? 0.60 : Math.max(0, Math.min(1, rawTarget > 1 ? rawTarget / 100 : rawTarget));
+      const currentShare = computeCurrentDesktopSharePct() / 100;
+      const isApiOnly = (budget === 'api_only') || !desktopAvail || targetShare <= 0;
+      const fileCount = parseInt(p.file_count ?? 0, 10);
 
       let model = 'gemini-4-hydrogen';
       let effort = null;
@@ -2248,9 +2678,19 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const isSecurityTask = (
         p.has_security_impact
         || comp === 'critical'
-        || ((agent === 'security-auditor' || agent === 'debugger') && (comp === 'high' || comp === 'critical'))
+        || agent === 'security-auditor'
+        || (agent === 'debugger' && comp === 'critical')
         || ['vulnerability', 'cve', 'penetration', 'auth', 'crypto', 'owasp', 'rbac', 'jwt', 'migration'].some(k => scopeLower.includes(k))
       );
+
+      const desktopEligibleAgent = (
+        ['spec-engineer', 'task-planner', 'code-reviewer'].includes(agent)
+        || (['scout', 'codebase-researcher', 'doc-generator', 'debugger', 'performance-auditor'].includes(agent) && readOnly)
+      );
+
+      const desktopNote = (!isApiOnly && queueBusy && desktopEligibleAgent)
+        ? ' (Desktop queue busy; routed to API fleet peer.)'
+        : '';
 
       if (isSecurityTask) {
         model = 'gemini-4-carbon';
@@ -2258,49 +2698,110 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         tier = 'frontier';
         rationale = 'Critical-tier security audit, vulnerability modeling, or deep root-cause debugging requires Gemini 4 Carbon frontier reasoning.';
         costTier = '$$$$';
-        fallback = 'gemini-4-argon';
+        fallback = 'gemini-4-neon';
       }
       // =========================================================================
-      // RULE 2: CIRCUIT BREAKER ESCALATION (Fast-Retry Topology)
+      // RULE 2: 3-STAGE SWE CIRCUIT BREAKER ESCALATION
+      // (Retry 0: Hydrogen -> Retry 1: Hydrogen xhigh -> Retry 2: Neon high -> Retry 3+: Carbon high)
       // =========================================================================
-      else if (retries >= 2) {
+      else if (retries >= 3) {
         model = 'gemini-4-carbon';
         effort = 'high';
         tier = 'frontier';
-        rationale = `Circuit breaker tripped after ${retries} failed attempts on Gemini 4 Hydrogen. Auto-escalated to Gemini 4 Carbon (high effort) for deep root-cause diagnosis.`;
+        rationale = `3-Stage Circuit Breaker tripped after ${retries} failed attempts (Stage 3). Auto-escalated from Gemini 4 Neon to Gemini 4 Carbon (high effort) for frontier root-cause diagnosis.`;
         costTier = '$$$$';
-        fallback = 'gemini-4-argon';
-        cbMeta = { status: 'tripped', retries: retries, escalated_from: 'gemini-4-hydrogen' };
+        fallback = 'gemini-4-neon';
+        cbMeta = { status: 'tripped', stage: 3, retries: retries, retry_count: retries, escalated_from: 'gemini-4-neon' };
+      }
+      else if (retries === 2) {
+        model = 'gemini-4-neon';
+        effort = comp === 'high' ? 'xhigh' : 'high';
+        tier = 'mid_frontier';
+        rationale = `3-Stage Circuit Breaker Stage 2 (2 retries): escalated from Gemini 4 Hydrogen to Gemini 4 Neon (${effort} effort, #1 Coding Agent) with 32% lower cost & 2x speed vs Carbon.`;
+        costTier = '$$$';
+        fallback = 'gemini-4-carbon';
+        cbMeta = { status: 'escalated_neon', stage: 2, retries: retries, retry_count: retries, escalated_from: 'gemini-4-hydrogen', escalate_to: 'gemini-4-carbon' };
+      }
+      else if (retries === 1) {
+        model = 'gemini-4-hydrogen';
+        effort = 'xhigh';
+        tier = 'high_throughput';
+        rationale = 'Circuit breaker Stage 1 self-heal (retry #1): elevated to Gemini 4 Hydrogen (xhigh) before Stage 2 Gemini 4 Neon escalation.';
+        costTier = '$$$';
+        fallback = 'gemini-4-neon';
+        cbMeta = { status: 'retrying', stage: 1, retries: retries, retry_count: retries, max_self_retries: 1, escalate_to: 'gemini-4-neon' };
       }
       // =========================================================================
-      // RULE 3: ARCHITECTURE, SPECIFICATION & 5-AXIS CODE REVIEW
+      // RULE 1.5: 60% CONDITIONAL DESKTOP PEER OFFLOAD GATE ($0 API BURN)
+      // Only active when desktop_available=true, budget != 'api_only', !queue_busy.
+      // When unchecked or api_only, 100% pure Neon/Hydrogen/Carbon/Flash routing.
       // =========================================================================
-      else if (['spec-engineer', 'task-planner', 'code-reviewer'].includes(agent) || comp === 'high') {
-        if (budget === 'quality_first') {
+      else if (
+        !isApiOnly
+        && !queueBusy
+        && (fileCount === 0 || readOnly)
+        && (desktopEligibleAgent || (preferDesktop && readOnly))
+        && (
+          (budget === 'hybrid_desktop' || budget === 'offload_heavy_to_desktop' || preferDesktop)
+          || (!['quality_first', 'speed_first', 'latency_sensitive'].includes(budget) && currentShare < targetShare)
+        )
+      ) {
+        model = 'gemini-desktop-app';
+        effort = null;
+        tier = 'external_desktop';
+        const curPct = Math.round(currentShare * 100);
+        const tgtPct = Math.round(targetShare * 100);
+        rationale = `Conditional Desktop peer offload (${curPct}% current / ${tgtPct}% target share, $0.00 AGY API burn) routed to local Gemini Desktop App.`;
+        costTier = '$0';
+        fallback = 'gemini-4-neon';
+      }
+      // =========================================================================
+      // RULE 3: ORCHESTRATION, SPEC, ARCHITECTURE, REVIEW, DEBUG & MULTI-FILE (>= 4)
+      // =========================================================================
+      else if (
+        ['orchestrator', 'spec-engineer', 'task-planner', 'code-reviewer', 'debugger', 'performance-auditor'].includes(agent)
+        || comp === 'high'
+        || (['builder', 'ui-builder', 'frontend-engineer'].includes(agent) && fileCount >= 4)
+      ) {
+        if (budget === 'quality_first' && (agent === 'spec-engineer' || comp === 'high')) {
           model = 'gemini-4-carbon';
           effort = 'medium';
           tier = 'frontier';
-          rationale = 'High-complexity specification/architecture in quality-first mode requires Gemini 4 Carbon frontier reasoning.';
+          rationale = 'High-complexity specification/architecture in quality-first mode requires Gemini 4 Carbon frontier reasoning.' + desktopNote;
           costTier = '$$$$';
-          fallback = 'gemini-4-argon';
+          fallback = 'gemini-4-neon';
+        } else if (budget === 'quality_first') {
+          model = 'gemini-4-neon';
+          effort = 'xhigh';
+          tier = 'mid_frontier';
+          rationale = 'High-precision architecture, review, or debugging in quality-first mode dispatched to Gemini 4 Neon (xhigh effort).' + desktopNote;
+          costTier = '$$$';
+          fallback = 'gemini-4-carbon';
         } else if (['speed_first', 'latency_sensitive'].includes(budget) && agent === 'code-reviewer' && comp !== 'high') {
           model = 'gemini-4-hydrogen';
           effort = 'xhigh';
           tier = 'high_throughput';
-          rationale = 'Rapid code review in speed-first mode dispatched to Gemini 4 Hydrogen with maximum reasoning depth (xhigh).';
+          rationale = 'Rapid code review in speed-first mode dispatched to Gemini 4 Hydrogen with maximum reasoning depth (xhigh).' + desktopNote;
           costTier = '$$$';
-          fallback = 'gemini-4-argon';
+          fallback = 'gemini-4-neon';
+        } else if (['cost_saving', 'cost_first'].includes(budget) && agent !== 'orchestrator') {
+          model = 'gemini-4-hydrogen';
+          effort = 'xhigh';
+          tier = 'high_throughput';
+          rationale = 'Cost-saving planning/review dispatched to Gemini 4 Hydrogen (xhigh effort, 50% lower token rate).' + desktopNote;
+          costTier = '$$';
+          fallback = 'gemini-4-neon';
         } else {
-          model = 'gemini-4-argon';
-          effort = 'medium';
-          tier = 'deep_reasoning';
-          rationale = 'High-complexity planning or review dispatched to Gemini 4 Argon for balanced deep reasoning and throughput.';
+          model = 'gemini-4-neon';
+          effort = ['spec-engineer', 'code-reviewer', 'debugger'].includes(agent) ? 'high' : 'medium';
+          tier = 'mid_frontier';
+          rationale = 'Orchestration, specification, planning, 5-axis review, debugging, or multi-file refactor (>=4 files) dispatched to Gemini 4 Neon (#1 Coding Agent, 65.2% Terminal-Bench, 95% cache savings).' + desktopNote;
           costTier = '$$$';
           fallback = 'gemini-4-hydrogen';
         }
       }
       // =========================================================================
-      // RULE 4: PARALLEL BUILDERS, TESTERS, SCOUTS & UI WORKERS
+      // RULE 4: PARALLEL BUILDERS (<=3 FILES), TESTERS, SCOUTS & UI WORKERS
       // =========================================================================
       else if (
         ['builder', 'test-engineer', 'scout', 'codebase-researcher', 'ui-builder', 'frontend-engineer'].includes(agent)
@@ -2309,43 +2810,38 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       ) {
         if (budget === 'cost_saving' || budget === 'cost_first') {
           model = 'gemini-3.8-flash';
-          effort = null;
+          effort = 'low';
           tier = 'cost_efficient';
-          rationale = 'Parallel code implementation in cost-saving mode dispatched to Gemini 3.8 Flash.';
+          rationale = 'Parallel code implementation in cost-saving mode dispatched to Gemini 3.8 Flash (low effort).' + desktopNote;
           costTier = '$$';
-          fallback = 'gemini-3.8-flash-lite';
+          fallback = 'gemini-4-hydrogen';
         } else if (budget === 'quality_first' && comp === 'medium') {
-          model = 'gemini-4-argon';
-          effort = 'medium';
-          tier = 'deep_reasoning';
-          rationale = 'Parallel code implementation in quality-first mode dispatched to Gemini 4 Argon for maximum precision.';
+          model = 'gemini-4-neon';
+          effort = 'high';
+          tier = 'mid_frontier';
+          rationale = 'Parallel code implementation in quality-first mode dispatched to Gemini 4 Neon (high effort) for maximum SWE accuracy.' + desktopNote;
           costTier = '$$$';
           fallback = 'gemini-4-hydrogen';
         } else {
           model = 'gemini-4-hydrogen';
-          if (retries === 1) {
-            effort = (comp === 'medium' || budget === 'speed_first' || budget === 'latency_sensitive') ? 'xhigh' : 'high';
-            cbMeta = { status: 'retrying', retry_count: retries, max_self_retries: 1 };
-          } else {
-            effort = comp === 'medium' ? 'high' : 'medium';
-            cbMeta = { status: 'active', retry_count: retries, max_self_retries: 1 };
-          }
+          effort = comp === 'medium' ? 'high' : 'medium';
+          cbMeta = { status: 'active', stage: 0, retry_count: retries, max_self_retries: 2, escalate_to: 'gemini-4-neon' };
           tier = 'high_throughput';
-          rationale = 'Parallel code implementation, testing, or reconnaissance dispatched to Gemini 4 Hydrogen for 2.5x speed and 198 tok/s throughput.';
+          rationale = 'Bounded parallel code implementation, testing, or reconnaissance dispatched to Gemini 4 Hydrogen for 2.5x speed and 198 tok/s throughput.' + desktopNote;
           costTier = '$$$';
           fallback = 'gemini-3.8-flash';
         }
       }
       // =========================================================================
-      // RULE 5: MICRO-TIER / TELEMETRY / FORMATTING
+      // RULE 5: MICRO-TIER / TELEMETRY / DOCS / FORMATTING
       // =========================================================================
       else {
-        model = 'gemini-3.8-flash-lite';
-        effort = null;
-        tier = 'ultra_fast';
-        rationale = 'Low-complexity telemetry, doc formatting, or dead code simplification dispatched to Gemini 3.8 Flash-Lite.';
+        model = 'gemini-3.8-flash';
+        effort = 'low';
+        tier = 'cost_efficient';
+        rationale = 'Low-complexity telemetry, doc formatting, or micro-task dispatched to Gemini 3.8 Flash (low effort).' + desktopNote;
         costTier = '$';
-        fallback = 'gemini-3.8-flash';
+        fallback = 'gemini-4-hydrogen';
       }
 
       const rec = {
@@ -2356,6 +2852,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         estimated_cost_tier: costTier,
         fallback_model: fallback
       };
+      if (model === 'gemini-desktop-app') {
+        rec.execution_mode = 'desktop_bridge';
+        rec.desktop_share = currentShare;
+        rec.desktop_target_share = targetShare;
+        rec.allow_edits = false;
+      }
       if (cbMeta) rec.circuit_breaker = cbMeta;
 
       renderRouterResult(rec, p);
@@ -2368,8 +2870,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       card.classList.remove('hidden');
 
       const retries = (input && input.retry_count !== undefined) ? Number(input.retry_count) : (rec.circuit_breaker ? Number(rec.circuit_breaker.retry_count || rec.circuit_breaker.retries || 0) : 0);
-      const isTripped = (rec.circuit_breaker && rec.circuit_breaker.status === 'tripped') || retries >= 2;
-      const isRetrying = (rec.circuit_breaker && rec.circuit_breaker.status === 'retrying') || retries === 1;
+      const cbStatus = (rec.circuit_breaker && rec.circuit_breaker.status) ? String(rec.circuit_breaker.status).toLowerCase() : '';
+      const isTripped = cbStatus === 'tripped' || retries >= 3;
+      const isEscalatedNeon = cbStatus === 'escalated_neon' || retries === 2;
+      const isRetrying = cbStatus === 'retrying' || retries === 1;
 
       const cbBanner = document.getElementById('router-circuit-breaker-banner');
       const cbTitle = document.getElementById('router-cb-title');
@@ -2379,16 +2883,31 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       if (cbBanner) {
         if (isTripped) {
           cbBanner.classList.remove('hidden');
-          cbBanner.className = 'p-3 rounded-lg border border-rose-500/50 bg-rose-950/40 text-xs font-mono flex items-start space-x-2.5 shadow-md shadow-rose-500/10';
+          cbBanner.className = 'p-3 rounded-lg border border-emerald-500/50 bg-emerald-950/40 text-xs font-mono flex items-start space-x-2.5 shadow-md shadow-emerald-500/10';
           if (cbIcon) cbIcon.textContent = '🚨';
-          if (cbTitle) cbTitle.textContent = `⚡ FAST-RETRY CIRCUIT BREAKER TRIPPED (${retries} Failures)`;
-          if (cbDesc) cbDesc.textContent = 'Threshold exceeded on Gemini 4 Hydrogen. Automatically escalated to Frontier Tier 1 Gemini 4 Carbon (HIGH reasoning effort) for deep root-cause diagnosis!';
+          if (cbTitle) {
+            cbTitle.className = 'font-bold text-emerald-300';
+            cbTitle.textContent = `⚡ 3-STAGE CIRCUIT BREAKER TRIPPED (Stage 3 · ${retries} Failures)`;
+          }
+          if (cbDesc) cbDesc.textContent = 'Stage 2 Neon threshold exceeded. Auto-escalated to Frontier Tier 1 Gemini 4 Carbon (HIGH reasoning effort) for deep root-cause diagnosis!';
+        } else if (isEscalatedNeon) {
+          cbBanner.classList.remove('hidden');
+          cbBanner.className = 'p-3 rounded-lg border border-rose-500/60 bg-rose-950/40 text-xs font-mono flex items-start space-x-2.5 shadow-md shadow-rose-500/20 glow-neon';
+          if (cbIcon) cbIcon.textContent = '✦';
+          if (cbTitle) {
+            cbTitle.className = 'font-bold text-rose-300';
+            cbTitle.textContent = '✦ 3-STAGE CIRCUIT BREAKER ESCALATED → GEMINI 4 NEON (Stage 2 · 2 Failures)';
+          }
+          if (cbDesc) cbDesc.textContent = `Escalated from Gemini 4 Hydrogen to Gemini 4 Neon (${(rec.reasoning_effort || 'HIGH').toUpperCase()} effort, #1 Coding Agent) — 32% lower cost & 2x speed before Carbon frontier trip.`;
         } else if (isRetrying) {
           cbBanner.classList.remove('hidden');
           cbBanner.className = 'p-3 rounded-lg border border-amber-500/50 bg-amber-950/40 text-xs font-mono flex items-start space-x-2.5 shadow-md shadow-amber-500/10';
           if (cbIcon) cbIcon.textContent = '⚡';
-          if (cbTitle) cbTitle.textContent = '⚡ FAST SELF-HEALING RETRY (Turn 1)';
-          if (cbDesc) cbDesc.textContent = `Attempting rapid self-healing on Gemini 4 Hydrogen with elevated reasoning effort [${(rec.reasoning_effort || 'HIGH').toUpperCase()}].`;
+          if (cbTitle) {
+            cbTitle.className = 'font-bold text-amber-300';
+            cbTitle.textContent = '⚡ FAST SELF-HEALING RETRY (Stage 1 · Retry #1)';
+          }
+          if (cbDesc) cbDesc.textContent = `Attempting rapid self-healing on Gemini 4 Hydrogen with elevated reasoning effort [${(rec.reasoning_effort || 'XHIGH').toUpperCase()}]. Next failure escalates to Gemini 4 Neon.`;
         } else {
           cbBanner.classList.add('hidden');
         }
@@ -2420,9 +2939,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         elEffort.innerHTML = `<span class="px-2 py-0.5 rounded text-[10px] font-mono bg-slate-800 text-slate-400 border border-slate-700">Standard (None)</span>`;
       }
 
-      document.getElementById('router-tier-badge').textContent = `tier: ${rec.tier || 'frontier'}`;
+      document.getElementById('router-tier-badge').textContent = `tier: ${rec.tier || 'mid_frontier'}`;
       document.getElementById('router-rationale').textContent = rec.rationale || 'Optimal tier determined based on task scope and blast radius.';
-      document.getElementById('router-fallback').textContent = rec.fallback_model || 'gemini-4-argon';
+      document.getElementById('router-fallback').textContent = rec.fallback_model || 'gemini-4-neon';
     }
 
     function copyRouterCliCommand() {
@@ -2513,13 +3032,17 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         .then(() => {
           state.tasks = {};
           state.logs = [];
+          state.desktopJobs = [];
+          state.desktopSummary = { quota_saved_usd: 0, quota_saved_vnd: 0, queue_depth: 0 };
           renderTasksTable();
           renderHistoryTable();
           if (currentTaskView === 'dag') renderDagView();
           clearLogConsole();
-          renderMetrics({ total: 0, pending: 0, running: 0, completed: 0, blocked: 0, cancelled: 0, active_agents: 0 });
+          renderMetrics({ total: 0, pending: 0, running: 0, completed: 0, blocked: 0, cancelled: 0, active_agents: 0, desktop_jobs_completed: 0, desktop_quota_saved_usd: 0, desktop_quota_saved_vnd: 0 });
           updatePipelineStages();
           fallbackModelAnalytics();
+          renderDesktopJobsTable();
+          refreshDesktopStatus();
         });
     }
 
@@ -2600,13 +3123,42 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       evtSource.addEventListener('reset_event', (e) => {
         state.tasks = {};
         state.logs = [];
+        state.desktopJobs = [];
+        state.desktopSummary = { quota_saved_usd: 0, quota_saved_vnd: 0, queue_depth: 0 };
         renderTasksTable();
         renderHistoryTable();
         if (currentTaskView === 'dag') renderDagView();
         clearLogConsole();
-        renderMetrics({ total: 0, pending: 0, running: 0, completed: 0, blocked: 0, cancelled: 0, active_agents: 0 });
+        renderMetrics({ total: 0, pending: 0, running: 0, completed: 0, blocked: 0, cancelled: 0, active_agents: 0, desktop_jobs_completed: 0, desktop_quota_saved_usd: 0, desktop_quota_saved_vnd: 0 });
         updatePipelineStages();
         fallbackModelAnalytics();
+        renderDesktopJobsTable();
+        refreshDesktopStatus();
+      });
+
+      ['desktop_job_queued', 'desktop_job_started', 'desktop_job_completed', 'desktop_job_failed', 'desktop_job_cancelled'].forEach(evtName => {
+        evtSource.addEventListener(evtName, (e) => {
+          try {
+            const payload = JSON.parse(e.data || '{}');
+            const job = payload.job || payload;
+            if (job && job.job_id) {
+              const idx = state.desktopJobs.findIndex(j => j.job_id === job.job_id);
+              if (idx >= 0) {
+                state.desktopJobs[idx] = job;
+              } else {
+                state.desktopJobs.unshift(job);
+              }
+              renderDesktopJobsTable();
+            }
+            if (payload.metrics) {
+              state.metrics = payload.metrics;
+              renderMetrics(state.metrics);
+            }
+          } catch (err) {}
+          refreshDesktopStatus();
+          refreshDesktopJobs();
+          if (currentTab === 'analytics') refreshModelAnalytics();
+        });
       });
 
       // Periodic state sync fallback (4s)
@@ -2654,7 +3206,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       if (elAgentBadge) elAgentBadge.innerHTML = getAgentBadge(t.agent_type || 'builder');
       
       const elModelBadge = document.getElementById('modal-model-badge');
-      if (elModelBadge) elModelBadge.innerHTML = getModelBadge(t.model || 'argon', t.reasoning_effort);
+      if (elModelBadge) elModelBadge.innerHTML = getModelBadge(t.model || 'neon', t.reasoning_effort);
       
       const elStatusBadge = document.getElementById('modal-status-badge');
       if (elStatusBadge) elStatusBadge.innerHTML = getStatusBadge(t.status || 'running');
@@ -2844,10 +3396,435 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       }
     }
 
+    // ---------------------------------------------------------------------------
+    // Cross-Platform Gemini Desktop Worker Bridge Logic
+    // ---------------------------------------------------------------------------
+    let desktopPollTimer = null;
+
+    function getDesktopOsMeta(osPlatform) {
+      const os = (osPlatform || '').toLowerCase();
+      if (os === 'darwin' || os === 'macos') return { icon: '🍎', label: 'macOS', display: '🍎 macOS' };
+      if (os === 'win32' || os === 'windows') return { icon: '🪟', label: 'Windows', display: '🪟 Windows' };
+      if (os === 'linux') return { icon: '🐧', label: 'Linux', display: '🐧 Linux' };
+      return { icon: '🖥️', label: osPlatform || 'Desktop', display: `🖥️ ${osPlatform || 'Desktop'}` };
+    }
+
+    function getDesktopJobStatusBadge(status) {
+      switch ((status || '').toLowerCase()) {
+        case 'completed':
+          return '<span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">COMPLETED</span>';
+        case 'running':
+          return '<span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-teal-500/20 text-teal-300 border border-teal-500/40 animate-pulse">RUNNING</span>';
+        case 'queued':
+          return '<span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">QUEUED</span>';
+        case 'cancelled':
+          return '<span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-700/60 text-slate-300 border border-slate-600">CANCELLED</span>';
+        case 'timed_out':
+          return '<span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40">TIMED OUT</span>';
+        case 'rejected_secrets':
+          return '<span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-500/20 text-rose-300 border border-rose-500/40">SECRET BLOCKED</span>';
+        case 'failed':
+        default:
+          return `<span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-500/20 text-rose-300 border border-rose-500/30">${escapeHtml((status || 'FAILED').toUpperCase())}</span>`;
+      }
+    }
+
+    function updateDesktopStatusPill(statusPayload) {
+      const pill = document.getElementById('desktop-status-pill');
+      const dot = document.getElementById('desktop-pill-dot');
+      const label = document.getElementById('desktop-pill-label');
+      const modalBadge = document.getElementById('desktop-modal-os-badge');
+      if (!pill || !dot || !label) return;
+
+      const d = (statusPayload && statusPayload.desktop) ? statusPayload.desktop : statusPayload;
+      if (!d) {
+        dot.className = 'h-2 w-2 rounded-full bg-rose-400';
+        label.textContent = '🖥️ Desktop Offline';
+        if (modalBadge) modalBadge.textContent = 'Offline';
+        return;
+      }
+
+      const osMeta = getDesktopOsMeta(d.os_platform);
+      const qDepth = statusPayload.queue_depth !== undefined ? statusPayload.queue_depth : (d.queue_depth || 0);
+      const isBusy = Boolean(d.lock_busy || statusPayload.active_job || qDepth > 0);
+      const isMock = (d.driver_name || '').toLowerCase() === 'mock';
+
+      let appStateText = 'Offline';
+      if (isBusy) {
+        appStateText = qDepth > 0 ? `Busy (${qDepth} queued)` : 'Running Job...';
+        dot.className = 'h-2 w-2 rounded-full bg-amber-400 pulse-slow';
+        pill.className = 'px-3 py-1.5 rounded-lg bg-amber-950/50 hover:bg-amber-900/60 text-amber-200 border border-amber-500/40 text-xs font-semibold flex items-center space-x-2 transition shadow-sm';
+      } else if (d.ready) {
+        appStateText = isMock ? 'Mock Ready' : `${d.app_name || 'Gemini.app'} Ready`;
+        dot.className = 'h-2 w-2 rounded-full bg-teal-400';
+        pill.className = 'px-3 py-1.5 rounded-lg bg-teal-950/50 hover:bg-teal-900/60 text-teal-200 border border-teal-500/40 text-xs font-semibold flex items-center space-x-2 transition shadow-sm shadow-teal-500/10';
+      } else {
+        appStateText = d.app_detected ? 'Action Needed' : 'Not Detected';
+        dot.className = 'h-2 w-2 rounded-full bg-rose-400';
+        pill.className = 'px-3 py-1.5 rounded-lg bg-rose-950/40 hover:bg-rose-900/50 text-rose-200 border border-rose-500/40 text-xs font-semibold flex items-center space-x-2 transition shadow-sm';
+      }
+
+      label.textContent = `${osMeta.icon} ${osMeta.label} · ${appStateText}`;
+      if (modalBadge) {
+        modalBadge.textContent = `${osMeta.icon} ${osMeta.label} (${d.driver_name || 'auto'})`;
+      }
+    }
+
+    function renderDesktopDoctorBanner(data) {
+      const banner = document.getElementById('desktop-doctor-banner');
+      if (!banner) return;
+      if (!data || !data.desktop) {
+        banner.className = 'p-4 rounded-xl border border-rose-500/40 bg-rose-950/20 space-y-2';
+        banner.innerHTML = `<div class="text-rose-300 font-semibold">Desktop Worker API unavailable (/api/desktop/status). Ensure server is running with desktop_worker bridge enabled.</div>`;
+        return;
+      }
+
+      const d = data.desktop;
+      const osMeta = getDesktopOsMeta(d.os_platform);
+      const borderStyle = d.ready ? 'border-teal-500/40 bg-teal-950/20' : 'border-amber-500/40 bg-amber-950/20';
+      banner.className = `p-4 rounded-xl border ${borderStyle} space-y-3`;
+
+      const permEntries = Object.entries(d.permissions || {}).map(([k, v]) => {
+        const ok = v === 'granted' || v === 'ok';
+        const cls = ok ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30' : 'bg-rose-500/15 text-rose-300 border-rose-500/30';
+        return `<span class="px-2 py-0.5 rounded text-[10px] font-mono border ${cls}">${escapeHtml(k)}: ${escapeHtml(v)}</span>`;
+      }).join('');
+
+      const backendsHtml = (d.available_backends || []).map(b =>
+        `<span class="px-1.5 py-0.5 rounded text-[10px] font-mono bg-slate-800 text-slate-300 border border-slate-700">${escapeHtml(b)}</span>`
+      ).join('');
+
+      const warningsHtml = (d.warnings || []).length > 0
+        ? `<div class="text-[11px] text-amber-300 space-y-1 pt-1 border-t border-slate-800/70">${d.warnings.map(w => `<div>⚠️ ${escapeHtml(w)}</div>`).join('')}</div>`
+        : '';
+
+      const remediationHtml = (d.remediation_steps || []).length > 0
+        ? `<div class="text-[11px] text-slate-300 bg-slate-900/80 p-2.5 rounded-lg border border-slate-800 space-y-1"><div class="font-bold text-amber-300">Remediation Steps:</div>${d.remediation_steps.map(s => `<div>&bull; ${escapeHtml(s)}</div>`).join('')}</div>`
+        : '';
+
+      banner.innerHTML = `
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <div class="flex items-center space-x-2 flex-wrap">
+            <span class="text-base">${osMeta.icon}</span>
+            <span class="font-bold text-white text-xs">${escapeHtml(osMeta.label)} &middot; Driver: <span class="font-mono text-teal-300">${escapeHtml(d.driver_name)}</span></span>
+            <span class="px-2 py-0.5 rounded-full text-[10px] font-bold ${d.ready ? 'bg-teal-500/20 text-teal-300 border border-teal-500/40' : 'bg-amber-500/20 text-amber-300 border border-amber-500/40'}">${d.ready ? 'READY' : 'NOT READY'}</span>
+            <span class="px-2 py-0.5 rounded-full text-[10px] font-mono bg-slate-800 text-slate-300 border border-slate-700">Queue: ${Number(data.queue_depth ?? d.queue_depth ?? 0)} | Lock: ${d.lock_busy ? 'BUSY' : 'FREE'}</span>
+          </div>
+          <div class="text-[11px] font-mono text-teal-300 font-bold">
+            Quota Saved: ${formatMoneyUSD(data.quota_saved_usd || 0)} (~${formatMoneyVND(data.quota_saved_vnd || 0)})
+          </div>
+        </div>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px] text-slate-300 font-mono bg-slate-950/60 p-2.5 rounded-lg border border-slate-800/80">
+          <div><span class="text-slate-500">App:</span> ${escapeHtml(d.app_name || 'Not detected')} ${d.app_version ? `v${escapeHtml(d.app_version)}` : ''}</div>
+          <div><span class="text-slate-500">Bundle ID:</span> ${escapeHtml(d.bundle_id || '-')}</div>
+          <div class="sm:col-span-2 truncate" title="${escapeHtml(d.app_path || '')}"><span class="text-slate-500">Path:</span> ${escapeHtml(d.app_path || '-')}</div>
+        </div>
+        <div class="flex flex-wrap items-center gap-1.5">
+          ${permEntries}
+          ${backendsHtml}
+        </div>
+        ${warningsHtml}
+        ${remediationHtml}
+      `;
+    }
+
+    function refreshDesktopStatus(driverOverride) {
+      const driver = driverOverride || document.getElementById('desktop-driver')?.value || 'auto';
+      return fetch(`/api/desktop/status?driver=${encodeURIComponent(driver)}`)
+        .then(r => {
+          if (!r.ok) throw new Error('Desktop status unavailable');
+          return r.json();
+        })
+        .then(data => {
+          if (data && data.desktop) {
+            state.desktopStatus = data.desktop;
+            state.desktopSummary = {
+              quota_saved_usd: data.quota_saved_usd || 0,
+              quota_saved_vnd: data.quota_saved_vnd || 0,
+              queue_depth: data.queue_depth || 0
+            };
+            updateDesktopStatusPill(data);
+            renderDesktopDoctorBanner(data);
+            renderMetrics(state.metrics);
+            updateDesktopShareBadge();
+          }
+        })
+        .catch(() => {
+          state.desktopStatus = null;
+          updateDesktopStatusPill(null);
+          renderDesktopDoctorBanner(null);
+          updateDesktopShareBadge();
+        });
+    }
+
+    function refreshDesktopJobs() {
+      return fetch('/api/desktop/jobs?limit=50')
+        .then(r => {
+          if (!r.ok) throw new Error('Desktop jobs unavailable');
+          return r.json();
+        })
+        .then(data => {
+          if (data && Array.isArray(data.jobs)) {
+            state.desktopJobs = data.jobs;
+            if (data.summary) {
+              state.desktopSummary = {
+                ...state.desktopSummary,
+                ...data.summary
+              };
+            }
+            renderDesktopJobsTable();
+            renderMetrics(state.metrics);
+          }
+        })
+        .catch(() => {});
+    }
+
+    function getDesktopJobModeBadge(mode) {
+      const m = (mode || 'task').toLowerCase();
+      if (m === 'chat') {
+        return '<span class="px-1.5 py-0.5 rounded text-[9px] font-bold font-mono bg-slate-700/70 text-slate-300 border border-slate-600">CHAT</span>';
+      }
+      return '<span class="px-1.5 py-0.5 rounded text-[9px] font-bold font-mono bg-cyan-500/15 text-emerald-300 border border-cyan-500/40">TASK</span>';
+    }
+
+    function getWorkspaceBasename(wsPath) {
+      const cleaned = String(wsPath || '').replace(/[\\/]+$/, '');
+      if (!cleaned) return '';
+      const parts = cleaned.split(/[\\/]/);
+      return parts[parts.length - 1] || cleaned;
+    }
+
+    function onDesktopDispatchModeChange() {
+      const modeEl = document.getElementById('desktop-dispatch-mode');
+      const wsEl = document.getElementById('desktop-dispatch-workspace');
+      const wsGroup = document.getElementById('desktop-dispatch-workspace-group');
+      const isChat = (modeEl?.value || 'task').toLowerCase() === 'chat';
+      if (wsEl) {
+        wsEl.disabled = isChat;
+      }
+      if (wsGroup) {
+        wsGroup.classList.toggle('hidden', isChat);
+      }
+    }
+
+    function renderDesktopJobsTable() {
+      const tbody = document.getElementById('desktop-jobs-tbody');
+      const countBadge = document.getElementById('desktop-jobs-count-badge');
+      const jobs = state.desktopJobs || [];
+      if (countBadge) countBadge.textContent = `${jobs.length} ${jobs.length === 1 ? 'job' : 'jobs'}`;
+      if (!tbody) return;
+
+      if (jobs.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="6" class="py-6 text-center text-slate-500">No desktop worker jobs recorded yet.</td></tr>';
+        return;
+      }
+
+      tbody.innerHTML = jobs.map(j => {
+        const osMeta = getDesktopOsMeta(j.os_platform);
+        const canCancel = j.status === 'queued' || j.status === 'running';
+        const redactionNote = (j.redaction_count || 0) > 0
+          ? `<span class="px-1.5 py-0.2 rounded text-[9px] font-mono bg-amber-500/15 text-amber-300 border border-amber-500/30">🛡️ ${Number(j.redaction_count)} redacted</span>`
+          : '';
+        const artifactHtml = j.artifact_path
+          ? `<div class="font-mono text-[10px] text-teal-300 truncate max-w-md" title="${escapeHtml(j.artifact_path)}">📄 ${escapeHtml(j.artifact_path)}</div>`
+          : '';
+        const excerptHtml = j.summary_excerpt
+          ? `<div class="text-[11px] text-slate-300 mt-0.5 line-clamp-2 whitespace-pre-wrap">${escapeHtml(j.summary_excerpt)}</div>`
+          : (j.prompt_preview ? `<div class="text-[11px] text-slate-500 mt-0.5 truncate max-w-md">${escapeHtml(j.prompt_preview)}</div>` : '');
+        const errorHtml = j.error_message
+          ? `<div class="text-[10px] font-mono text-rose-300 mt-0.5">❌ ${escapeHtml(j.error_message)}</div>`
+          : '';
+
+        const cancelBtnHtml = canCancel
+          ? `<button type="button" data-cancel-job-id="${escapeHtml(j.job_id)}" class="px-2.5 py-1 rounded-lg bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/40 font-bold text-[10px] transition">Cancel</button>`
+          : `<span class="text-[10px] text-slate-500 font-mono">${j.duration_ms ? `${Number(j.duration_ms)}ms` : '-'}</span>`;
+
+        const modeBadgeHtml = getDesktopJobModeBadge(j.mode);
+        const wsBase = getWorkspaceBasename(j.workspace_path);
+        const workspaceBadgeHtml = wsBase
+          ? `<span class="px-1.5 py-0.5 rounded text-[9px] font-mono bg-teal-500/10 text-cyan-300 border border-teal-500/30 truncate max-w-[140px]" title="${escapeHtml(j.workspace_path)}">📁 ${escapeHtml(wsBase)}</span>`
+          : '';
+        const bgBadgeHtml = (j.background !== false && j.background !== 0)
+          ? `<span class="px-1.5 py-0.5 rounded text-[9px] font-mono bg-slate-800/80 text-slate-300 border border-slate-700/80" title="Background mode (silent, no focus steal)">🔇 BG</span>`
+          : '';
+
+        return `
+          <tr class="hover:bg-slate-900/60 transition align-top">
+            <td class="py-2.5 px-3 font-mono">
+              <div class="font-bold text-white">${escapeHtml(j.job_id)}</div>
+              ${j.task_id ? `<div class="text-[10px] text-indigo-300">${escapeHtml(j.task_id)}</div>` : ''}
+              <div class="flex flex-wrap items-center gap-1 mt-1">
+                ${modeBadgeHtml}
+                ${workspaceBadgeHtml}
+                ${bgBadgeHtml}
+              </div>
+            </td>
+            <td class="py-2.5 px-3 font-mono text-[11px]">
+              <div>${osMeta.icon} ${escapeHtml(j.os_platform || '-')}</div>
+              <div class="text-[10px] text-slate-400">${escapeHtml(j.driver_name || '-')}</div>
+            </td>
+            <td class="py-2.5 px-3">
+              <div class="flex flex-col items-start gap-1">
+                ${getDesktopJobStatusBadge(j.status)}
+                ${redactionNote}
+              </div>
+            </td>
+            <td class="py-2.5 px-3 max-w-md">
+              ${artifactHtml}
+              ${excerptHtml}
+              ${errorHtml}
+            </td>
+            <td class="py-2.5 px-3 font-mono whitespace-nowrap">
+              <div class="text-teal-300 font-bold">${formatMoneyUSD(j.estimated_saved_usd || 0)}</div>
+              <div class="text-[10px] text-slate-400">~${formatMoneyVND(j.estimated_saved_vnd || 0)}</div>
+            </td>
+            <td class="py-2.5 px-3 text-center">${cancelBtnHtml}</td>
+          </tr>
+        `;
+      }).join('');
+    }
+
+    function openDesktopModal() {
+      const modal = document.getElementById('desktop-worker-modal');
+      if (!modal) return;
+      modal.classList.remove('hidden');
+      onDesktopDispatchModeChange();
+      refreshDesktopStatus();
+      refreshDesktopJobs();
+      if (desktopPollTimer) clearInterval(desktopPollTimer);
+      desktopPollTimer = setInterval(() => {
+        refreshDesktopStatus();
+        refreshDesktopJobs();
+      }, 3000);
+    }
+
+    function closeDesktopModal() {
+      const modal = document.getElementById('desktop-worker-modal');
+      if (modal) modal.classList.add('hidden');
+      if (desktopPollTimer) {
+        clearInterval(desktopPollTimer);
+        desktopPollTimer = null;
+      }
+    }
+
+    function dispatchDesktopJob() {
+      const promptEl = document.getElementById('desktop-prompt');
+      const taskEl = document.getElementById('desktop-task-id');
+      const modeEl = document.getElementById('desktop-dispatch-mode');
+      const wsEl = document.getElementById('desktop-dispatch-workspace');
+      const driverEl = document.getElementById('desktop-driver');
+      const timeoutEl = document.getElementById('desktop-timeout');
+      const redactEl = document.getElementById('desktop-redact');
+      const strictEl = document.getElementById('desktop-strict-secrets');
+      const asyncEl = document.getElementById('desktop-async');
+      const btn = document.getElementById('desktop-dispatch-btn');
+      const feedback = document.getElementById('desktop-dispatch-feedback');
+
+      const prompt = (promptEl?.value || '').trim();
+      if (!prompt) {
+        if (feedback) {
+          feedback.className = 'p-3 rounded-lg border border-rose-500/40 bg-rose-950/30 text-rose-300 text-xs font-mono';
+          feedback.textContent = 'Please enter a non-empty prompt before dispatching.';
+          feedback.classList.remove('hidden');
+        }
+        return;
+      }
+
+      const mode = (modeEl?.value || 'task').toLowerCase();
+      const workspacePath = (wsEl?.value || '').trim();
+      const bgEl = document.getElementById('desktop-dispatch-background');
+      const payload = {
+        prompt: prompt,
+        driver: driverEl?.value || 'auto',
+        mode: mode,
+        workspace_path: (mode !== 'chat' && workspacePath) ? workspacePath : null,
+        timeout_sec: parseInt(timeoutEl?.value || '240', 10),
+        background: bgEl ? Boolean(bgEl.checked) : true,
+        redact_secrets: Boolean(redactEl?.checked),
+        strict_secrets: Boolean(strictEl?.checked),
+        async_mode: Boolean(asyncEl?.checked)
+      };
+      const taskId = (taskEl?.value || '').trim();
+      if (taskId) payload.task_id = taskId;
+
+      if (btn) {
+        btn.disabled = true;
+        btn.classList.add('opacity-60');
+      }
+      if (feedback) {
+        feedback.className = 'p-3 rounded-lg border border-teal-500/30 bg-teal-950/20 text-teal-200 text-xs font-mono';
+        feedback.textContent = 'Dispatching job to Gemini Desktop Worker...';
+        feedback.classList.remove('hidden');
+      }
+
+      fetch('/api/desktop/dispatch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      })
+      .then(async res => {
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        return data;
+      })
+      .then(data => {
+        const job = data.job || {};
+        if (feedback) {
+          const ok = job.status === 'completed' || job.status === 'queued' || data.status === 'queued';
+          feedback.className = ok
+            ? 'p-3 rounded-lg border border-emerald-500/40 bg-emerald-950/30 text-emerald-300 text-xs font-mono'
+            : 'p-3 rounded-lg border border-amber-500/40 bg-amber-950/30 text-amber-300 text-xs font-mono';
+          feedback.innerHTML = `Job <span class="font-bold">${escapeHtml(job.job_id || 'submitted')}</span> &rarr; status: <span class="font-bold">${escapeHtml(job.status || data.status || 'ok')}</span>${job.artifact_path ? ` | Artifact: ${escapeHtml(job.artifact_path)}` : ''}${job.error_message ? ` | ${escapeHtml(job.error_message)}` : ''}`;
+        }
+        refreshDesktopStatus();
+        refreshDesktopJobs();
+      })
+      .catch(err => {
+        if (feedback) {
+          feedback.className = 'p-3 rounded-lg border border-rose-500/40 bg-rose-950/30 text-rose-300 text-xs font-mono';
+          feedback.textContent = `Dispatch failed: ${err.message || err}`;
+        }
+      })
+      .finally(() => {
+        if (btn) {
+          btn.disabled = false;
+          btn.classList.remove('opacity-60');
+        }
+      });
+    }
+
+    function cancelDesktopJob(jobId) {
+      if (!jobId) return;
+      fetch('/api/desktop/cancel', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ job_id: jobId })
+      })
+      .then(r => r.json())
+      .then(() => {
+        refreshDesktopStatus();
+        refreshDesktopJobs();
+      })
+      .catch(err => alert('Failed to cancel desktop job: ' + err));
+    }
+
+    document.addEventListener('click', (e) => {
+      const cancelBtn = e.target.closest('[data-cancel-job-id]');
+      if (cancelBtn) {
+        const jobId = cancelBtn.getAttribute('data-cancel-job-id');
+        if (jobId) cancelDesktopJob(jobId);
+      }
+    });
+
+    document.getElementById('router-desktop-available')?.addEventListener('change', () => {
+      state.routerDesktopTouched = true;
+    });
+
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') {
         closeAgentLiveModal();
         closeRouterModal();
+        closeDesktopModal();
       }
     });
 
@@ -2860,6 +3837,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     window.addEventListener('DOMContentLoaded', () => {
       initPipeline();
       connectSSE();
+      updateDesktopShareBadge();
+      refreshDesktopStatus();
+      refreshDesktopJobs();
     });
   </script>
 </body>
