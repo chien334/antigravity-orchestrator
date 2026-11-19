@@ -309,7 +309,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             <div class="h-2 w-2 rounded-full bg-cyan-400"></div>
             <h2 class="text-xs font-semibold tracking-wider text-slate-300 uppercase">Token Consumption, Financial Cost &amp; Context Cache Telemetry</h2>
           </div>
-          <div class="flex items-center space-x-2">
+          <div class="flex items-center space-x-2 flex-wrap gap-y-1">
+            <span id="desktop-share-badge" onclick="openRouterModal()" class="cursor-pointer px-2.5 py-0.5 rounded-full bg-slate-800/80 text-slate-400 text-xs font-semibold border border-slate-700 font-mono transition" title="Live Gemini Desktop App Offload Share vs 60% Peer Target">API-Only Mode (App Offline)</span>
             <span class="text-xs text-slate-400">Context Cache Hit Rate:</span>
             <span id="metric-cache-rate" class="px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 text-xs font-bold border border-emerald-500/20 font-mono">0%</span>
           </div>
@@ -555,9 +556,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <div class="flex items-center space-x-3">
           <div class="h-9 w-9 rounded-xl bg-teal-500/15 border border-teal-500/30 flex items-center justify-center text-lg">🖥️</div>
           <div>
-            <div class="flex items-center space-x-2">
+            <div class="flex items-center space-x-2 flex-wrap gap-y-1">
               <span class="text-xs font-bold text-teal-300 uppercase tracking-wider">Gemini Desktop Worker Offload</span>
               <span class="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-teal-500/20 text-teal-200 border border-teal-500/40">$0.00 AGY API Burn</span>
+              <span id="analytics-desktop-share-badge" class="px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold bg-slate-800/80 text-slate-400 border border-slate-700">API-Only Mode (App Offline)</span>
             </div>
             <p class="text-[11px] text-slate-400 mt-0.5">Non-mutating heavy synthesis &amp; second-opinion jobs offloaded to local Gemini Desktop App</p>
           </div>
@@ -983,6 +985,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
               <option value="cost_first">Cost First (Max Flash Savings)</option>
               <option value="hybrid_desktop">Hybrid Desktop (Offload Heavy Synthesis)</option>
               <option value="offload_heavy_to_desktop">Offload Heavy to Desktop ($0 API)</option>
+              <option value="api_only">API Only (100% Pure Cloud API)</option>
             </select>
           </div>
 
@@ -1007,19 +1010,36 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         </div>
 
         <!-- Desktop Offload & Read-Only Controls -->
-        <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 bg-slate-950/50 border border-slate-800/80 rounded-xl p-3">
-          <label class="flex items-center space-x-2 cursor-pointer select-none">
-            <input type="checkbox" id="router-read-only" class="rounded bg-slate-800 border-slate-700 text-teal-500 focus:ring-0 w-4 h-4">
-            <span class="text-slate-300 font-medium">Read-Only / Non-Mutating</span>
-          </label>
-          <label class="flex items-center space-x-2 cursor-pointer select-none">
-            <input type="checkbox" id="router-desktop-available" class="rounded bg-slate-800 border-slate-700 text-teal-500 focus:ring-0 w-4 h-4">
-            <span class="text-slate-300 font-medium">Desktop App Available</span>
-          </label>
-          <label class="flex items-center space-x-2 cursor-pointer select-none">
-            <input type="checkbox" id="router-prefer-desktop" class="rounded bg-slate-800 border-slate-700 text-teal-500 focus:ring-0 w-4 h-4">
-            <span class="text-slate-300 font-medium">Prefer Desktop ($0 API)</span>
-          </label>
+        <div class="space-y-3 bg-slate-950/50 border border-slate-800/80 rounded-xl p-3">
+          <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+            <label class="flex items-center space-x-2 cursor-pointer select-none">
+              <input type="checkbox" id="router-read-only" class="rounded bg-slate-800 border-slate-700 text-teal-500 focus:ring-0 w-4 h-4">
+              <span class="text-slate-300 font-medium">Read-Only / Non-Mutating</span>
+            </label>
+            <label class="flex items-center space-x-2 cursor-pointer select-none">
+              <input type="checkbox" id="router-desktop-available" class="rounded bg-slate-800 border-slate-700 text-teal-500 focus:ring-0 w-4 h-4">
+              <span class="text-slate-300 font-medium">Desktop App Available</span>
+            </label>
+            <label class="flex items-center space-x-2 cursor-pointer select-none">
+              <input type="checkbox" id="router-prefer-desktop" class="rounded bg-slate-800 border-slate-700 text-teal-500 focus:ring-0 w-4 h-4">
+              <span class="text-slate-300 font-medium">Prefer Desktop ($0 API)</span>
+            </label>
+            <label class="flex items-center space-x-2 cursor-pointer select-none">
+              <input type="checkbox" id="router-queue-busy" class="rounded bg-slate-800 border-slate-700 text-amber-500 focus:ring-0 w-4 h-4">
+              <span class="text-slate-300 font-medium">Desktop Queue Busy</span>
+            </label>
+          </div>
+          <div class="pt-2 border-t border-slate-800/70 flex flex-wrap items-center justify-between gap-3">
+            <label for="router-target-share" class="text-slate-300 font-semibold flex items-center space-x-2">
+              <span>🎯 Target Desktop Peer Share:</span>
+              <span id="router-target-share-label" class="px-2 py-0.5 rounded bg-teal-500/20 text-teal-300 border border-teal-500/30 font-mono font-bold">60%</span>
+            </label>
+            <div class="flex items-center space-x-2 flex-1 max-w-xs">
+              <span class="text-[10px] font-mono text-slate-500">0%</span>
+              <input type="range" id="router-target-share" min="0" max="100" step="5" value="60" oninput="onRouterTargetShareChange(this.value)" class="w-full accent-teal-400 cursor-pointer">
+              <span class="text-[10px] font-mono text-slate-500">100%</span>
+            </div>
+          </div>
         </div>
 
         <!-- Evaluate Button -->
@@ -1501,6 +1521,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       if (elAnalyticsDeskJobs) elAnalyticsDeskJobs.textContent = String(desktopCompleted);
       if (elAnalyticsDeskUsd) elAnalyticsDeskUsd.textContent = formatMoneyUSD(desktopSavedUsd);
       if (elAnalyticsDeskVnd) elAnalyticsDeskVnd.textContent = `~ ${formatMoneyVND(desktopSavedVnd)}`;
+      if (typeof updateDesktopShareBadge === 'function') updateDesktopShareBadge();
 
       // Historical tab header cards
       const histCostUsd = document.getElementById('hist-total-cost-usd');
@@ -2507,6 +2528,56 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     // ---------------------------------------------------------------------------
     let lastRouterRecommendation = null;
 
+    function getRouterTargetSharePct() {
+      const el = document.getElementById('router-target-share');
+      if (!el) return 60;
+      const raw = parseFloat(el.value);
+      if (isNaN(raw)) return 60;
+      if (raw > 0 && raw <= 1 && String(el.value).includes('.')) {
+        return Math.max(0, Math.min(100, Math.round(raw * 100)));
+      }
+      return Math.max(0, Math.min(100, Math.round(raw)));
+    }
+
+    function onRouterTargetShareChange(val) {
+      const pct = getRouterTargetSharePct();
+      const lbl = document.getElementById('router-target-share-label');
+      if (lbl) lbl.textContent = `${pct}%`;
+      updateDesktopShareBadge();
+    }
+
+    function computeCurrentDesktopSharePct() {
+      if (state.metrics && state.metrics.desktop_share !== undefined && state.metrics.desktop_share !== null) {
+        const raw = Number(state.metrics.desktop_share);
+        if (!isNaN(raw)) return (raw >= 0 && raw <= 1) ? Math.round(raw * 100) : Math.round(raw);
+      }
+      const tasks = Object.values(state.tasks || {});
+      if (tasks.length === 0) return 0;
+      const deskCount = tasks.filter(t => String(t.model || '').toLowerCase().includes('desktop')).length;
+      return Math.round((deskCount / tasks.length) * 100);
+    }
+
+    function updateDesktopShareBadge() {
+      const isReady = Boolean(state.desktopStatus && state.desktopStatus.ready);
+      const currentPct = computeCurrentDesktopSharePct();
+      const targetPct = getRouterTargetSharePct();
+      const badges = [
+        document.getElementById('desktop-share-badge'),
+        document.getElementById('analytics-desktop-share-badge')
+      ];
+      badges.forEach((badge, idx) => {
+        if (!badge) return;
+        const textSize = idx === 0 ? 'text-xs' : 'text-[10px]';
+        if (isReady) {
+          badge.textContent = `🎯 Desktop Offload: ${currentPct}% / ${targetPct}% Target`;
+          badge.className = `${idx === 0 ? 'cursor-pointer px-2.5 py-0.5' : 'px-2 py-0.5'} rounded-full bg-teal-500/15 text-teal-300 ${textSize} font-bold border border-teal-500/40 font-mono transition`;
+        } else {
+          badge.textContent = 'API-Only Mode (App Offline)';
+          badge.className = `${idx === 0 ? 'cursor-pointer px-2.5 py-0.5' : 'px-2 py-0.5'} rounded-full bg-slate-800/80 text-slate-400 ${textSize} font-semibold border border-slate-700 font-mono transition`;
+        }
+      });
+    }
+
     function openRouterModal() {
       const modal = document.getElementById('router-modal');
       if (modal) modal.classList.remove('hidden');
@@ -2514,6 +2585,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       if (availEl && !state.routerDesktopTouched && state.desktopStatus) {
         availEl.checked = Boolean(state.desktopStatus.ready);
       }
+      const queueEl = document.getElementById('router-queue-busy');
+      if (queueEl && state.desktopStatus && state.desktopStatus.lock_busy !== undefined) {
+        queueEl.checked = Boolean(state.desktopStatus.lock_busy || (state.desktopSummary && state.desktopSummary.queue_depth > 0));
+      }
+      onRouterTargetShareChange();
     }
 
     function closeRouterModal() {
@@ -2532,6 +2608,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const readOnly = Boolean(document.getElementById('router-read-only')?.checked);
       const desktopAvail = Boolean(document.getElementById('router-desktop-available')?.checked);
       const preferDesktop = Boolean(document.getElementById('router-prefer-desktop')?.checked);
+      const queueBusy = Boolean(document.getElementById('router-queue-busy')?.checked);
+      const targetSharePct = getRouterTargetSharePct();
+      const desktopTargetShare = Number((targetSharePct / 100).toFixed(2));
 
       const payload = {
         agent_type: persona,
@@ -2543,7 +2622,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         retry_count: retries,
         read_only: readOnly,
         desktop_available: desktopAvail,
-        prefer_desktop: preferDesktop
+        prefer_desktop: preferDesktop,
+        desktop_target_share: desktopTargetShare,
+        desktop_queue_busy: queueBusy
       };
 
       fetch('/api/router/recommend', {
@@ -2576,6 +2657,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const readOnly = Boolean(p.read_only);
       const desktopAvail = Boolean(p.desktop_available);
       const preferDesktop = Boolean(p.prefer_desktop);
+      const queueBusy = Boolean(p.desktop_queue_busy);
+      const rawTarget = (p.desktop_target_share !== undefined && p.desktop_target_share !== null) ? Number(p.desktop_target_share) : 0.60;
+      const targetShare = isNaN(rawTarget) ? 0.60 : Math.max(0, Math.min(1, rawTarget > 1 ? rawTarget / 100 : rawTarget));
+      const currentShare = computeCurrentDesktopSharePct() / 100;
+      const isApiOnly = (budget === 'api_only') || !desktopAvail || targetShare <= 0;
       const fileCount = parseInt(p.file_count ?? 0, 10);
 
       let model = 'gemini-4-hydrogen';
@@ -2599,8 +2685,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
       const desktopEligibleAgent = (
         ['spec-engineer', 'task-planner', 'code-reviewer'].includes(agent)
-        || (['scout', 'codebase-researcher', 'doc-generator', 'debugger'].includes(agent) && readOnly)
+        || (['scout', 'codebase-researcher', 'doc-generator', 'debugger', 'performance-auditor'].includes(agent) && readOnly)
       );
+
+      const desktopNote = (!isApiOnly && queueBusy && desktopEligibleAgent)
+        ? ' (Desktop queue busy; routed to API fleet peer.)'
+        : '';
 
       if (isSecurityTask) {
         model = 'gemini-4-carbon';
@@ -2632,20 +2722,36 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         fallback = 'gemini-4-carbon';
         cbMeta = { status: 'escalated_neon', stage: 2, retries: retries, retry_count: retries, escalated_from: 'gemini-4-hydrogen', escalate_to: 'gemini-4-carbon' };
       }
+      else if (retries === 1) {
+        model = 'gemini-4-hydrogen';
+        effort = 'xhigh';
+        tier = 'high_throughput';
+        rationale = 'Circuit breaker Stage 1 self-heal (retry #1): elevated to Gemini 4 Hydrogen (xhigh) before Stage 2 Gemini 4 Neon escalation.';
+        costTier = '$$$';
+        fallback = 'gemini-4-neon';
+        cbMeta = { status: 'retrying', stage: 1, retries: retries, retry_count: retries, max_self_retries: 1, escalate_to: 'gemini-4-neon' };
+      }
       // =========================================================================
-      // RULE 1.5: DESKTOP OFFLOAD GATE (Zero-API-Cost Heavy Read-Only Synthesis)
+      // RULE 1.5: 60% CONDITIONAL DESKTOP PEER OFFLOAD GATE ($0 API BURN)
+      // Only active when desktop_available=true, budget != 'api_only', !queue_busy.
+      // When unchecked or api_only, 100% pure Neon/Hydrogen/Carbon/Flash routing.
       // =========================================================================
       else if (
-        (budget === 'hybrid_desktop' || budget === 'offload_heavy_to_desktop' || preferDesktop)
-        && desktopAvail
+        !isApiOnly
+        && !queueBusy
         && (fileCount === 0 || readOnly)
-        && desktopEligibleAgent
-        && (comp === 'high' || comp === 'critical' || budget === 'offload_heavy_to_desktop' || preferDesktop)
+        && (desktopEligibleAgent || (preferDesktop && readOnly))
+        && (
+          (budget === 'hybrid_desktop' || budget === 'offload_heavy_to_desktop' || preferDesktop)
+          || (!['quality_first', 'speed_first', 'latency_sensitive'].includes(budget) && currentShare < targetShare)
+        )
       ) {
         model = 'gemini-desktop-app';
         effort = null;
         tier = 'external_desktop';
-        rationale = 'Heavy non-mutating synthesis offloaded to local Gemini Desktop App ($0.00 AGY API token spend).';
+        const curPct = Math.round(currentShare * 100);
+        const tgtPct = Math.round(targetShare * 100);
+        rationale = `Conditional Desktop peer offload (${curPct}% current / ${tgtPct}% target share, $0.00 AGY API burn) routed to local Gemini Desktop App.`;
         costTier = '$0';
         fallback = 'gemini-4-neon';
       }
@@ -2661,35 +2767,35 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           model = 'gemini-4-carbon';
           effort = 'medium';
           tier = 'frontier';
-          rationale = 'High-complexity specification/architecture in quality-first mode requires Gemini 4 Carbon frontier reasoning.';
+          rationale = 'High-complexity specification/architecture in quality-first mode requires Gemini 4 Carbon frontier reasoning.' + desktopNote;
           costTier = '$$$$';
           fallback = 'gemini-4-neon';
         } else if (budget === 'quality_first') {
           model = 'gemini-4-neon';
           effort = 'xhigh';
           tier = 'mid_frontier';
-          rationale = 'High-precision architecture, review, or debugging in quality-first mode dispatched to Gemini 4 Neon (xhigh effort).';
+          rationale = 'High-precision architecture, review, or debugging in quality-first mode dispatched to Gemini 4 Neon (xhigh effort).' + desktopNote;
           costTier = '$$$';
           fallback = 'gemini-4-carbon';
         } else if (['speed_first', 'latency_sensitive'].includes(budget) && agent === 'code-reviewer' && comp !== 'high') {
           model = 'gemini-4-hydrogen';
           effort = 'xhigh';
           tier = 'high_throughput';
-          rationale = 'Rapid code review in speed-first mode dispatched to Gemini 4 Hydrogen with maximum reasoning depth (xhigh).';
+          rationale = 'Rapid code review in speed-first mode dispatched to Gemini 4 Hydrogen with maximum reasoning depth (xhigh).' + desktopNote;
           costTier = '$$$';
           fallback = 'gemini-4-neon';
         } else if (['cost_saving', 'cost_first'].includes(budget) && agent !== 'orchestrator') {
           model = 'gemini-4-hydrogen';
           effort = 'xhigh';
           tier = 'high_throughput';
-          rationale = 'Cost-saving planning/review dispatched to Gemini 4 Hydrogen (xhigh effort, 50% lower token rate).';
+          rationale = 'Cost-saving planning/review dispatched to Gemini 4 Hydrogen (xhigh effort, 50% lower token rate).' + desktopNote;
           costTier = '$$';
           fallback = 'gemini-4-neon';
         } else {
           model = 'gemini-4-neon';
           effort = ['spec-engineer', 'code-reviewer', 'debugger'].includes(agent) ? 'high' : 'medium';
           tier = 'mid_frontier';
-          rationale = 'Orchestration, specification, planning, 5-axis review, debugging, or multi-file refactor (>=4 files) dispatched to Gemini 4 Neon (#1 Coding Agent, 65.2% Terminal-Bench, 95% cache savings).';
+          rationale = 'Orchestration, specification, planning, 5-axis review, debugging, or multi-file refactor (>=4 files) dispatched to Gemini 4 Neon (#1 Coding Agent, 65.2% Terminal-Bench, 95% cache savings).' + desktopNote;
           costTier = '$$$';
           fallback = 'gemini-4-hydrogen';
         }
@@ -2706,27 +2812,22 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           model = 'gemini-3.8-flash';
           effort = 'low';
           tier = 'cost_efficient';
-          rationale = 'Parallel code implementation in cost-saving mode dispatched to Gemini 3.8 Flash (low effort).';
+          rationale = 'Parallel code implementation in cost-saving mode dispatched to Gemini 3.8 Flash (low effort).' + desktopNote;
           costTier = '$$';
           fallback = 'gemini-4-hydrogen';
         } else if (budget === 'quality_first' && comp === 'medium') {
           model = 'gemini-4-neon';
           effort = 'high';
           tier = 'mid_frontier';
-          rationale = 'Parallel code implementation in quality-first mode dispatched to Gemini 4 Neon (high effort) for maximum SWE accuracy.';
+          rationale = 'Parallel code implementation in quality-first mode dispatched to Gemini 4 Neon (high effort) for maximum SWE accuracy.' + desktopNote;
           costTier = '$$$';
           fallback = 'gemini-4-hydrogen';
         } else {
           model = 'gemini-4-hydrogen';
-          if (retries === 1) {
-            effort = 'xhigh';
-            cbMeta = { status: 'retrying', stage: 1, retry_count: retries, max_self_retries: 2, escalate_to: 'gemini-4-neon' };
-          } else {
-            effort = comp === 'medium' ? 'high' : 'medium';
-            cbMeta = { status: 'active', stage: 0, retry_count: retries, max_self_retries: 2, escalate_to: 'gemini-4-neon' };
-          }
+          effort = comp === 'medium' ? 'high' : 'medium';
+          cbMeta = { status: 'active', stage: 0, retry_count: retries, max_self_retries: 2, escalate_to: 'gemini-4-neon' };
           tier = 'high_throughput';
-          rationale = 'Bounded parallel code implementation, testing, or reconnaissance dispatched to Gemini 4 Hydrogen for 2.5x speed and 198 tok/s throughput.';
+          rationale = 'Bounded parallel code implementation, testing, or reconnaissance dispatched to Gemini 4 Hydrogen for 2.5x speed and 198 tok/s throughput.' + desktopNote;
           costTier = '$$$';
           fallback = 'gemini-3.8-flash';
         }
@@ -2738,7 +2839,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         model = 'gemini-3.8-flash';
         effort = 'low';
         tier = 'cost_efficient';
-        rationale = 'Low-complexity telemetry, doc formatting, or micro-task dispatched to Gemini 3.8 Flash (low effort).';
+        rationale = 'Low-complexity telemetry, doc formatting, or micro-task dispatched to Gemini 3.8 Flash (low effort).' + desktopNote;
         costTier = '$';
         fallback = 'gemini-4-hydrogen';
       }
@@ -2751,6 +2852,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         estimated_cost_tier: costTier,
         fallback_model: fallback
       };
+      if (model === 'gemini-desktop-app') {
+        rec.execution_mode = 'desktop_bridge';
+        rec.desktop_share = currentShare;
+        rec.desktop_target_share = targetShare;
+        rec.allow_edits = false;
+      }
       if (cbMeta) rec.circuit_breaker = cbMeta;
 
       renderRouterResult(rec, p);
@@ -3439,11 +3546,14 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             updateDesktopStatusPill(data);
             renderDesktopDoctorBanner(data);
             renderMetrics(state.metrics);
+            updateDesktopShareBadge();
           }
         })
         .catch(() => {
+          state.desktopStatus = null;
           updateDesktopStatusPill(null);
           renderDesktopDoctorBanner(null);
+          updateDesktopShareBadge();
         });
     }
 
@@ -3727,6 +3837,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     window.addEventListener('DOMContentLoaded', () => {
       initPipeline();
       connectSSE();
+      updateDesktopShareBadge();
       refreshDesktopStatus();
       refreshDesktopJobs();
     });

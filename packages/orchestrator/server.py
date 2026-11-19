@@ -22,6 +22,7 @@ import uuid
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
 DEFAULT_PORT = int(os.environ.get("ORCHESTRATOR_PORT", "8484"))
@@ -43,11 +44,13 @@ DEFAULT_DB_PATH = os.environ.get(
 # ---------------------------------------------------------------------------
 try:
     from models import (
+        DEFAULT_DESKTOP_TARGET_SHARE,
         EXTERNAL_WORKERS,
         MODEL_REGISTRY,
         PRICING_TABLE,
         USD_TO_VND_RATE,
         VALID_REASONING_EFFORTS,
+        clamp_desktop_share,
         compute_cost,
         compute_desktop_quota_saved,
         extract_model_and_effort,
@@ -59,20 +62,24 @@ try:
         validate_reasoning_effort,
     )
     from router import (
+        allocate_dag_models,
         recommend_model,
         evaluate_dag_ready,
         evaluate_ready_tasks,
         compute_model_analytics,
         generate_audit_report,
+        is_task_desktop_eligible,
     )
 except ImportError:
     try:
         from packages.orchestrator.models import (
+            DEFAULT_DESKTOP_TARGET_SHARE,
             EXTERNAL_WORKERS,
             MODEL_REGISTRY,
             PRICING_TABLE,
             USD_TO_VND_RATE,
             VALID_REASONING_EFFORTS,
+            clamp_desktop_share,
             compute_cost,
             compute_desktop_quota_saved,
             extract_model_and_effort,
@@ -84,19 +91,23 @@ except ImportError:
             validate_reasoning_effort,
         )
         from packages.orchestrator.router import (
+            allocate_dag_models,
             recommend_model,
             evaluate_dag_ready,
             evaluate_ready_tasks,
             compute_model_analytics,
             generate_audit_report,
+            is_task_desktop_eligible,
         )
     except ImportError:
         from .models import (
+            DEFAULT_DESKTOP_TARGET_SHARE,
             EXTERNAL_WORKERS,
             MODEL_REGISTRY,
             PRICING_TABLE,
             USD_TO_VND_RATE,
             VALID_REASONING_EFFORTS,
+            clamp_desktop_share,
             compute_cost,
             compute_desktop_quota_saved,
             extract_model_and_effort,
@@ -108,11 +119,13 @@ except ImportError:
             validate_reasoning_effort,
         )
         from .router import (
+            allocate_dag_models,
             recommend_model,
             evaluate_dag_ready,
             evaluate_ready_tasks,
             compute_model_analytics,
             generate_audit_report,
+            is_task_desktop_eligible,
         )
 
 # ---------------------------------------------------------------------------
@@ -368,6 +381,14 @@ class StateStore:
         self._desktop_manager = None
         self._desktop_manager_lock_dir = None
         self._desktop_manager_reports_root = None
+        self.auto_desktop_routing: bool = (
+            os.environ.get("ORCHESTRATOR_AUTO_DESKTOP_ROUTING", "1").strip().lower()
+            not in ("0", "false", "no", "off")
+        )
+        self._desktop_status_cache_lock = threading.Lock()
+        self._desktop_status_cache_ts: float = 0.0
+        self._desktop_status_cache_val: dict | None = None
+        self._desktop_status_cache_ttl: float = 3.0
         self._init_db()
         self._start_token_auditor()
         self._start_desktop_worker()
@@ -621,6 +642,9 @@ class StateStore:
                     self._migrate_db(conn)
             finally:
                 conn.close()
+        with self._desktop_status_cache_lock:
+            self._desktop_status_cache_val = None
+            self._desktop_status_cache_ts = 0.0
 
     def _row_to_task(self, row):
         deps_raw = row["depends_on"]
@@ -1509,16 +1533,117 @@ class StateStore:
 
         ws_candidate = os.path.realpath(str(self.workspace_root))
         default_ws = ws_candidate if (os.path.isdir(ws_candidate) and not _is_sensitive_workspace_root(ws_candidate)) else None
+        share_metrics = self.get_desktop_share_metrics()
+        desktop_share_summary = {
+            "target_share": share_metrics["target_desktop_share"],
+            "current_share": share_metrics["current_desktop_share"],
+            "eligible_tasks": share_metrics["eligible_tasks"],
+            "desktop_tasks": share_metrics["desktop_tasks"],
+            "desktop_ready": bool(status_dict.get("ready", False)),
+        }
 
         return {
             "status": "ok",
             "desktop": status_dict,
+            "desktop_share": desktop_share_summary,
             "quota_saved_usd": quota_usd,
             "quota_saved_vnd": quota_vnd,
             "agy_quota_saved_usd": quota_usd,
             "active_job": active_job,
             "queue_depth": queue_depth,
             "workspace_root": default_ws,
+        }
+
+    def _get_cached_desktop_status(self, force_refresh: bool = False) -> dict:
+        """Return cached get_desktop_status() with a 3.0s TTL for fast router auto-detection."""
+        now_mono = time.monotonic()
+        with self._desktop_status_cache_lock:
+            cached = self._desktop_status_cache_val
+            age = now_mono - self._desktop_status_cache_ts
+            if not force_refresh and cached is not None and age < self._desktop_status_cache_ttl:
+                snapshot = dict(cached)
+                desk = dict(snapshot.get("desktop") or {})
+                live_qsize = self._desktop_queue.qsize()
+                live_busy = bool(self._desktop_active_job_id is not None)
+                if live_busy or live_qsize > 0:
+                    desk["lock_busy"] = bool(desk.get("lock_busy") or live_busy)
+                    desk["queue_depth"] = max(int(desk.get("queue_depth") or 0), live_qsize)
+                snapshot["desktop"] = desk
+                return snapshot
+
+        fresh = self.get_desktop_status(driver="auto")
+        with self._desktop_status_cache_lock:
+            self._desktop_status_cache_val = fresh
+            self._desktop_status_cache_ts = time.monotonic()
+            return dict(fresh)
+
+    def get_desktop_share_metrics(self, target_share: float | None = None) -> dict:
+        """Compute current Gemini Desktop App peer share across non-cancelled eligible tasks."""
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cur = conn.cursor()
+                cur.execute("SELECT task_id, agent_type, model, complexity, status, scope FROM tasks")
+                rows = cur.fetchall()
+            finally:
+                conn.close()
+        return self._compute_desktop_share_from_tasks([dict(r) for r in rows], target_share=target_share)
+
+    def apply_dag_allocations(self, allocations: list[dict], source_tasks: list[dict] | None = None) -> dict:
+        """Persist DAG-allocated models to pending tasks in SQLite tasks table."""
+        src_by_id: dict[str, dict] = {}
+        for st in (source_tasks or []):
+            if isinstance(st, dict) and st.get("task_id"):
+                src_by_id[str(st["task_id"])] = st
+
+        applied_ids: list[str] = []
+        skipped_ids: list[str] = []
+        updated_tasks: list[dict] = []
+
+        for alloc in allocations:
+            tid = str(alloc.get("task_id") or "").strip()
+            if not tid:
+                continue
+            src = src_by_id.get(tid, {})
+            with self._lock:
+                conn = self._get_connection()
+                try:
+                    cur = conn.cursor()
+                    cur.execute("SELECT status FROM tasks WHERE task_id = ?", (tid,))
+                    row = cur.fetchone()
+                    existing_status = str(row["status"]).strip().lower() if row else None
+                finally:
+                    conn.close()
+
+            if existing_status is not None and existing_status != "pending":
+                skipped_ids.append(tid)
+                continue
+            if existing_status is None and str(src.get("status") or "pending").strip().lower() != "pending":
+                skipped_ids.append(tid)
+                continue
+
+            effort_val = alloc.get("reasoning_effort")
+            task_obj = self.upsert_task(
+                task_id=tid,
+                agent_type=alloc.get("agent_type") or src.get("agent_type") or ("builder" if existing_status is None else None),
+                status="pending" if existing_status is None else None,
+                progress=0 if existing_status is None else None,
+                scope=src.get("scope") if existing_status is None else None,
+                notes=src.get("notes") if existing_status is None else None,
+                model=alloc.get("model"),
+                complexity=(src.get("complexity") or src.get("tier")) if existing_status is None else None,
+                depends_on=src.get("depends_on") if existing_status is None else None,
+                parallel_group=(alloc.get("parallel_group") or src.get("parallel_group")) if existing_status is None else None,
+                reasoning_effort=effort_val if effort_val else "",
+            )
+            applied_ids.append(tid)
+            updated_tasks.append(task_obj)
+
+        return {
+            "applied_task_ids": applied_ids,
+            "skipped_task_ids": skipped_ids,
+            "applied_count": len(applied_ids),
+            "tasks": updated_tasks,
         }
 
     @staticmethod
@@ -1965,6 +2090,7 @@ class StateStore:
                 desktop_jobs = [self._row_to_desktop_job(r) for r in desktop_rows]
 
                 metrics = self._calculate_metrics_conn(conn)
+                share_metrics = self._compute_desktop_share_from_tasks(tasks)
                 return {
                     "tasks": tasks,
                     "logs": logs,
@@ -1979,10 +2105,49 @@ class StateStore:
                         "active_job_id": self._desktop_active_job_id,
                         "agy_quota_saved_usd": metrics["desktop_quota_saved_usd"],
                         "agy_quota_saved_vnd": metrics["desktop_quota_saved_vnd"],
+                        "desktop_share": share_metrics,
                     },
                 }
             finally:
                 conn.close()
+
+    @staticmethod
+    def _compute_desktop_share_from_tasks(
+        tasks: list[dict],
+        target_share: float | None = None,
+    ) -> dict:
+        """Compute desktop share metrics from an already-fetched task list."""
+        resolved_target = (
+            DEFAULT_DESKTOP_TARGET_SHARE
+            if target_share is None
+            else clamp_desktop_share(target_share, DEFAULT_DESKTOP_TARGET_SHARE)
+        )
+        eligible_tasks = 0
+        desktop_tasks = 0
+        for t in tasks:
+            status = str(t.get("status") or "pending").strip().lower()
+            if status == "cancelled":
+                continue
+            canon_model = normalize_model_name(t.get("model"))
+            is_desktop = canon_model == "gemini-desktop-app"
+            if is_desktop or is_task_desktop_eligible(
+                agent_type=t.get("agent_type") or "",
+                complexity=t.get("complexity") or "medium",
+                scope=t.get("scope") or "",
+            ):
+                eligible_tasks += 1
+                if is_desktop:
+                    desktop_tasks += 1
+        current_share = round(desktop_tasks / eligible_tasks, 4) if eligible_tasks > 0 else 0.0
+        return {
+            "eligible_tasks": eligible_tasks,
+            "desktop_tasks": desktop_tasks,
+            "api_tasks": max(0, eligible_tasks - desktop_tasks),
+            "current_desktop_share": current_share,
+            "current_share": current_share,
+            "target_desktop_share": resolved_target,
+            "target_share": resolved_target,
+        }
 
     def reset(self):
         with self._lock:
@@ -2009,6 +2174,9 @@ class StateStore:
                 metrics = self._calculate_metrics_conn(conn)
             finally:
                 conn.close()
+        with self._desktop_status_cache_lock:
+            self._desktop_status_cache_val = None
+            self._desktop_status_cache_ts = 0.0
         self.broadcast("reset_event", {"metrics": metrics})
         return {"status": "ok", "metrics": metrics}
 
@@ -3893,6 +4061,19 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
             state = GLOBAL_STORE.get_state()
             desktop_jobs = GLOBAL_STORE.list_desktop_jobs(limit=1000)
             data = compute_model_analytics(state["tasks"], desktop_jobs=desktop_jobs)
+            share_metrics = GLOBAL_STORE.get_desktop_share_metrics()
+            cached_status = GLOBAL_STORE._get_cached_desktop_status()
+            desktop_ready = bool((cached_status.get("desktop") or {}).get("ready", False))
+            desktop_share_summary = {
+                "target_share": share_metrics["target_desktop_share"],
+                "current_share": share_metrics["current_desktop_share"],
+                "eligible_tasks": share_metrics["eligible_tasks"],
+                "desktop_tasks": share_metrics["desktop_tasks"],
+                "desktop_ready": desktop_ready,
+            }
+            data["desktop_share"] = desktop_share_summary
+            if isinstance(data.get("summary"), dict):
+                data["summary"]["desktop_share"] = desktop_share_summary
             self._send_json(HTTPStatus.OK, data)
             return
 
@@ -3972,6 +4153,53 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json")
         self.end_headers()
         self.wfile.write(b'{"error": "Not Found"}')
+
+    @staticmethod
+    def _resolve_router_desktop_context(payload: dict, budget_mode: str) -> tuple[bool, bool, float, str]:
+        """Resolve desktop_available, desktop_queue_busy, target_share, and detection_source."""
+        raw_target_share = payload.get(
+            "desktop_target_share",
+            payload.get("target_desktop_share", payload.get("target_share")),
+        )
+        target_share = (
+            DEFAULT_DESKTOP_TARGET_SHARE
+            if raw_target_share is None
+            else clamp_desktop_share(raw_target_share, DEFAULT_DESKTOP_TARGET_SHARE)
+        )
+        raw_desktop_avail = payload.get("desktop_available")
+        raw_queue_busy = payload.get("desktop_queue_busy")
+
+        if raw_desktop_avail is not None:
+            desktop_available = GLOBAL_STORE._parse_bool_flag(raw_desktop_avail, "desktop_available", False)
+            desktop_queue_busy = (
+                GLOBAL_STORE._parse_bool_flag(raw_queue_busy, "desktop_queue_busy", False)
+                if raw_queue_busy is not None
+                else False
+            )
+            return desktop_available, desktop_queue_busy, target_share, "explicit"
+
+        if budget_mode == "api_only":
+            desktop_queue_busy = (
+                GLOBAL_STORE._parse_bool_flag(raw_queue_busy, "desktop_queue_busy", False)
+                if raw_queue_busy is not None
+                else False
+            )
+            return False, desktop_queue_busy, target_share, "api_only"
+
+        if not getattr(GLOBAL_STORE, "auto_desktop_routing", True):
+            return False, False, target_share, "auto_disabled"
+
+        cached_status = GLOBAL_STORE._get_cached_desktop_status()
+        desk_info = cached_status.get("desktop", {}) if isinstance(cached_status, dict) else {}
+        desktop_available = bool(desk_info.get("ready", False))
+        if raw_queue_busy is not None:
+            desktop_queue_busy = GLOBAL_STORE._parse_bool_flag(raw_queue_busy, "desktop_queue_busy", False)
+        else:
+            desktop_queue_busy = bool(
+                desk_info.get("lock_busy", False)
+                or int(desk_info.get("queue_depth", 0) or 0) > 0
+            )
+        return desktop_available, desktop_queue_busy, target_share, "auto_cached"
 
     def do_POST(self):
         parsed = urlparse(self.path)
@@ -4088,11 +4316,35 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
             scope = payload.get("scope", "")
             file_count = int(payload.get("file_count") or payload.get("files") or 0)
             has_security_impact = bool(payload.get("has_security_impact") or payload.get("security_impact") or False)
-            budget_mode = payload.get("budget_mode", "balanced")
+            budget_mode = str(payload.get("budget_mode") or "balanced").strip().lower()
+            if payload.get("api_only"):
+                budget_mode = "api_only"
             retry_count = int(payload.get("retry_count") or payload.get("retries") or 0)
-            desktop_available = bool(payload.get("desktop_available", False))
             read_only = bool(payload.get("read_only", False))
             prefer_desktop = bool(payload.get("prefer_desktop", False))
+
+            try:
+                desktop_available, desktop_queue_busy, target_share, detection_source = (
+                    self._resolve_router_desktop_context(payload, budget_mode)
+                )
+            except ValueError as exc:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+                return
+
+            share_metrics = GLOBAL_STORE.get_desktop_share_metrics(target_share=target_share)
+            raw_current_share = payload.get("current_desktop_share")
+            if raw_current_share is not None:
+                try:
+                    current_share: float | None = max(0.0, min(1.0, float(raw_current_share)))
+                except (TypeError, ValueError):
+                    self._send_json(HTTPStatus.BAD_REQUEST, {"error": "current_desktop_share must be a float in [0.0, 1.0]"})
+                    return
+            else:
+                current_share = (
+                    share_metrics["current_desktop_share"]
+                    if share_metrics["eligible_tasks"] > 0
+                    else None
+                )
 
             rec = recommend_model(
                 agent_type=agent_type,
@@ -4105,8 +4357,83 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
                 desktop_available=desktop_available,
                 read_only=read_only,
                 prefer_desktop=prefer_desktop,
+                desktop_queue_busy=desktop_queue_busy,
+                current_desktop_share=current_share,
+                desktop_target_share=target_share,
             )
+            rec["desktop_routing_context"] = {
+                "desktop_available": desktop_available,
+                "desktop_queue_busy": desktop_queue_busy,
+                "current_desktop_share": current_share,
+                "target_desktop_share": target_share,
+                "eligible_tasks": share_metrics["eligible_tasks"],
+                "desktop_tasks": share_metrics["desktop_tasks"],
+                "detection_source": detection_source,
+            }
             self._send_json(HTTPStatus.OK, rec)
+            return
+
+        if path == "/api/router/allocate-dag":
+            raw_tasks = payload.get("tasks")
+            if raw_tasks is None:
+                state = GLOBAL_STORE.get_state()
+                dag_tasks = [t for t in state["tasks"] if t.get("status") == "pending"]
+            elif isinstance(raw_tasks, list):
+                if not all(isinstance(item, dict) for item in raw_tasks):
+                    self._send_json(HTTPStatus.BAD_REQUEST, {"error": "Each item in 'tasks' must be a JSON object"})
+                    return
+                dag_tasks = raw_tasks
+            else:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": "'tasks' must be a JSON array"})
+                return
+
+            budget_mode = str(payload.get("budget_mode") or "balanced").strip().lower()
+            if payload.get("api_only"):
+                budget_mode = "api_only"
+
+            try:
+                apply_changes = GLOBAL_STORE._parse_bool_flag(payload.get("apply"), "apply", False)
+                use_store_share = GLOBAL_STORE._parse_bool_flag(payload.get("use_store_share"), "use_store_share", False)
+                desktop_available, _, target_share, detection_source = (
+                    self._resolve_router_desktop_context(payload, budget_mode)
+                )
+            except ValueError as exc:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+                return
+
+            raw_existing_share = payload.get("existing_desktop_share")
+            if raw_existing_share is not None:
+                try:
+                    existing_share: float | None = max(0.0, min(1.0, float(raw_existing_share)))
+                except (TypeError, ValueError):
+                    self._send_json(HTTPStatus.BAD_REQUEST, {"error": "existing_desktop_share must be a float in [0.0, 1.0]"})
+                    return
+            elif use_store_share:
+                sm = GLOBAL_STORE.get_desktop_share_metrics(target_share=target_share)
+                existing_share = sm["current_desktop_share"] if sm["eligible_tasks"] > 0 else None
+            else:
+                existing_share = None
+
+            allocation_res = allocate_dag_models(
+                tasks=dag_tasks,
+                desktop_available=desktop_available,
+                desktop_target_share=target_share,
+                existing_desktop_share=existing_share,
+                budget_mode=budget_mode,
+            )
+            allocation_res["detection_source"] = detection_source
+            allocation_res["applied"] = apply_changes
+            if apply_changes:
+                apply_info = GLOBAL_STORE.apply_dag_allocations(
+                    allocations=allocation_res["allocations"],
+                    source_tasks=dag_tasks,
+                )
+                allocation_res["applied_count"] = apply_info["applied_count"]
+                allocation_res["applied_task_ids"] = apply_info["applied_task_ids"]
+                allocation_res["skipped_task_ids"] = apply_info["skipped_task_ids"]
+                allocation_res["desktop_share"] = GLOBAL_STORE.get_desktop_share_metrics(target_share=target_share)
+
+            self._send_json(HTTPStatus.OK, allocation_res)
             return
 
         if path == "/api/tasks/kill":

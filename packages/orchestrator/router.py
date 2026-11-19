@@ -13,11 +13,13 @@ from typing import Any
 
 try:
     from .models import (
+        DEFAULT_DESKTOP_TARGET_SHARE,
         EXTERNAL_WORKERS,
         MODEL_REGISTRY,
         PRICING_TABLE,
         USD_TO_VND_RATE,
         VALID_REASONING_EFFORTS,
+        clamp_desktop_share,
         compute_cost,
         compute_desktop_quota_saved,
         extract_model_and_effort,
@@ -31,11 +33,13 @@ try:
 except ImportError:
     try:
         from models import (
+            DEFAULT_DESKTOP_TARGET_SHARE,
             EXTERNAL_WORKERS,
             MODEL_REGISTRY,
             PRICING_TABLE,
             USD_TO_VND_RATE,
             VALID_REASONING_EFFORTS,
+            clamp_desktop_share,
             compute_cost,
             compute_desktop_quota_saved,
             extract_model_and_effort,
@@ -48,11 +52,13 @@ except ImportError:
         )
     except ImportError:
         from packages.orchestrator.models import (
+            DEFAULT_DESKTOP_TARGET_SHARE,
             EXTERNAL_WORKERS,
             MODEL_REGISTRY,
             PRICING_TABLE,
             USD_TO_VND_RATE,
             VALID_REASONING_EFFORTS,
+            clamp_desktop_share,
             compute_cost,
             compute_desktop_quota_saved,
             extract_model_and_effort,
@@ -65,193 +71,121 @@ except ImportError:
         )
 
 
-def recommend_model(
-    agent_type: str,
+SECURITY_SCOPE_KEYWORDS: tuple[str, ...] = (
+    "vulnerability",
+    "cve",
+    "penetration",
+    "auth",
+    "crypto",
+    "owasp",
+    "rbac",
+    "jwt",
+    "migration",
+)
+
+DESKTOP_READ_ONLY_PERSONAS: frozenset[str] = frozenset({
+    "spec-engineer",
+    "task-planner",
+    "code-reviewer",
+    "performance-auditor",
+})
+
+DESKTOP_MUTATING_PERSONAS: frozenset[str] = frozenset({
+    "builder",
+    "ui-builder",
+    "frontend-engineer",
+    "test-engineer",
+    "debugger",
+    "code-simplifier",
+    "doc-generator",
+    "software-builder",
+})
+
+DESKTOP_CORE_PERSONAS: frozenset[str] = DESKTOP_READ_ONLY_PERSONAS | DESKTOP_MUTATING_PERSONAS
+
+DESKTOP_SCOUT_PERSONAS: frozenset[str] = frozenset({
+    "scout",
+    "codebase-researcher",
+    "observability",
+    "observability-and-instrumentation",
+})
+
+
+def is_security_critical_task(
+    agent_type: str = "",
     complexity: str = "medium",
     scope: str = "",
-    file_count: int = 0,
     has_security_impact: bool = False,
-    budget_mode: str = "balanced",
-    retry_count: int = 0,
-    desktop_available: bool = False,
-    read_only: bool = False,
-    prefer_desktop: bool = False,
-) -> dict:
-    """
-    SWE-Optimized 5-Tier + External Desktop Bridge Smart Router recommending optimal model,
-    reasoning effort, fallback, and 3-Stage Circuit Breaker metadata.
-    Supports budget_mode: 'balanced', 'speed_first', 'latency_sensitive',
-    'quality_first', 'cost_saving', 'hybrid_desktop', 'offload_heavy_to_desktop'.
-    Supports retry_count for 3-Stage SWE Fast-Retry & Escalation Circuit Breaker:
-      - Stage 1 (retry_count == 1): gemini-4-hydrogen (xhigh)
-      - Stage 2 (retry_count == 2): gemini-4-neon (high)
-      - Stage 3 (retry_count >= 3): gemini-4-carbon (high)
-    """
+) -> bool:
+    """Return True if task triggers Rule 1 Security & Frontier Guardrail (always Carbon high)."""
     agent = (agent_type or "").lower().strip()
     comp = (complexity or "medium").lower().strip()
     scope_lower = (scope or "").lower()
-    budget = (budget_mode or "balanced").lower().strip()
-    retries = max(0, int(retry_count or 0))
-    files = max(0, int(file_count or 0))
-
-    # =========================================================================
-    # RULE 1: STRICT SECURITY & FRONTIER GUARDRAIL (Zero-Downgrade Invariant)
-    # Checked FIRST regardless of budget_mode or retry_count.
-    # =========================================================================
-    is_security_task = (
-        has_security_impact
+    return (
+        bool(has_security_impact)
         or comp == "critical"
         or agent == "security-auditor"
         or (agent == "debugger" and comp == "critical")
-        or any(
-            k in scope_lower
-            for k in (
-                "vulnerability",
-                "cve",
-                "penetration",
-                "auth",
-                "crypto",
-                "owasp",
-                "rbac",
-                "jwt",
-                "migration",
-            )
-        )
-    )
-    if is_security_task:
-        return {
-            "status": "ok",
-            "recommendation": {
-                "model": "gemini-4-carbon",
-                "reasoning_effort": "high",
-                "tier": "frontier",
-                "rationale": "Critical-tier security audit, vulnerability modeling, or critical root-cause debugging requires Gemini 4 Carbon frontier reasoning.",
-                "estimated_cost_tier": "$$$$",
-                "fallback_model": "gemini-4-neon",
-            },
-        }
-
-    # =========================================================================
-    # RULE 2: 3-STAGE SWE CIRCUIT BREAKER ESCALATION
-    # Stage 1 (retry_count == 1): Fast self-heal on Hydrogen (xhigh)
-    # Stage 2 (retry_count == 2): SWE Escalation to Gemini 4 Neon (high)
-    # Stage 3 (retry_count >= 3): Apex Escalation to Gemini 4 Carbon (high)
-    # =========================================================================
-    if retries >= 3:
-        return {
-            "status": "ok",
-            "recommendation": {
-                "model": "gemini-4-carbon",
-                "reasoning_effort": "high",
-                "tier": "frontier",
-                "rationale": (
-                    f"Circuit breaker Stage 3 tripped after {retries} failed attempts. "
-                    "Apex-escalated to Gemini 4 Carbon (high effort) for frontier root-cause diagnosis."
-                ),
-                "estimated_cost_tier": "$$$$",
-                "fallback_model": "gemini-4-neon",
-                "circuit_breaker": {
-                    "status": "tripped",
-                    "stage": 3,
-                    "retries": retries,
-                    "retry_count": retries,
-                    "escalated_from": "gemini-4-neon",
-                    "escalated_to": "gemini-4-carbon",
-                },
-            },
-        }
-
-    if retries == 2:
-        return {
-            "status": "ok",
-            "recommendation": {
-                "model": "gemini-4-neon",
-                "reasoning_effort": "high",
-                "tier": "swe_frontier",
-                "rationale": (
-                    "Circuit breaker Stage 2 tripped after 2 failed attempts on Gemini 4 Hydrogen. "
-                    "Auto-escalated to Gemini 4 Neon (high effort — #1 Coding Agent at 2x Carbon speed)."
-                ),
-                "estimated_cost_tier": "$$$",
-                "fallback_model": "gemini-4-carbon",
-                "circuit_breaker": {
-                    "status": "tripped",
-                    "stage": 2,
-                    "retries": retries,
-                    "retry_count": retries,
-                    "escalated_from": "gemini-4-hydrogen",
-                    "escalated_to": "gemini-4-neon",
-                    "escalate_to": "gemini-4-carbon",
-                    "escalate_effort": "high",
-                },
-            },
-        }
-
-    if retries == 1:
-        return {
-            "status": "ok",
-            "recommendation": {
-                "model": "gemini-4-hydrogen",
-                "reasoning_effort": "xhigh",
-                "tier": "high_throughput",
-                "rationale": (
-                    "Circuit breaker Stage 1 self-heal (retry #1): elevated to Gemini 4 Hydrogen (xhigh) "
-                    "before Stage 2 Gemini 4 Neon escalation."
-                ),
-                "estimated_cost_tier": "$$$",
-                "fallback_model": "gemini-4-neon",
-                "circuit_breaker": {
-                    "status": "retrying",
-                    "stage": 1,
-                    "retries": retries,
-                    "retry_count": retries,
-                    "max_self_retries": 1,
-                    "escalate_to": "gemini-4-neon",
-                    "escalate_effort": "high",
-                },
-            },
-        }
-
-    # =========================================================================
-    # RULE 1.5: DESKTOP BRIDGE OFFLOAD GATE (Zero-API-Cost Heavy Synthesis)
-    # Evaluated AFTER Rule 1 (Security Guardrail) & Rule 2 (Circuit Breaker)
-    # Code-mutating workers (builder, test-engineer, ui-builder, frontend-engineer)
-    # never match and stay on the API fleet.
-    # =========================================================================
-    desktop_mode_requested = budget in ("hybrid_desktop", "offload_heavy_to_desktop") or bool(prefer_desktop)
-    desktop_eligible_agent = (
-        agent in ("spec-engineer", "task-planner", "code-reviewer")
-        or (
-            agent in ("scout", "codebase-researcher", "doc-generator", "debugger", "performance-auditor")
-            and bool(read_only)
-        )
-    )
-    if (
-        desktop_mode_requested
-        and bool(desktop_available)
-        and (files == 0 or bool(read_only))
-        and desktop_eligible_agent
-        and (comp in ("high", "critical") or budget == "offload_heavy_to_desktop" or bool(prefer_desktop))
-    ):
-        return {
-            "status": "ok",
-            "recommendation": {
-                "model": "gemini-desktop-app",
-                "reasoning_effort": None,
-                "tier": "external_desktop",
-                "execution_mode": "desktop_bridge",
-                "rationale": "Heavy non-mutating synthesis offloaded to local Gemini Desktop App ($0.00 AGY API token spend).",
-                "estimated_cost_tier": "$0",
-                "fallback_model": "gemini-4-neon",
-            },
-        }
-
-    desktop_fallback_note = (
-        " (Desktop bridge unavailable; routed to API fleet.)"
-        if (desktop_mode_requested and not desktop_available and desktop_eligible_agent)
-        else ""
+        or any(k in scope_lower for k in SECURITY_SCOPE_KEYWORDS)
     )
 
+
+def is_task_desktop_eligible(
+    agent_type: str = "",
+    complexity: str = "medium",
+    scope: str = "",
+    has_security_impact: bool = False,
+    budget_mode: str = "balanced",
+    retry_count: int = 0,
+    read_only: bool = False,
+    prefer_desktop: bool = False,
+) -> bool:
+    """Return True if task is eligible for peer execution on local Gemini Desktop App."""
+    agent = (agent_type or "").lower().strip()
+    budget = (budget_mode or "balanced").lower().strip()
+    retries = max(0, int(retry_count or 0))
+
+    if budget == "api_only" or retries >= 1:
+        return False
+    if is_security_critical_task(agent_type=agent, complexity=complexity, scope=scope, has_security_impact=has_security_impact):
+        return False
+
+    if agent in DESKTOP_CORE_PERSONAS:
+        return True
+
+    if agent in DESKTOP_SCOUT_PERSONAS:
+        if budget in ("speed_first", "latency_sensitive"):
+            return False
+        desktop_mode_requested = budget in ("hybrid_desktop", "offload_heavy_to_desktop") or bool(prefer_desktop)
+        return desktop_mode_requested and bool(read_only)
+
+    return False
+
+
+def _compute_desktop_allow_edits(agent: str, read_only: bool = False) -> bool:
+    """Determine whether Gemini Desktop task mode should authorize workspace file edits."""
+    if bool(read_only):
+        return False
+    if agent in DESKTOP_READ_ONLY_PERSONAS or agent in DESKTOP_SCOUT_PERSONAS:
+        return False
+    return True
+
+
+def _with_recommended_model(rec: dict[str, Any]) -> dict[str, Any]:
+    """Ensure recommendation payload exposes both 'model' and 'recommended_model' keys."""
+    enriched = dict(rec)
+    enriched["recommended_model"] = enriched["model"]
+    return enriched
+
+
+def _recommend_api_model(
+    agent: str,
+    comp: str,
+    files: int,
+    budget: str,
+    retries: int,
+) -> dict[str, Any]:
+    """Compute pure API fleet recommendation (Rules 3, 5 micro-tier, 4 bounded worker, 5 fallback)."""
     # =========================================================================
     # RULE 3: SWE BRAIN, ARCHITECTURE, REVIEW, DEBUGGING & MULTI-FILE REFACTORS
     # Gemini 4 Neon replaces Argon & daily non-security Carbon!
@@ -265,7 +199,7 @@ def recommend_model(
         "performance-auditor",
     )
     is_complex_builder = (
-        agent in ("builder", "ui-builder", "frontend-engineer")
+        agent in ("builder", "ui-builder", "frontend-engineer", "software-builder")
         and (files >= 4 or comp == "high")
     )
     if is_rule3_agent or is_complex_builder or comp == "high":
@@ -322,7 +256,7 @@ def recommend_model(
                 cost_tier = "$$$"
                 fallback = "gemini-4-neon"
         else:
-            # balanced (default) -> Gemini 4 Neon
+            # balanced / api_only -> Gemini 4 Neon
             model = "gemini-4-neon"
             effort = "medium" if agent in ("task-planner", "orchestrator", "performance-auditor") else "high"
             tier = "swe_frontier"
@@ -333,17 +267,14 @@ def recommend_model(
             cost_tier = "$$$"
             fallback = "gemini-4-hydrogen"
 
-        return {
-            "status": "ok",
-            "recommendation": {
-                "model": model,
-                "reasoning_effort": effort,
-                "tier": tier,
-                "rationale": rationale + desktop_fallback_note,
-                "estimated_cost_tier": cost_tier,
-                "fallback_model": fallback,
-            },
-        }
+        return _with_recommended_model({
+            "model": model,
+            "reasoning_effort": effort,
+            "tier": tier,
+            "rationale": rationale,
+            "estimated_cost_tier": cost_tier,
+            "fallback_model": fallback,
+        })
 
     # =========================================================================
     # RULE 5 (EXPLICIT MICRO-TIER PERSONAS): DOCS, CODE SIMPLIFIER & OBSERVABILITY
@@ -358,34 +289,29 @@ def recommend_model(
     )
     if is_micro_agent:
         if budget in ("speed_first", "latency_sensitive"):
-            return {
-                "status": "ok",
-                "recommendation": {
-                    "model": "gemini-4-hydrogen",
-                    "reasoning_effort": "low",
-                    "tier": "high_throughput",
-                    "rationale": "Micro-tier simplification, docs, or observability in speed-first mode dispatched to Gemini 4 Hydrogen (low)." + desktop_fallback_note,
-                    "estimated_cost_tier": "$$$",
-                    "fallback_model": "gemini-3.8-flash",
-                },
-            }
-        return {
-            "status": "ok",
-            "recommendation": {
-                "model": "gemini-3.8-flash",
-                "reasoning_effort": None,
-                "tier": "cost_efficient",
-                "rationale": "Docs, code simplification, or telemetry dispatched to Gemini 3.8 Flash (3.8-flash-lite default retired)." + desktop_fallback_note,
-                "estimated_cost_tier": "$",
-                "fallback_model": "gemini-4-hydrogen",
-            },
-        }
+            return _with_recommended_model({
+                "model": "gemini-4-hydrogen",
+                "reasoning_effort": "low",
+                "tier": "high_throughput",
+                "rationale": "Micro-tier simplification, docs, or observability in speed-first mode dispatched to Gemini 4 Hydrogen (low).",
+                "estimated_cost_tier": "$$$",
+                "fallback_model": "gemini-3.8-flash",
+            })
+        return _with_recommended_model({
+            "model": "gemini-3.8-flash",
+            "reasoning_effort": None,
+            "tier": "cost_efficient",
+            "rationale": "Docs, code simplification, or telemetry dispatched to Gemini 3.8 Flash (3.8-flash-lite default retired).",
+            "estimated_cost_tier": "$",
+            "fallback_model": "gemini-4-hydrogen",
+        })
 
     # =========================================================================
     # RULE 4: BOUNDED HIGH-VELOCITY CODING, TESTING & SCOUTING (198 tok/s)
     # =========================================================================
     is_builder_or_tester = agent in (
         "builder",
+        "software-builder",
         "test-engineer",
         "scout",
         "codebase-researcher",
@@ -444,43 +370,520 @@ def recommend_model(
                 "status": "active",
             }
 
-        rec = {
+        rec: dict[str, Any] = {
             "model": model,
             "reasoning_effort": effort,
             "tier": tier,
-            "rationale": rationale + desktop_fallback_note,
+            "rationale": rationale,
             "estimated_cost_tier": cost_tier,
             "fallback_model": fallback,
         }
         if cb_meta:
             rec["circuit_breaker"] = cb_meta
-        return {"status": "ok", "recommendation": rec}
+        return _with_recommended_model(rec)
 
     # =========================================================================
     # RULE 5 (FALLBACK): LOW-COMPLEXITY MICRO TASKS -> GEMINI 3.8 FLASH
     # =========================================================================
     if budget in ("speed_first", "latency_sensitive"):
+        return _with_recommended_model({
+            "model": "gemini-4-hydrogen",
+            "reasoning_effort": "low",
+            "tier": "high_throughput",
+            "rationale": "Low-complexity task in speed-first mode dispatched to Gemini 4 Hydrogen (low).",
+            "estimated_cost_tier": "$$$",
+            "fallback_model": "gemini-3.8-flash",
+        })
+    return _with_recommended_model({
+        "model": "gemini-3.8-flash",
+        "reasoning_effort": None,
+        "tier": "cost_efficient",
+        "rationale": "Low-complexity telemetry, doc formatting, or micro task dispatched to Gemini 3.8 Flash.",
+        "estimated_cost_tier": "$",
+        "fallback_model": "gemini-4-hydrogen",
+    })
+
+
+def recommend_model(
+    agent_type: str,
+    complexity: str = "medium",
+    scope: str = "",
+    file_count: int = 0,
+    has_security_impact: bool = False,
+    budget_mode: str = "balanced",
+    retry_count: int = 0,
+    desktop_available: bool = False,
+    read_only: bool = False,
+    prefer_desktop: bool = False,
+    desktop_queue_busy: bool = False,
+    current_desktop_share: float | None = None,
+    desktop_target_share: float = DEFAULT_DESKTOP_TARGET_SHARE,
+) -> dict:
+    """
+    SWE-Optimized 5-Tier + Peer Gemini Desktop App Smart Router recommending optimal model,
+    reasoning effort, fallback, 3-Stage Circuit Breaker metadata, and conditional 60% Desktop peer routing.
+    Supports budget_mode: 'balanced', 'speed_first', 'latency_sensitive',
+    'quality_first', 'cost_saving', 'hybrid_desktop', 'offload_heavy_to_desktop', 'api_only'.
+    Supports retry_count for 3-Stage SWE Fast-Retry & Escalation Circuit Breaker:
+      - Stage 1 (retry_count == 1): gemini-4-hydrogen (xhigh)
+      - Stage 2 (retry_count == 2): gemini-4-neon (high)
+      - Stage 3 (retry_count >= 3): gemini-4-carbon (high)
+    """
+    agent = (agent_type or "").lower().strip()
+    comp = (complexity or "medium").lower().strip()
+    budget = (budget_mode or "balanced").lower().strip()
+    retries = max(0, int(retry_count or 0))
+    files = max(0, int(file_count or 0))
+
+    # =========================================================================
+    # RULE 1: STRICT SECURITY & FRONTIER GUARDRAIL (Zero-Downgrade Invariant)
+    # Checked FIRST regardless of budget_mode, desktop_available, or retry_count.
+    # =========================================================================
+    if is_security_critical_task(
+        agent_type=agent,
+        complexity=comp,
+        scope=scope,
+        has_security_impact=has_security_impact,
+    ):
         return {
             "status": "ok",
-            "recommendation": {
-                "model": "gemini-4-hydrogen",
-                "reasoning_effort": "low",
-                "tier": "high_throughput",
-                "rationale": "Low-complexity task in speed-first mode dispatched to Gemini 4 Hydrogen (low)." + desktop_fallback_note,
-                "estimated_cost_tier": "$$$",
-                "fallback_model": "gemini-3.8-flash",
-            },
+            "recommendation": _with_recommended_model({
+                "model": "gemini-4-carbon",
+                "reasoning_effort": "high",
+                "tier": "frontier",
+                "rationale": "Critical-tier security audit, vulnerability modeling, or critical root-cause debugging requires Gemini 4 Carbon frontier reasoning.",
+                "estimated_cost_tier": "$$$$",
+                "fallback_model": "gemini-4-neon",
+            }),
         }
+
+    # =========================================================================
+    # RULE 2: 3-STAGE SWE CIRCUIT BREAKER ESCALATION
+    # Stage 1 (retry_count == 1): Fast self-heal on Hydrogen (xhigh)
+    # Stage 2 (retry_count == 2): SWE Escalation to Gemini 4 Neon (high)
+    # Stage 3 (retry_count >= 3): Apex Escalation to Gemini 4 Carbon (high)
+    # =========================================================================
+    if retries >= 3:
+        return {
+            "status": "ok",
+            "recommendation": _with_recommended_model({
+                "model": "gemini-4-carbon",
+                "reasoning_effort": "high",
+                "tier": "frontier",
+                "rationale": (
+                    f"Circuit breaker Stage 3 tripped after {retries} failed attempts. "
+                    "Apex-escalated to Gemini 4 Carbon (high effort) for frontier root-cause diagnosis."
+                ),
+                "estimated_cost_tier": "$$$$",
+                "fallback_model": "gemini-4-neon",
+                "circuit_breaker": {
+                    "status": "tripped",
+                    "stage": 3,
+                    "retries": retries,
+                    "retry_count": retries,
+                    "escalated_from": "gemini-4-neon",
+                    "escalated_to": "gemini-4-carbon",
+                },
+            }),
+        }
+
+    if retries == 2:
+        return {
+            "status": "ok",
+            "recommendation": _with_recommended_model({
+                "model": "gemini-4-neon",
+                "reasoning_effort": "high",
+                "tier": "swe_frontier",
+                "rationale": (
+                    "Circuit breaker Stage 2 tripped after 2 failed attempts on Gemini 4 Hydrogen. "
+                    "Auto-escalated to Gemini 4 Neon (high effort — #1 Coding Agent at 2x Carbon speed)."
+                ),
+                "estimated_cost_tier": "$$$",
+                "fallback_model": "gemini-4-carbon",
+                "circuit_breaker": {
+                    "status": "tripped",
+                    "stage": 2,
+                    "retries": retries,
+                    "retry_count": retries,
+                    "escalated_from": "gemini-4-hydrogen",
+                    "escalated_to": "gemini-4-neon",
+                    "escalate_to": "gemini-4-carbon",
+                    "escalate_effort": "high",
+                },
+            }),
+        }
+
+    if retries == 1:
+        return {
+            "status": "ok",
+            "recommendation": _with_recommended_model({
+                "model": "gemini-4-hydrogen",
+                "reasoning_effort": "xhigh",
+                "tier": "high_throughput",
+                "rationale": (
+                    "Circuit breaker Stage 1 self-heal (retry #1): elevated to Gemini 4 Hydrogen (xhigh) "
+                    "before Stage 2 Gemini 4 Neon escalation."
+                ),
+                "estimated_cost_tier": "$$$",
+                "fallback_model": "gemini-4-neon",
+                "circuit_breaker": {
+                    "status": "retrying",
+                    "stage": 1,
+                    "retries": retries,
+                    "retry_count": retries,
+                    "max_self_retries": 1,
+                    "escalate_to": "gemini-4-neon",
+                    "escalate_effort": "high",
+                },
+            }),
+        }
+
+    # Compute pure API peer recommendation first (serves as both fallback & spillover target)
+    api_rec = _recommend_api_model(agent=agent, comp=comp, files=files, budget=budget, retries=retries)
+
+    desktop_mode_requested = budget in ("hybrid_desktop", "offload_heavy_to_desktop") or bool(prefer_desktop)
+
+    if budget == "api_only" or not bool(desktop_available):
+        if not bool(desktop_available) and desktop_mode_requested and budget != "api_only":
+            eligible_if_ready = is_task_desktop_eligible(
+                agent_type=agent,
+                complexity=comp,
+                scope=scope,
+                has_security_impact=has_security_impact,
+                budget_mode=budget,
+                retry_count=retries,
+                read_only=read_only,
+                prefer_desktop=prefer_desktop,
+            )
+            if eligible_if_ready:
+                api_rec["rationale"] = api_rec["rationale"] + " (Desktop bridge unavailable; routed to API fleet.)"
+        return {"status": "ok", "recommendation": api_rec}
+
+    # =========================================================================
+    # 60% DESKTOP PEER SCHEDULER (desktop_available == True and budget != 'api_only')
+    # =========================================================================
+    is_eligible = is_task_desktop_eligible(
+        agent_type=agent,
+        complexity=comp,
+        scope=scope,
+        has_security_impact=has_security_impact,
+        budget_mode=budget,
+        retry_count=retries,
+        read_only=read_only,
+        prefer_desktop=prefer_desktop,
+    )
+    if not is_eligible:
+        return {"status": "ok", "recommendation": api_rec}
+
+    base_target = clamp_desktop_share(desktop_target_share, DEFAULT_DESKTOP_TARGET_SHARE)
+    effective_target_share = 1.0 if desktop_mode_requested else base_target
+    if effective_target_share <= 0.0:
+        return {"status": "ok", "recommendation": api_rec}
+
+    current_share_val: float | None = (
+        None
+        if current_desktop_share is None
+        else max(0.0, min(1.0, float(current_desktop_share)))
+    )
+    under_target = (current_share_val is None) or (current_share_val < effective_target_share)
+
+    if bool(desktop_queue_busy):
+        api_rec["rationale"] = api_rec["rationale"] + " (Desktop queue busy; spilled over to API fleet.)"
+        api_rec["desktop_spillover_reason"] = "queue_busy"
+        return {"status": "ok", "recommendation": api_rec}
+
+    if not under_target:
+        api_rec["rationale"] = (
+            api_rec["rationale"]
+            + f" (Desktop share {current_share_val:.2f} >= target {effective_target_share:.2f}; spilled over to API fleet.)"
+        )
+        api_rec["desktop_spillover_reason"] = "target_share_reached"
+        return {"status": "ok", "recommendation": api_rec}
+
+    is_heavy_stage = (
+        agent in ("spec-engineer", "task-planner", "code-reviewer", "performance-auditor", "doc-generator", "debugger")
+        or (agent in ("builder", "ui-builder", "frontend-engineer", "software-builder") and (files >= 3 or comp == "high"))
+    )
+
+    if desktop_mode_requested:
+        should_route_desktop = True
+    elif budget in ("speed_first", "latency_sensitive"):
+        should_route_desktop = is_heavy_stage
+    elif current_share_val is None:
+        # Stateless single-task balanced routing naturally yields ~60% Desktop / ~40% API
+        should_route_desktop = is_heavy_stage
+    else:
+        # Stateful share tracking: lift Desktop utilization toward target share (60%)
+        should_route_desktop = True
+
+    if not should_route_desktop:
+        return {"status": "ok", "recommendation": api_rec}
+
+    allow_edits = _compute_desktop_allow_edits(agent, read_only=bool(read_only))
+    fallback_m = api_rec["recommended_model"]
+    desktop_rec = _with_recommended_model({
+        "model": "gemini-desktop-app",
+        "reasoning_effort": None,
+        "tier": "external_desktop",
+        "execution_mode": "desktop_bridge",
+        "rationale": (
+            f"Peer-allocated to local Gemini Desktop App ($0.00 AGY API spend; "
+            f"mode=task, allow_edits={allow_edits}, target_share={effective_target_share:.2f}, fallback={fallback_m})."
+        ),
+        "estimated_cost_tier": "$0",
+        "fallback_model": fallback_m,
+        "fallback_reasoning_effort": api_rec.get("reasoning_effort"),
+        "allow_edits": allow_edits,
+        "current_desktop_share": current_share_val,
+        "desktop_target_share": round(effective_target_share, 4),
+        "target_desktop_share": round(effective_target_share, 4),
+        "desktop_execution": {
+            "mode": "task",
+            "background": True,
+            "allow_edits": allow_edits,
+            "target_share": round(effective_target_share, 4),
+            "current_share": current_share_val,
+            "queue_busy": bool(desktop_queue_busy),
+        },
+    })
+    return {"status": "ok", "recommendation": desktop_rec}
+
+
+def _desktop_priority_score(
+    idx: int,
+    agent: str,
+    comp: str,
+    files: int,
+    parallel_group: str,
+    api_model: str,
+) -> tuple[int, int]:
+    """Rank eligible DAG tasks by highest API token savings and sequential safety."""
+    model_weights = {
+        "gemini-4-carbon": 400,
+        "gemini-4-neon": 360,
+        "gemini-4-hydrogen": 200,
+        "gemini-3.8-flash": 60,
+    }
+    comp_weights = {"high": 120, "medium": 60, "low": 20}
+    persona_weights = {
+        "spec-engineer": 100,
+        "task-planner": 100,
+        "code-reviewer": 100,
+        "performance-auditor": 95,
+        "debugger": 80,
+        "doc-generator": 70,
+        "builder": 50 + min(50, files * 10),
+        "software-builder": 50 + min(50, files * 10),
+        "ui-builder": 50 + min(50, files * 10),
+        "frontend-engineer": 50 + min(50, files * 10),
+        "test-engineer": 35,
+        "code-simplifier": 30,
+        "scout": 10,
+        "codebase-researcher": 10,
+    }
+    score = (
+        model_weights.get(api_model, 100)
+        + comp_weights.get(comp, 40)
+        + persona_weights.get(agent, 25)
+        + (0 if parallel_group else 40)
+    )
+    return (score, -idx)
+
+
+def allocate_dag_models(
+    tasks: list[dict],
+    desktop_available: bool = False,
+    desktop_target_share: float = DEFAULT_DESKTOP_TARGET_SHARE,
+    existing_desktop_share: float | None = None,
+    budget_mode: str = "balanced",
+) -> dict[str, Any]:
+    """
+    Batch DAG Fleet Allocator distributing tasks across Gemini Desktop App (~60% target)
+    and API models (Neon / Hydrogen / Carbon / Flash) while enforcing:
+      1. Rule 1 Security Guardrail (Carbon high) & Rule 2 Circuit Breaker.
+      2. Parallel Fan-Out Concurrency Constraint: at most 1 task per shared parallel_group
+         is routed to gemini-desktop-app so the single-window GUI mutex never serializes a wave.
+      3. Graceful 100% API fallback when desktop_available=False or budget_mode='api_only'.
+    """
+    task_list = list(tasks or [])
+    target_share = clamp_desktop_share(desktop_target_share, DEFAULT_DESKTOP_TARGET_SHARE)
+    default_budget = (budget_mode or "balanced").lower().strip()
+    effective_desktop = bool(desktop_available) and default_budget != "api_only" and target_share > 0.0
+
+    prepared: list[dict[str, Any]] = []
+    eligible_indices: list[int] = []
+
+    for idx, raw_task in enumerate(task_list):
+        t = dict(raw_task or {})
+        task_id = str(t.get("task_id") or f"TASK-{idx + 1}")
+        agent_raw = str(t.get("agent_type") or "builder")
+        agent = agent_raw.lower().strip()
+        comp = str(t.get("complexity") or t.get("tier") or "medium").lower().strip()
+        scope = str(t.get("scope") or "")
+        files = max(0, int(t.get("file_count") or t.get("files") or 0))
+        has_sec = bool(t.get("has_security_impact") or t.get("security_impact") or False)
+        retries = max(0, int(t.get("retry_count") or t.get("retries") or 0))
+        read_only = bool(t.get("read_only", False))
+        prefer_desktop = bool(t.get("prefer_desktop", False))
+        parallel_group = str(t.get("parallel_group") or t.get("group") or "").strip()
+        task_budget = str(t.get("budget_mode") or default_budget).lower().strip()
+
+        api_res = recommend_model(
+            agent_type=agent_raw,
+            complexity=comp,
+            scope=scope,
+            file_count=files,
+            has_security_impact=has_sec,
+            budget_mode=("balanced" if task_budget == "api_only" else task_budget),
+            retry_count=retries,
+            desktop_available=False,
+            read_only=read_only,
+        )["recommendation"]
+
+        is_elig = (
+            effective_desktop
+            and task_budget != "api_only"
+            and is_task_desktop_eligible(
+                agent_type=agent,
+                complexity=comp,
+                scope=scope,
+                has_security_impact=has_sec,
+                budget_mode=task_budget,
+                retry_count=retries,
+                read_only=read_only,
+                prefer_desktop=prefer_desktop,
+            )
+        )
+        if is_elig:
+            eligible_indices.append(idx)
+
+        prepared.append({
+            "idx": idx,
+            "task_id": task_id,
+            "agent_type": agent_raw,
+            "agent": agent,
+            "comp": comp,
+            "files": files,
+            "read_only": read_only,
+            "parallel_group": parallel_group,
+            "api_rec": api_res,
+            "eligible": is_elig,
+            "score": _desktop_priority_score(
+                idx=idx,
+                agent=agent,
+                comp=comp,
+                files=files,
+                parallel_group=parallel_group,
+                api_model=api_res["model"],
+            ),
+        })
+
+    selected_desktop: set[int] = set()
+    if effective_desktop and eligible_indices:
+        if existing_desktop_share is not None and float(existing_desktop_share) >= target_share:
+            desktop_quota = 0
+        else:
+            desktop_quota = round(len(eligible_indices) * target_share)
+
+        if desktop_quota > 0:
+            ranked = sorted(eligible_indices, key=lambda i: prepared[i]["score"], reverse=True)
+            used_parallel_groups: set[str] = set()
+            for idx in ranked:
+                if len(selected_desktop) >= desktop_quota:
+                    break
+                pg = prepared[idx]["parallel_group"]
+                if pg and pg in used_parallel_groups:
+                    continue
+                selected_desktop.add(idx)
+                if pg:
+                    used_parallel_groups.add(pg)
+
+    allocations: list[dict[str, Any]] = []
+    for item in prepared:
+        idx = item["idx"]
+        api_rec = item["api_rec"]
+        if idx in selected_desktop:
+            allow_edits = _compute_desktop_allow_edits(item["agent"], read_only=item["read_only"])
+            allocations.append({
+                "task_id": item["task_id"],
+                "agent_type": item["agent_type"],
+                "parallel_group": item["parallel_group"],
+                "model": "gemini-desktop-app",
+                "assigned_model": "gemini-desktop-app",
+                "recommended_model": "gemini-desktop-app",
+                "reasoning_effort": None,
+                "tier": "external_desktop",
+                "execution_mode": "desktop_bridge",
+                "estimated_cost_tier": "$0",
+                "fallback_model": api_rec["model"],
+                "fallback_reasoning_effort": api_rec.get("reasoning_effort"),
+                "desktop_eligible": True,
+                "allow_edits": allow_edits,
+                "concurrency_safe": True,
+                "concurrency_note": "SAFE (1/wave)" if item["parallel_group"] else "SAFE",
+                "desktop_execution": {
+                    "mode": "task",
+                    "background": True,
+                    "allow_edits": allow_edits,
+                    "target_share": target_share,
+                },
+                "rationale": (
+                    f"DAG peer-allocated to Gemini Desktop App ($0.00 API spend, mode=task, "
+                    f"allow_edits={allow_edits}, fallback={api_rec['model']})."
+                ),
+            })
+        else:
+            alloc = {
+                "task_id": item["task_id"],
+                "agent_type": item["agent_type"],
+                "parallel_group": item["parallel_group"],
+                "model": api_rec["model"],
+                "assigned_model": api_rec["model"],
+                "recommended_model": api_rec["model"],
+                "reasoning_effort": api_rec.get("reasoning_effort"),
+                "tier": api_rec.get("tier"),
+                "execution_mode": "api",
+                "estimated_cost_tier": api_rec.get("estimated_cost_tier"),
+                "fallback_model": api_rec.get("fallback_model"),
+                "desktop_eligible": item["eligible"],
+                "concurrency_safe": True,
+                "concurrency_note": "SAFE",
+                "rationale": api_rec.get("rationale", ""),
+            }
+            if api_rec.get("circuit_breaker"):
+                alloc["circuit_breaker"] = api_rec["circuit_breaker"]
+            allocations.append(alloc)
+
+    desktop_count = len(selected_desktop)
+    total_count = len(task_list)
+    api_count = total_count - desktop_count
+    eligible_count = len(eligible_indices)
+    achieved_share = round(desktop_count / eligible_count, 4) if eligible_count > 0 else 0.0
+    overall_share = round(desktop_count / total_count, 4) if total_count > 0 else 0.0
+
     return {
         "status": "ok",
-        "recommendation": {
-            "model": "gemini-3.8-flash",
-            "reasoning_effort": None,
-            "tier": "cost_efficient",
-            "rationale": "Low-complexity telemetry, doc formatting, or micro task dispatched to Gemini 3.8 Flash." + desktop_fallback_note,
-            "estimated_cost_tier": "$",
-            "fallback_model": "gemini-4-hydrogen",
+        "desktop_available": effective_desktop,
+        "target_desktop_share": target_share,
+        "desktop_target_share": target_share,
+        "achieved_desktop_share": achieved_share,
+        "overall_desktop_share": overall_share,
+        "eligible_task_count": eligible_count,
+        "total_task_count": total_count,
+        "desktop_task_count": desktop_count,
+        "api_task_count": api_count,
+        "concurrency_safe": True,
+        "summary": {
+            "total_tasks": total_count,
+            "eligible_tasks": eligible_count,
+            "desktop_tasks": desktop_count,
+            "api_tasks": api_count,
+            "achieved_desktop_share": achieved_share,
+            "target_desktop_share": target_share,
+            "parallel_group_safe": True,
+            "desktop_available": effective_desktop,
         },
+        "allocations": allocations,
     }
 
 

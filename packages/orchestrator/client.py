@@ -38,6 +38,17 @@ def _normalize_desktop_driver(driver: Optional[str]) -> str:
     return val
 
 
+def _to_pct(val: Any, default_ratio: float = 0.0) -> int:
+    """Convert a 0.0-1.0 ratio or 0-100 percentage into a rounded integer percentage."""
+    try:
+        num = float(default_ratio if val is None else val)
+    except (TypeError, ValueError):
+        num = default_ratio
+    if 0.0 <= num <= 1.0:
+        return int(round(num * 100))
+    return int(round(num))
+
+
 class OrchestratorClient:
     """Client for interacting with the Multi-Agent Orchestrator Server."""
 
@@ -194,6 +205,8 @@ class OrchestratorClient:
         desktop_available: Optional[bool] = None,
         read_only: bool = False,
         prefer_desktop: bool = False,
+        desktop_target_share: float = 0.60,
+        desktop_queue_busy: Optional[bool] = None,
         **kwargs,
     ) -> dict:
         """Call POST /api/router/recommend to dynamically recommend model and reasoning effort."""
@@ -203,6 +216,8 @@ class OrchestratorClient:
         desk_avail = kwargs.get("desktop_available", desktop_available)
         ro = kwargs.get("read_only", read_only)
         pref_desk = kwargs.get("prefer_desktop", prefer_desktop)
+        target_share = kwargs.get("target_desktop_share", desktop_target_share)
+        queue_busy = kwargs.get("queue_busy", desktop_queue_busy)
         payload: dict[str, Any] = {
             "agent_type": agent_type,
             "complexity": complexity,
@@ -211,9 +226,12 @@ class OrchestratorClient:
             "has_security_impact": sec_impact,
             "budget_mode": budget_mode,
             "retry_count": retries,
+            "desktop_target_share": float(target_share if target_share is not None else 0.60),
         }
         if desk_avail is not None:
             payload["desktop_available"] = bool(desk_avail)
+        if queue_busy is not None:
+            payload["desktop_queue_busy"] = bool(queue_busy)
         if ro:
             payload["read_only"] = True
         if pref_desk:
@@ -232,6 +250,8 @@ class OrchestratorClient:
         desktop_available: Optional[bool] = None,
         read_only: bool = False,
         prefer_desktop: bool = False,
+        desktop_target_share: float = 0.60,
+        desktop_queue_busy: Optional[bool] = None,
         **kwargs,
     ) -> dict:
         """Alias for recommend_model matching plan specification."""
@@ -241,6 +261,8 @@ class OrchestratorClient:
         desk_avail = kwargs.pop("desktop_available", desktop_available)
         ro = kwargs.pop("read_only", read_only)
         pref_desk = kwargs.pop("prefer_desktop", prefer_desktop)
+        target_share = kwargs.pop("target_desktop_share", desktop_target_share)
+        queue_busy = kwargs.pop("queue_busy", desktop_queue_busy)
         return self.recommend_model(
             agent_type=agent_type,
             complexity=complexity,
@@ -252,8 +274,47 @@ class OrchestratorClient:
             desktop_available=desk_avail,
             read_only=ro,
             prefer_desktop=pref_desk,
+            desktop_target_share=target_share,
+            desktop_queue_busy=queue_busy,
             **kwargs,
         )
+
+    def allocate_dag(
+        self,
+        tasks: Optional[List[Dict[str, Any]]] = None,
+        desktop_available: Optional[bool] = None,
+        desktop_target_share: float = 0.60,
+        apply: bool = False,
+        budget_mode: str = "balanced",
+        desktop_queue_busy: Optional[bool] = None,
+    ) -> dict:
+        """Allocate pending DAG tasks across Gemini Desktop App and API models (POST /api/router/allocate-dag)."""
+        if tasks is None:
+            state = self.get_state()
+            if isinstance(state, dict) and "error" in state:
+                return state
+            raw_tasks = state.get("tasks", []) if isinstance(state, dict) else []
+            if isinstance(raw_tasks, dict):
+                raw_tasks = list(raw_tasks.values())
+            task_list = [
+                t for t in raw_tasks
+                if isinstance(t, dict) and str(t.get("status", "pending")).lower() == "pending"
+            ]
+        else:
+            task_list = list(tasks)
+
+        payload: dict[str, Any] = {
+            "tasks": task_list,
+            "desktop_target_share": float(desktop_target_share if desktop_target_share is not None else 0.60),
+            "apply": bool(apply),
+            "budget_mode": budget_mode,
+        }
+        if desktop_available is not None:
+            payload["desktop_available"] = bool(desktop_available)
+        if desktop_queue_busy is not None:
+            payload["desktop_queue_busy"] = bool(desktop_queue_busy)
+
+        return self._post("/api/router/allocate-dag", payload)
 
     def get_ready_tasks(self) -> dict:
         """Retrieve ready and unblocked tasks from the DAG Ready Queue (GET /api/dag/ready)."""
@@ -596,8 +657,9 @@ def main():
             "cost_first",
             "hybrid_desktop",
             "offload_heavy_to_desktop",
+            "api_only",
         ],
-        help="Routing optimization mode (balanced, quality_first, speed_first, latency_sensitive, cost_saving, cost_first, hybrid_desktop, offload_heavy_to_desktop, default: balanced)",
+        help="Routing optimization mode (balanced, quality_first, speed_first, latency_sensitive, cost_saving, cost_first, hybrid_desktop, offload_heavy_to_desktop, api_only, default: balanced)",
     )
     recommend_parser.add_argument(
         "--retry-count",
@@ -607,10 +669,38 @@ def main():
         default=0,
         help="Prior failure retry count for 3-Stage Circuit Breaker (0=Hydrogen, 1=Hydrogen xhigh, 2=Neon high, 3+=Carbon high, default: 0)",
     )
-    recommend_parser.add_argument(
+    rec_desktop_group = recommend_parser.add_mutually_exclusive_group()
+    rec_desktop_group.add_argument(
         "--desktop-available",
-        action="store_true",
+        dest="desktop_available",
+        action="store_const",
+        const=True,
+        default=None,
         help="Indicate local Gemini Desktop App bridge is ready for offload",
+    )
+    rec_desktop_group.add_argument(
+        "--no-desktop",
+        "--api-only",
+        dest="desktop_available",
+        action="store_const",
+        const=False,
+        help="Disable Desktop App offload and force pure API model routing",
+    )
+    recommend_parser.add_argument(
+        "--target-desktop-share",
+        dest="target_desktop_share",
+        type=float,
+        default=0.60,
+        help="Target Gemini Desktop App peer share ratio 0.0-1.0 (default: 0.60)",
+    )
+    recommend_parser.add_argument(
+        "--desktop-queue-busy",
+        "--queue-busy",
+        dest="desktop_queue_busy",
+        action="store_const",
+        const=True,
+        default=None,
+        help="Indicate local Gemini Desktop App queue is currently busy",
     )
     recommend_parser.add_argument(
         "--read-only",
@@ -628,6 +718,49 @@ def main():
         choices=["json", "text"],
         default="json",
         help="Output format (json, text, default: json)",
+    )
+
+    # allocate-dag
+    allocate_dag_parser = subparsers.add_parser(
+        "allocate-dag",
+        aliases=["allocate_dag"],
+        help="Allocate pending DAG tasks across Gemini Desktop App (60%% target) and API models",
+    )
+    allocate_dag_parser.add_argument(
+        "--target-desktop-share",
+        dest="target_desktop_share",
+        type=float,
+        default=0.60,
+        help="Target Gemini Desktop App peer share ratio 0.0-1.0 (default: 0.60)",
+    )
+    alloc_desktop_group = allocate_dag_parser.add_mutually_exclusive_group()
+    alloc_desktop_group.add_argument(
+        "--desktop-available",
+        dest="desktop_available",
+        action="store_const",
+        const=True,
+        default=None,
+        help="Assume local Gemini Desktop App bridge is ready",
+    )
+    alloc_desktop_group.add_argument(
+        "--no-desktop",
+        "--api-only",
+        dest="desktop_available",
+        action="store_const",
+        const=False,
+        help="Disable Desktop App offload and route 100%% to API models",
+    )
+    allocate_dag_parser.add_argument(
+        "--apply",
+        action="store_true",
+        help="Persist assigned models to pending tasks on the Orchestrator server",
+    )
+    allocate_dag_parser.add_argument("--json", action="store_true", help="Output raw JSON response")
+    allocate_dag_parser.add_argument(
+        "--format",
+        choices=["text", "json"],
+        default="text",
+        help="Output format (text, json, default: text)",
     )
 
     # next-ready
@@ -939,9 +1072,11 @@ def main():
             has_security_impact=args.security_impact,
             budget_mode=args.budget_mode,
             retry_count=args.retry_count,
-            desktop_available=True if args.desktop_available else None,
+            desktop_available=args.desktop_available,
             read_only=args.read_only,
             prefer_desktop=args.prefer_desktop,
+            desktop_target_share=args.target_desktop_share,
+            desktop_queue_busy=args.desktop_queue_busy,
         )
         if "error" in res:
             print(json.dumps(res, indent=2))
@@ -956,6 +1091,17 @@ def main():
                 print(f"Execution Mode:    {rec.get('execution_mode')}")
             print(f"Cost Tier:         {rec.get('estimated_cost_tier', '-')}")
             print(f"Fallback Model:    {rec.get('fallback_model', '-')}")
+            if str(rec.get("model", "")).lower() == "gemini-desktop-app":
+                cur_raw = rec.get("desktop_share", rec.get("current_desktop_share", res.get("desktop_share", 0.0)))
+                tgt_raw = rec.get("desktop_target_share", rec.get("target_desktop_share", args.target_desktop_share))
+                cur_pct = _to_pct(cur_raw)
+                tgt_pct = _to_pct(tgt_raw)
+                fallback_m = rec.get("fallback_model", "-")
+                allow_edits = bool(rec.get("allow_edits", rec.get("desktop_allow_edits", False)))
+                print(
+                    f"Desktop Share: current {cur_pct}% / target {tgt_pct}% | "
+                    f"Fallback: {fallback_m} | Allow Edits: {allow_edits}"
+                )
             if rec.get("circuit_breaker"):
                 cb = rec["circuit_breaker"]
                 cb_status = str(cb.get("status", "unknown")).lower()
@@ -978,6 +1124,70 @@ def main():
                     s_lbl = f"Stage {stage if stage is not None else 0}/3 | "
                     print(f"Circuit Breaker:   {cb_status.upper()} ({s_lbl}retries: {retries}, escalate_to: {cb.get('escalate_to', 'gemini-4-neon')})")
             print(f"Rationale:         {rec.get('rationale', '')}")
+        else:
+            print(json.dumps(res, indent=2))
+
+    elif args.command in ("allocate-dag", "allocate_dag"):
+        res = client.allocate_dag(
+            tasks=None,
+            desktop_available=args.desktop_available,
+            desktop_target_share=args.target_desktop_share,
+            apply=args.apply,
+        )
+        if "error" in res:
+            print(json.dumps(res, indent=2))
+            sys.exit(1)
+        if args.format == "text" and not args.json:
+            allocs = res.get("allocations") or res.get("assignments") or res.get("tasks") or []
+            summary = res.get("summary") or {}
+            total_cnt = summary.get("total_tasks", len(allocs))
+            desktop_cnt = summary.get(
+                "desktop_tasks",
+                summary.get(
+                    "desktop_count",
+                    sum(1 for a in allocs if "desktop" in str(a.get("assigned_model") or a.get("model") or "").lower()),
+                ),
+            )
+            achieved_raw = summary.get(
+                "achieved_desktop_share",
+                summary.get(
+                    "desktop_share",
+                    res.get("achieved_desktop_share", (desktop_cnt / total_cnt) if total_cnt > 0 else 0.0),
+                ),
+            )
+            target_raw = summary.get(
+                "target_desktop_share",
+                summary.get("desktop_target_share", res.get("desktop_target_share", args.target_desktop_share)),
+            )
+            achieved_pct = _to_pct(achieved_raw)
+            target_pct = _to_pct(target_raw)
+            pg_safe = summary.get("parallel_group_safe", summary.get("concurrency_safe", res.get("concurrency_safe", True)))
+            desk_ready = summary.get("desktop_available", res.get("desktop_available"))
+
+            print("=== DAG Multi-Model Peer Allocation ===")
+            print(
+                f"Desktop Ready: {desk_ready if desk_ready is not None else 'auto'} | "
+                f"Achieved Desktop Share: {achieved_pct}% ({desktop_cnt}/{total_cnt} tasks) vs {target_pct}% target | "
+                f"Parallel-Group Safety: {'SAFE' if pg_safe else 'CONFLICT'}"
+            )
+            if args.apply or summary.get("applied") or res.get("applied"):
+                print("Applied:       True (persisted assigned models to pending tasks on server)")
+            print()
+            if not allocs:
+                print("No pending tasks to allocate.")
+            else:
+                print(f"{'Task ID':<12} {'Agent':<20} {'Assigned Model':<22} {'Effort':<8} {'Group':<18} {'Concurrency':<14} {'Mode'}")
+                print("-" * 112)
+                for a in allocs:
+                    tid = str(a.get("task_id", "-"))
+                    agent = str(a.get("agent_type", "-"))
+                    model = str(a.get("assigned_model") or a.get("model") or "-")
+                    effort = str(a.get("reasoning_effort") or "-")
+                    group = str(a.get("parallel_group") or "-")
+                    mode = str(a.get("execution_mode") or ("desktop_bridge" if "desktop" in model.lower() else "api"))
+                    safe_val = a.get("concurrency_safe", a.get("parallel_safe", True))
+                    safety_note = a.get("concurrency_note") or ("SAFE" if safe_val else "SERIALIZED")
+                    print(f"{tid:<12} {agent:<20} {model:<22} {effort:<8} {group:<18} {str(safety_note):<14} {mode}")
         else:
             print(json.dumps(res, indent=2))
 

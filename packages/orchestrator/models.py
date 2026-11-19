@@ -6,9 +6,28 @@ Part of Antigravity Multi-Agent Orchestrator.
 
 from __future__ import annotations
 
+import os
+
 USD_TO_VND_RATE: float = 25400.0
 
 VALID_REASONING_EFFORTS: set[str] = {"low", "medium", "high", "xhigh"}
+
+
+def clamp_desktop_share(value: float | str | None, default: float = 0.60) -> float:
+    """Parse and clamp a Desktop peer allocation target share into [0.0, 1.0]."""
+    if value is None or str(value).strip() == "":
+        return max(0.0, min(1.0, float(default)))
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return max(0.0, min(1.0, float(default)))
+    return max(0.0, min(1.0, parsed))
+
+
+DEFAULT_DESKTOP_TARGET_SHARE: float = clamp_desktop_share(
+    os.environ.get("ORCHESTRATOR_DESKTOP_SHARE"),
+    0.60,
+)
 
 MODEL_REGISTRY: dict[str, dict] = {
     # 1. Tier 1: Gemini 4 Carbon (Frontier Reasoning & Security Guardrail)
@@ -219,14 +238,26 @@ EXTERNAL_WORKERS: dict[str, dict] = {
         "tier": "external_desktop",
         "execution_mode": "desktop_bridge",
         "description": (
-            "Cross-platform local Gemini Desktop GUI worker (macOS/Windows/Linux) "
-            "for zero-API-cost deep synthesis and second-opinion reasoning."
+            "Cross-platform local Gemini Desktop GUI peer worker (macOS/Windows/Linux) "
+            "for zero-API-cost SWE execution (mode=task, allow_edits=True/False) and deep synthesis."
         ),
         "rates": {"in": 0.0, "out": 0.0, "cache": 0.0},
         "baseline_comparison_model": "gemini-4-carbon",
         "supported_reasoning_efforts": [],
         "default_reasoning_effort": None,
         "max_context_tokens": 1_048_576,
+        "default_mode": "task",
+        "supported_modes": ["task", "chat"],
+        "supports_allow_edits": True,
+        "allow_edits_modes": [True, False],
+        "default_target_share": DEFAULT_DESKTOP_TARGET_SHARE,
+        "peer_routing": {
+            "mode": "task",
+            "allow_edits": [True, False],
+            "default_target_share": DEFAULT_DESKTOP_TARGET_SHARE,
+            "requires_app_ready": True,
+            "single_window_mutex": True,
+        },
         "ui_badge": {
             "bg": "bg-teal-950/60",
             "border": "border-teal-500/40",
@@ -234,7 +265,19 @@ EXTERNAL_WORKERS: dict[str, dict] = {
             "dot": "bg-teal-400",
             "label": "Gemini Desktop App",
         },
-        "target_personas": ["spec-engineer", "code-reviewer", "debugger", "task-planner"],
+        "target_personas": [
+            "spec-engineer",
+            "task-planner",
+            "code-reviewer",
+            "debugger",
+            "builder",
+            "test-engineer",
+            "doc-generator",
+            "performance-auditor",
+            "ui-builder",
+            "frontend-engineer",
+            "code-simplifier",
+        ],
     }
 }
 
@@ -402,11 +445,17 @@ def compute_desktop_quota_saved(
     output_chars: int,
     baseline_model: str = "gemini-4-carbon",
 ) -> dict:
-    """Estimate equivalent API spend saved (USD & VND) by offloading to Gemini Desktop App."""
+    """
+    Estimate equivalent API spend saved (USD & VND) by offloading to Gemini Desktop App.
+    Supports baseline_model such as 'gemini-4-carbon' (default) or 'gemini-4-neon'.
+    """
     est_in = (max(0, int(input_chars or 0)) + 3) // 4
     est_out = (max(0, int(output_chars or 0)) + 3) // 4
-    canon_base = normalize_model_name(baseline_model)
-    rates = MODEL_REGISTRY.get(canon_base, MODEL_REGISTRY["gemini-4-carbon"])["rates"]
+    raw_base = baseline_model if baseline_model else "gemini-4-carbon"
+    canon_base = normalize_model_name(raw_base)
+    if canon_base not in MODEL_REGISTRY:
+        canon_base = "gemini-4-carbon"
+    rates = MODEL_REGISTRY[canon_base]["rates"]
     saved_usd = round((est_in / 1_000_000.0) * rates["in"] + (est_out / 1_000_000.0) * rates["out"], 4)
     saved_vnd = round(saved_usd * USD_TO_VND_RATE)
     return {
