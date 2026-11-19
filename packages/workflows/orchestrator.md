@@ -23,7 +23,9 @@ Start full-session Multi-Agent Orchestrator mode:
    - ✦ **Tier 2b: Legacy Deep Reasoning (`gemini-4-argon`, `reasoning_effort: medium | high`)**: Superseded by `gemini-4-neon` in default SWE routing; retained for historical ledger compatibility & legacy fallback. Rates: $1.25 / 1M in, $5.00 / 1M out, $0.3125 / 1M cache *($2/$10 → $4/$20 Dec 1, 2026)*.
    - ⚡ **Tier 3: High-Throughput Workhorse (`gemini-4-hydrogen`, `reasoning_effort: low | medium | high | xhigh`)**: Ultra-fast workhorse (198 tok/s, ~2x faster than Neon without ~40s deep-thinking TTFT) for bounded parallel `builder` slices (`<= 3` files), `test-engineer`, `scout`, and UI iteration (~24% quota saved when paired with `Orchestrator (Neon)`). Rates: $1.50 / 1M in, $7.50 / 1M out, $0.075 / 1M cache (95% cache savings).
    - ⚡ **Tier 4: Cost-Efficient & Active Micro-Tier (`gemini-3.8-flash`, `reasoning_effort: low | medium | high`)**: Cost-first parallel scaffolding, `code-simplifier` (`low`), `doc-generator`, and active telemetry/linting default (replaces absent `gemini-3.8-flash-lite` default). Live rates: $0.75 / 1M in, $3.75 / 1M out, $0.075 / 1M cache. *(Legacy `gemini-3.8-flash-lite` is deprecated/DB-alias only).*
-   - 🖥️ **External Heavy-Analysis Offload Tier (`gemini-desktop-app` via `gemini-desktop-worker`)**: Local cross-platform Gemini Desktop App bridge (`macos_ax` / `windows_uia` / `linux_pwa` / `mock`) for `$0.00` AGY API spend on heavy **read-only** synthesis (`spec-engineer`, `task-planner`, `code-reviewer`, read-only `debugger`/`scout`) under `--budget-mode hybrid_desktop` or `offload_heavy_to_desktop`. Pre-flight `SecretRedactor` scrubs credentials, Clipboard Save/Restore protects user clipboard (`<= 300ms`), and outputs write to `docs/reports/desktop_worker/{job_id}.md` pointers. *(Rule 1 Security Guardrail & Stage 3 file-editing builders NEVER offload to Desktop).*
+   - 🖥️ **Conditional 60% Peer Model (`gemini-desktop-app` via `gemini-desktop-worker`)**: Controlled by the **Pre-Flight Detection Gate (`desktop-doctor` / `GET /api/desktop/status`)**:
+     - **When Gemini Desktop App IS installed & ready (`ready == true` on macOS or Windows)**: `gemini-desktop-app` operates as a **first-class peer model** (`mode="task"`, `background=True`, `allow_edits=True/False`, `0` focus switches, `$0.00` AGY API token spend) prioritized for **~60% of total SWE workload** (`ORCHESTRATOR_DESKTOP_SHARE=0.60`): sequential heavy stages (`spec-engineer`, `task-planner`, `code-reviewer`, `debugger`, `performance-auditor`, `doc-generator`) + **at most 1 heavy builder per parallel `parallel_group`** (so `Gemini.app`'s single-window FIFO lock NEVER blocks concurrent Fan-Out). The remaining **~40%** runs concurrently on AGY API (`gemini-4-hydrogen` `198 tok/s` for sibling parallel builders/testers/scouts, `gemini-4-neon` spillover when Desktop queue is busy, and `gemini-4-carbon` `high` strictly locked on Rule 1 Security Audits).
+     - **When Gemini Desktop App is NOT installed or NOT ready (`ready == false`, e.g., missing app or locked screen)** — or `--no-desktop` / `--api-only` is passed: Automatically and seamlessly falls back **100% to the pure API fleet (`Gemini 4 Neon` + `Gemini 4 Hydrogen` + `Gemini 4 Carbon` + `Gemini 3.8 Flash`)** just as before.
 
 4. **3-Stage Fast-Retry & Escalation Circuit Breaker**:
    - **Stage 1 (`retry_count == 1`)**: Hydrogen builders & testers perform 1 fast self-healing turn (`effort: xhigh`).
@@ -39,9 +41,12 @@ Start full-session Multi-Agent Orchestrator mode:
 6. **Token Telemetry & CLI Subcommands**:
    - Query smart recommendations (including `hybrid_desktop` / `offload_heavy_to_desktop`):
      `python3 packages/orchestrator/client.py recommend --agent <AGENT> --complexity <low|medium|high|critical> [--budget-mode <balanced|speed_first|quality_first|cost_saving|hybrid_desktop|offload_heavy_to_desktop>] [--desktop-available] [--read-only] [--retry-count <N>] [--security-impact]`
-   - Check Gemini Desktop App readiness & dispatch bounded read-only analysis (`$0.00` API spend):
+   - Check Gemini Desktop App readiness, allocate DAG with 60% conditional peer share (or force pure API fallback), & dispatch (`$0.00` API spend, `0` focus switches):
      `python3 packages/orchestrator/client.py desktop-doctor --format text`
-     `python3 packages/orchestrator/client.py desktop-ask --task <TASK_ID> --prompt-file <PATH> --driver auto`
+     `ORCHESTRATOR_DESKTOP_SHARE=0.60 python3 packages/orchestrator/client.py allocate-dag --target-desktop-share 0.60 --apply`
+     `python3 packages/orchestrator/client.py allocate-dag --no-desktop --apply` *(or `--api-only` for 100% pure API fleet)*
+     `POST /api/router/allocate-dag`
+     `python3 packages/orchestrator/client.py desktop-ask --task <TASK_ID> --mode task --workspace . --prompt-file <PATH> --driver auto`
      `python3 packages/orchestrator/client.py desktop-jobs --limit 20` / `desktop-cancel --job-id <JOB_ID>`
    - Discover runnable unblocked DAG tasks:
      `python3 packages/orchestrator/client.py next-ready`

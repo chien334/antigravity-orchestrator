@@ -117,7 +117,7 @@ To maximize precision, throughput, and financial economy, tasks are dynamically 
 | **Tier 3: High-Throughput Workhorse** | **Gemini 4 Hydrogen** | `gemini-4-hydrogen` | **$1.50** | **$7.50** | **$0.075** *(95% off)* | `low`, `medium`, `high`, `xhigh` | • Bounded parallel `builder` (`<= 3` files), `ui-builder`, `test-engineer`, `scout` at 198 tok/s (~2x faster than Neon, avoids ~40s TTFT).<br>• `Orchestrator (Neon)` + `Hydrogen` saves ~24% quota.<br>• Circuit Breaker Stage 1 (`retry_count == 1`, `xhigh`). |
 | **Tier 4: Cost-Efficient & Active Micro-Tier** | **Gemini 3.8 Flash** | `gemini-3.8-flash` | **$0.75** *(live)* | **$3.75** *(live)* | **$0.075** | `low`, `medium`, `high` | • Active default for `cost_saving` builders, `doc-generator`, `code-simplifier` (`low`), and `observability` (replaces absent `3.8-flash-lite` default). |
 | **Tier 5: Deprecated / Legacy Alias** | **Gemini 3.8 Flash-Lite** | `gemini-3.8-flash-lite` | **$0.0375** | **$0.15** | **$0.01** | `None` | • Absent from live `swarm` runtime; retained strictly as registry alias for historical DB rows. |
-| **External Heavy-Analysis Offload** | **Gemini Desktop App** (`EXTERNAL_WORKERS`) | `gemini-desktop-app` | **$0.00** | **$0.00** | **$0.00** | `None` | • `spec-engineer`, `task-planner`, `code-reviewer`, `debugger` (`read_only=True`).<br>• Defaults to **`Task` mode** (`--mode task`) with Direct Workspace Binding (`--workspace`, defaulting to `os.getcwd()`) via `Folders` (`ConnectedFolderNSMenu`), or `--mode chat` for standalone prompts (`$0.00` AGY API spend via [`gemini-desktop-worker`](../gemini-desktop-worker/SKILL.md)); tracks `AGY Quota Saved` vs Neon/Carbon baseline. |
+| **Tier 1.5 / Peer Offload** | **Gemini Desktop App** (`EXTERNAL_WORKERS`) | `gemini-desktop-app` | **$0.00** | **$0.00** | **$0.00** | `None` | • **Conditional 60% Peer Model (`ORCHESTRATOR_DESKTOP_SHARE=0.60`)**: When `desktop-doctor` / `GET /api/desktop/status` reports `ready == true` (macOS/Windows), operates as a first-class peer model (`mode="task"`, `background=True`, `allow_edits=True/False`, `0` focus switches, `$0.00` AGY API spend) for sequential heavy stages (`spec-engineer`, `task-planner`, `code-reviewer`, `debugger`, `performance-auditor`, `doc-generator`) + **at most 1 heavy builder per `parallel_group`**.<br>• Automatically falls back 100% to the pure API fleet when `ready == false` or `--no-desktop` / `--api-only` is set. |
 
 ### Tunable Reasoning Effort Guidelines (`--reasoning-effort` / `--effort`)
 - **`xhigh`** (Supported on **`gemini-4-neon`** and **`gemini-4-hydrogen`**): Maximum depth thinking for challenging algorithmic edge cases, multi-file debugging, 5-axis quality-first reviews, and Stage 1 self-healing retries. *(Clamped to `high` on Carbon/Argon).*
@@ -173,7 +173,13 @@ To maximize fleet velocity while preserving mathematical correctness and securit
 - **`speed_first` / `latency_sensitive`**: Bounded Builders, Testers, Docs, and medium-complexity Reviews (`xhigh`) on `gemini-4-hydrogen`; Orchestrator/Specs/Plans/Debugging on `gemini-4-neon` (`low`/`medium`); Security strictly on Carbon.
 - **`quality_first`**: Medium Builders & Reviews (`xhigh`) on `gemini-4-neon`; `spec-engineer`, high-complexity planning, and Security on `gemini-4-carbon`.
 - **`cost_saving` / `cost_first`**: Bounded Builders & Micro-tier on `gemini-3.8-flash` (`low`); heavy non-orchestrator roles on `gemini-4-hydrogen` (`xhigh`); Orchestrator on `gemini-4-neon` (`low`); Security strictly on Carbon.
-- **`hybrid_desktop` / `offload_heavy_to_desktop`**: Evaluates **Rule 1.5 (Desktop Offload Gate)** after Rule 1 (Security Guardrail) & Rule 2 (Circuit Breaker). Heavy **read-only** analytical tasks (`spec-engineer`, `task-planner`, `code-reviewer`, or read-only `scout`/`debugger`) route to `gemini-desktop-app` (`$0.00` AGY API spend) when `--desktop-available` and `--read-only` (or `file_count == 0`) hold. In **`Task` mode (`--mode task`, default)**, Gemini App mounts the project directory via `Folders` (`ConnectedFolderNSMenu`) using `--workspace <path>` (auto-defaults to `os.getcwd()`), keeping a strict read-only contract (`docs/reports/desktop_worker/{job_id}.md`). All file-editing Stage 3 builders remain on `gemini-4-hydrogen` (`<= 3` files) or `gemini-4-neon` (`>= 4` files), and security audits remain locked on `gemini-4-carbon`.
+- **`hybrid_desktop` / `offload_heavy_to_desktop`**: Evaluates **Rule 1.5 (Desktop Offload Gate)** after Rule 1 (Security Guardrail) & Rule 2 (Circuit Breaker), using the **Conditional 60% `gemini-desktop-app` Peer Allocation Policy**:
+  1. **Pre-Flight Detection Gate (`desktop-doctor` / `GET /api/desktop/status`)**:
+     - **When Gemini Desktop App IS installed & ready (`ready == true` on macOS or Windows)**: `gemini-desktop-app` operates as a **first-class peer model** (`mode="task"`, `background=True`, `allow_edits=True/False`, `0` focus switches, `$0.00` AGY API token spend) prioritized for **~60% of total SWE workload** (`ORCHESTRATOR_DESKTOP_SHARE=0.60`):
+       - Sequential heavy stages (`spec-engineer`, `task-planner`, `code-reviewer`, `debugger`, `performance-auditor`, `doc-generator`) + **at most 1 heavy builder per parallel `parallel_group`** (so `Gemini.app`'s single-window FIFO lock NEVER blocks concurrent Fan-Out!).
+       - Remaining **~40%** runs concurrently on AGY API (`gemini-4-hydrogen` `198 tok/s` for sibling parallel builders/testers/scouts, `gemini-4-neon` spillover when the Desktop queue is busy, and `gemini-4-carbon` `high` strictly locked on Rule 1 Security Audits).
+     - **When Gemini Desktop App is NOT installed or NOT ready (`ready == false`, e.g., missing app or locked screen)** — or when `--no-desktop` / `--api-only` is passed: Automatically and seamlessly falls back **100% to the pure API fleet (`Gemini 4 Neon` + `Gemini 4 Hydrogen` + `Gemini 4 Carbon` + `Gemini 3.8 Flash`)**.
+  2. **DAG Peer Allocation (`allocate-dag` / `POST /api/router/allocate-dag`)**: Automatically partitions DAG tasks across `gemini-desktop-app` (~60% target share) and the AGY API fleet (~40% concurrent share) while preserving the single-window FIFO lock and Rule 1 Security Guardrail.
 
 ### Smart Router API & CLI
 Query the smart router before assigning subagents:
@@ -193,9 +199,16 @@ python3 packages/orchestrator/client.py recommend \
   --desktop-available \
   --read-only
 
-# Pre-flight & dispatch to local Gemini Desktop App ($0.00 AGY API spend)
-# Task mode (default) mounts workspace via Folders (ConnectedFolderNSMenu) — reference relative paths concisely
+# Pre-flight & Conditional 60% Peer DAG Allocation (ORCHESTRATOR_DESKTOP_SHARE=0.60)
 python3 packages/orchestrator/client.py desktop-doctor --format text
+python3 packages/orchestrator/client.py allocate-dag --target-desktop-share 0.60 --apply
+
+# Force 100% pure API fleet fallback (disables Desktop allocation)
+python3 packages/orchestrator/client.py allocate-dag --no-desktop --apply
+python3 packages/orchestrator/client.py allocate-dag --api-only --apply
+
+# Dispatch to local Gemini Desktop App ($0.00 AGY API spend, 0 focus switches)
+# Task mode (default) mounts workspace via Folders (ConnectedFolderNSMenu) — reference relative paths concisely
 python3 packages/orchestrator/client.py desktop-ask \
   --task SPEC-01 \
   --mode task \
@@ -315,6 +328,7 @@ ORCHESTRATOR_PORT=9000 python3 packages/orchestrator/server.py
 - `GET /api/state`: Full JSON snapshot of tasks, logs, and metrics.
 - `GET /api/models`: Model registry metadata for all 5 API tiers plus `external_workers` (`gemini-desktop-app`).
 - `POST /api/router/recommend`: Smart model and reasoning effort recommendation (supporting `budget_mode`, `retry_count`, `desktop_available`, `read_only`, and `prefer_desktop`).
+- `POST /api/router/allocate-dag`: Conditional 60% `gemini-desktop-app` peer DAG allocator (`target_desktop_share`, `ORCHESTRATOR_DESKTOP_SHARE`, `apply`, `no_desktop` / `api_only`, automatic 100% pure API fallback when `ready == false`).
 - `GET /api/dag/ready`: Evaluate DAG dependencies and return ready unblocked tasks.
 - `GET /api/analytics/models`: 5-tier per-model token consumption, financial breakdown, and Desktop Worker `AGY Quota Saved` totals.
 - `GET /api/desktop/status`: Cross-platform Gemini Desktop App readiness probe (`macos_ax`, `windows_uia`, `linux_pwa`, `orca`, `mock`).

@@ -42,12 +42,12 @@ flowchart TD
 
 | Stage | Workflow File | Persona | Model Engine | Reasoning Effort | Input Pointer | Output Artifact |
 | :---: | :--- | :--- | :---: | :---: | :--- | :--- |
-| **1** | [`workflow-spec.md`](./workflow-spec.md) | `spec-engineer` | ⚡✦ **Gemini 4 Neon** *(✦ Carbon if security)* | `high` | User request & codebase context | `docs/specs/{feature_id}.spec.md` |
-| **2** | [`workflow-plan.md`](./workflow-plan.md) | `task-planner` | ⚡✦ **Gemini 4 Neon** | `medium` / `high` | `docs/specs/{feature_id}.spec.md` | `docs/plans/{feature_id}.plan.md` |
-| **3** | [`workflow-build.md`](./workflow-build.md) | `builder` (1..N) | ⚡ **Hydrogen** (`<=3` files) / ⚡✦ **Neon** (`>=4` files) | `medium` / `high` / `xhigh` | Task slice from `.plan.md` | Code changes on disjoint files (`198` / `~105` tok/s) |
+| **1** | [`workflow-spec.md`](./workflow-spec.md) | `spec-engineer` | 🖥️ **Desktop** *(if `ready == true`)* / ⚡✦ **Neon** *(✦ Carbon if security)* | `high` | User request & codebase context | `docs/specs/{feature_id}.spec.md` |
+| **2** | [`workflow-plan.md`](./workflow-plan.md) | `task-planner` | 🖥️ **Desktop** *(if `ready == true`)* / ⚡✦ **Gemini 4 Neon** | `medium` / `high` | `docs/specs/{feature_id}.spec.md` | `docs/plans/{feature_id}.plan.md` |
+| **3** | [`workflow-build.md`](./workflow-build.md) | `builder` (1..N) | 🖥️ **Desktop** *(<=1 heavy/group if `ready == true`)* + ⚡ **Hydrogen** (`<=3` files) / ⚡✦ **Neon** (`>=4` files) | `medium` / `high` / `xhigh` | Task slice from `.plan.md` | Code changes on disjoint files (`$0.00` / `198` / `~105` tok/s) |
 | **4** | [`workflow-test.md`](./workflow-test.md) | `test-engineer` | ⚡ **Gemini 4 Hydrogen** | `medium` (`xhigh` retry 1) | Code + Gherkin AC from `.spec.md` | `docs/reports/test_report.json` |
-| **5** | [`workflow-review.md`](./workflow-review.md) | `code-reviewer` | ⚡✦ **Gemini 4 Neon** | `high` | Git Diff + `.plan.md` + test report | `docs/reviews/review_signoff.md` |
-| **6** | [`workflow-security.md`](./workflow-security.md) | `security-auditor`| ✦ **Gemini 4 Carbon** | `high` | Code diff + `review_signoff.md` | `docs/security/security_audit.md` |
+| **5** | [`workflow-review.md`](./workflow-review.md) | `code-reviewer` | 🖥️ **Desktop** *(if `ready == true`)* / ⚡✦ **Gemini 4 Neon** | `high` | Git Diff + `.plan.md` + test report | `docs/reviews/review_signoff.md` |
+| **6** | [`workflow-security.md`](./workflow-security.md) | `security-auditor`| ✦ **Gemini 4 Carbon** *(Rule 1 Locked)* | `high` | Code diff + `review_signoff.md` | `docs/security/security_audit.md` |
 
 ---
 
@@ -55,9 +55,26 @@ flowchart TD
 
 When running the pipeline, the Orchestrator invokes subagents sequentially and in parallel using pointer references:
 
-### Step 0: Smart Model Recommendation (Optional / Dynamic)
-Before dispatching any complex task, query the Smart Router to dynamically determine the optimal model, reasoning effort, and fallback:
+### Step 0: Pre-Flight Desktop Gate, Conditional 60% Peer Allocation & Smart Routing
+Run the **Pre-Flight Detection Gate** (`desktop-doctor` / `GET /api/desktop/status`) before dispatching the pipeline:
+- **When Gemini Desktop App IS installed & ready (`ready == true` on macOS or Windows)**: `gemini-desktop-app` operates as a **first-class peer model** (`mode="task"`, `background=True`, `allow_edits=True/False`, `0` focus switches, `$0.00` AGY API token spend) prioritized for **~60% of total SWE workload** (`ORCHESTRATOR_DESKTOP_SHARE=0.60`):
+  - Sequential heavy stages (`spec-engineer`, `task-planner`, `code-reviewer`, `debugger`, `performance-auditor`, `doc-generator`) + **at most 1 heavy builder per parallel `parallel_group`** (so `Gemini.app`'s single-window FIFO lock NEVER blocks concurrent Fan-Out!).
+  - Remaining **~40%** runs concurrently on AGY API (`gemini-4-hydrogen` `198 tok/s` for sibling parallel builders/testers/scouts, `gemini-4-neon` spillover when Desktop queue is busy, and `gemini-4-carbon` `high` strictly locked on Rule 1 Security Audits).
+- **When Gemini Desktop App is NOT installed or NOT ready (`ready == false`, e.g., missing app or locked screen)** — or `--no-desktop` / `--api-only` is passed: Automatically and seamlessly falls back **100% to the pure API fleet (`Gemini 4 Neon` + `Gemini 4 Hydrogen` + `Gemini 4 Carbon` + `Gemini 3.8 Flash`)** just as before!
+
 ```bash
+# 1. Pre-flight detection gate & 60% conditional peer DAG allocation
+python3 packages/orchestrator/client.py desktop-doctor --json
+ORCHESTRATOR_DESKTOP_SHARE=0.60 python3 packages/orchestrator/client.py allocate-dag \
+  --target-desktop-share 0.60 \
+  --apply
+# REST equivalent: POST /api/router/allocate-dag
+
+# 2. Override to force 100% pure API fleet fallback
+python3 packages/orchestrator/client.py allocate-dag --no-desktop --apply
+# or: python3 packages/orchestrator/client.py allocate-dag --api-only --apply
+
+# 3. Query per-task Smart Router recommendation
 python3 packages/orchestrator/client.py recommend \
   --agent builder \
   --complexity medium \
@@ -111,7 +128,7 @@ Report progress and tokens via python3 packages/orchestrator/client.py update --
 """
 )
 ```
-*(For complex multi-file refactors touching `>= 4` files or `complexity == "high"`, route that builder slice to `Model="neon"`.)*
+*(When `ready == true`, at most **1 heavy builder slice per `parallel_group`** may be allocated to `gemini-desktop-app` with `mode="task"`, `background=True`, `allow_edits=True`, while sibling parallel slices run concurrently on `gemini-4-hydrogen` `198 tok/s` or `gemini-4-neon` spillover `>= 4` files. When `ready == false` or `--no-desktop` / `--api-only` is set, all builder slices run 100% on the pure API fleet.)*
 
 ### Step 3 ➔ Step 4 Barrier Sync & Test Execution:
 Wait until all tasks in the parallel group report `status == "completed"` in SQLite (`packages/orchestrator/orchestrator.db`), then dispatch `test-engineer` on **Gemini 4 Hydrogen**.
