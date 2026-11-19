@@ -213,6 +213,14 @@ def _is_desktop_path(path: str) -> bool:
     return path == "/api/desktop" or path.startswith("/api/desktop/")
 
 
+def _is_desktop_auto_ready(status_dict: dict | None) -> bool:
+    """Return True only when Desktop Worker is ready and the host screen is unlocked."""
+    if not isinstance(status_dict, dict):
+        return False
+    perms = status_dict.get("permissions") or {}
+    return bool(status_dict.get("ready", False)) and perms.get("screen_lock") != "locked"
+
+
 def _is_loopback_origin(origin: str) -> bool:
     if not origin or not isinstance(origin, str):
         return False
@@ -1539,7 +1547,7 @@ class StateStore:
             "current_share": share_metrics["current_desktop_share"],
             "eligible_tasks": share_metrics["eligible_tasks"],
             "desktop_tasks": share_metrics["desktop_tasks"],
-            "desktop_ready": bool(status_dict.get("ready", False)),
+            "desktop_ready": _is_desktop_auto_ready(status_dict),
         }
 
         return {
@@ -4063,7 +4071,8 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
             data = compute_model_analytics(state["tasks"], desktop_jobs=desktop_jobs)
             share_metrics = GLOBAL_STORE.get_desktop_share_metrics()
             cached_status = GLOBAL_STORE._get_cached_desktop_status()
-            desktop_ready = bool((cached_status.get("desktop") or {}).get("ready", False))
+            desk_info = cached_status.get("desktop", {}) if isinstance(cached_status, dict) else {}
+            desktop_ready = _is_desktop_auto_ready(desk_info)
             desktop_share_summary = {
                 "target_share": share_metrics["target_desktop_share"],
                 "current_share": share_metrics["current_desktop_share"],
@@ -4191,7 +4200,7 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
 
         cached_status = GLOBAL_STORE._get_cached_desktop_status()
         desk_info = cached_status.get("desktop", {}) if isinstance(cached_status, dict) else {}
-        desktop_available = bool(desk_info.get("ready", False))
+        desktop_available = _is_desktop_auto_ready(desk_info)
         if raw_queue_busy is not None:
             desktop_queue_busy = GLOBAL_STORE._parse_bool_flag(raw_queue_busy, "desktop_queue_busy", False)
         else:

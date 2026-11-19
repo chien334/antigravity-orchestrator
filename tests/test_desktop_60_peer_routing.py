@@ -412,6 +412,26 @@ class TestLiveServerDashboardAndCLI60PeerRouting(unittest.TestCase):
             self.assertEqual(data_off["desktop_routing_context"]["detection_source"], "auto_cached")
             self.assertFalse(data_off["desktop_routing_context"]["desktop_available"])
 
+        locked_snapshot = {
+            "status": "ok",
+            "desktop": {
+                "ready": True,
+                "lock_busy": False,
+                "queue_depth": 0,
+                "driver_name": "macos_ax",
+                "permissions": {"accessibility": "granted", "clipboard": "ok", "screen_lock": "locked"},
+            },
+        }
+        with mock.patch.object(GLOBAL_STORE, "_get_cached_desktop_status", return_value=locked_snapshot):
+            st, data_locked = self._post("/api/router/recommend", {
+                "agent_type": "task-planner",
+                "complexity": "medium",
+            })
+            self.assertEqual(st, 200)
+            self.assertEqual(data_locked["recommendation"]["model"], "gemini-4-neon")
+            self.assertEqual(data_locked["desktop_routing_context"]["detection_source"], "auto_cached")
+            self.assertFalse(data_locked["desktop_routing_context"]["desktop_available"])
+
     def test_allocate_dag_apply_persists_pending_tasks_and_skips_active(self):
         """POST /api/router/allocate-dag with apply=True updates pending SQLite tasks and leaves running tasks intact."""
         client = OrchestratorClient(base_url=self.base_url)
