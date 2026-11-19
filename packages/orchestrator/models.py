@@ -11,10 +11,16 @@ USD_TO_VND_RATE: float = 25400.0
 VALID_REASONING_EFFORTS: set[str] = {"low", "medium", "high", "xhigh"}
 
 MODEL_REGISTRY: dict[str, dict] = {
-    # 1. Tier 1: Gemini 4 Carbon (Frontier Reasoning)
+    # 1. Tier 1: Gemini 4 Carbon (Frontier Reasoning & Security Guardrail)
     "gemini-4-carbon": {
         "canonical_name": "gemini-4-carbon",
-        "aliases": ["carbon", "gemini-4-carbon-preview", "gemini-carbon"],
+        "aliases": [
+            "carbon",
+            "gemini-4-carbon-preview",
+            "gemini-carbon",
+            "gemini-pro-orchestrator",
+            "orchestrator-carbon",
+        ],
         "display_name": "Gemini 4 Carbon",
         "tier": "frontier",
         "description": "Google Frontier model for deep reasoning, cybersecurity, and complex system synthesis",
@@ -32,13 +38,68 @@ MODEL_REGISTRY: dict[str, dict] = {
         "target_personas": ["security-auditor", "spec-engineer", "debugger"],
     },
 
-    # 2. Tier 2: Gemini 4 Argon (Deep Reasoning)
+    # 2. Tier 1.5 / SWE Frontier: Gemini 4 Neon (#1 Coding-Agent & SWE Workhorse)
+    "gemini-4-neon": {
+        "canonical_name": "gemini-4-neon",
+        "aliases": [
+            "neon",
+            "gemini-neon",
+            "gemini-4-neon-preview",
+            "gemini-pro-orchestrator-neon",
+            "orchestrator-neon",
+            "neco",
+            "gemini-neco",
+            "gemini-4-neco",
+            "gemini-4-neco-preview",
+            "gemini-4-neon-low",
+            "gemini-4-neon-medium",
+            "gemini-4-neon-high",
+            "gemini-4-neon-xhigh",
+        ],
+        "display_name": "Gemini 4 Neon",
+        "tier": "swe_frontier",
+        "description": (
+            "Google #1 Coding-Agent & SWE Mid-Frontier Workhorse "
+            "(61 AA Intelligence, 65.2% Terminal-Bench, 90.5% SEC-bench Pro, 101-122 tok/s, 95% cache discount)"
+        ),
+        "rates": {"in": 3.00, "out": 15.00, "cache": 0.15},  # USD per 1M tokens (95% cache read discount)
+        "supported_reasoning_efforts": ["low", "medium", "high", "xhigh"],
+        "default_reasoning_effort": "high",
+        "max_context_tokens": 1_048_576,
+        "badge_color": "#f43f5e",
+        "ui_badge": {
+            "bg": "bg-rose-950/60",
+            "border": "border-rose-500/40",
+            "text": "text-rose-300",
+            "dot": "bg-rose-400",
+            "label": "Gemini 4 Neon",
+            "color": "#f43f5e",
+        },
+        "target_personas": [
+            "orchestrator",
+            "spec-engineer",
+            "task-planner",
+            "code-reviewer",
+            "debugger",
+            "builder",
+        ],
+    },
+
+    # 3. Tier 2 (Legacy): Gemini 4 Argon (Deep Reasoning)
     "gemini-4-argon": {
         "canonical_name": "gemini-4-argon",
-        "aliases": ["argon", "pro", "gemini-4-argon-preview", "gemini-1.5-pro"],
+        "aliases": [
+            "argon",
+            "pro",
+            "gemini-4-argon-preview",
+            "gemini-1.5-pro",
+            "gemini-pro-orchestrator-argon",
+            "orchestrator-argon",
+        ],
         "display_name": "Gemini 4 Argon",
         "tier": "deep_reasoning",
-        "description": "High-velocity deep reasoning for architecture, reviews, and task scheduling",
+        "legacy": True,
+        "description": "Legacy deep reasoning tier superseded by Gemini 4 Neon in SWE workflows",
         "rates": {"in": 1.25, "out": 5.00, "cache": 0.3125},
         "supported_reasoning_efforts": ["low", "medium", "high"],
         "default_reasoning_effort": "medium",
@@ -53,7 +114,7 @@ MODEL_REGISTRY: dict[str, dict] = {
         "target_personas": ["task-planner", "code-reviewer", "orchestrator"],
     },
 
-    # 3. Tier 3: Gemini 4 Hydrogen (High-Throughput Workhorse - NEW)
+    # 4. Tier 3: Gemini 4 Hydrogen (High-Throughput Workhorse)
     "gemini-4-hydrogen": {
         "canonical_name": "gemini-4-hydrogen",
         "aliases": [
@@ -89,15 +150,22 @@ MODEL_REGISTRY: dict[str, dict] = {
         ],
     },
 
-    # 4. Tier 4: Gemini 3.8 Flash (Cost-Efficient)
+    # 5. Tier 4: Gemini 3.8 Flash (Cost-Efficient)
     "gemini-3.8-flash": {
         "canonical_name": "gemini-3.8-flash",
-        "aliases": ["flash", "gemini-flash", "gemini-2.0-flash"],
+        "aliases": [
+            "flash",
+            "gemini-flash",
+            "gemini-2.0-flash",
+            "gemini-3.8-flash-low",
+            "gemini-3.8-flash-medium",
+            "gemini-3.8-flash-high",
+        ],
         "display_name": "Gemini 3.8 Flash",
         "tier": "cost_efficient",
-        "description": "Ultra-fast, high-throughput model for parallel code implementation and test suites",
+        "description": "Ultra-fast, cost-efficient model for docs, code simplification, and bulk scaffolding",
         "rates": {"in": 0.075, "out": 0.30, "cache": 0.01875},
-        "supported_reasoning_efforts": [],
+        "supported_reasoning_efforts": ["low", "medium", "high"],
         "default_reasoning_effort": None,
         "max_context_tokens": 1_048_576,
         "ui_badge": {
@@ -107,16 +175,17 @@ MODEL_REGISTRY: dict[str, dict] = {
             "dot": "bg-amber-400",
             "label": "Gemini 3.8 Flash",
         },
-        "target_personas": ["code-simplifier", "doc-generator"],
+        "target_personas": ["code-simplifier", "doc-generator", "observability"],
     },
 
-    # 5. Tier 5: Gemini 3.8 Flash-Lite (Ultra-Fast Telemetry)
+    # 6. Tier 5 (Deprecated): Gemini 3.8 Flash-Lite (Retained for SQLite Backward Compatibility)
     "gemini-3.8-flash-lite": {
         "canonical_name": "gemini-3.8-flash-lite",
         "aliases": ["flash_lite", "flash-lite", "gemini-flash-lite"],
         "display_name": "Gemini 3.8 Flash-Lite",
         "tier": "ultra_fast",
-        "description": "Low-latency micro-tier for telemetry heartbeats, quick formatting, and linting",
+        "deprecated": True,
+        "description": "Deprecated micro-tier retained for historical SQLite ledger compatibility (absent from live runtime)",
         "rates": {"in": 0.0375, "out": 0.15, "cache": 0.01},
         "supported_reasoning_efforts": [],
         "default_reasoning_effort": None,
@@ -175,10 +244,28 @@ PRICING_TABLE: dict[str, dict] = {
     "gemini-4-carbon": MODEL_REGISTRY["gemini-4-carbon"]["rates"],
     "gemini-carbon": MODEL_REGISTRY["gemini-4-carbon"]["rates"],
     "gemini-4-carbon-preview": MODEL_REGISTRY["gemini-4-carbon"]["rates"],
+    "gemini-pro-orchestrator": MODEL_REGISTRY["gemini-4-carbon"]["rates"],
+    "orchestrator-carbon": MODEL_REGISTRY["gemini-4-carbon"]["rates"],
+    "neon": MODEL_REGISTRY["gemini-4-neon"]["rates"],
+    "gemini-4-neon": MODEL_REGISTRY["gemini-4-neon"]["rates"],
+    "gemini-neon": MODEL_REGISTRY["gemini-4-neon"]["rates"],
+    "gemini-4-neon-preview": MODEL_REGISTRY["gemini-4-neon"]["rates"],
+    "gemini-4-neon-low": MODEL_REGISTRY["gemini-4-neon"]["rates"],
+    "gemini-4-neon-medium": MODEL_REGISTRY["gemini-4-neon"]["rates"],
+    "gemini-4-neon-high": MODEL_REGISTRY["gemini-4-neon"]["rates"],
+    "gemini-4-neon-xhigh": MODEL_REGISTRY["gemini-4-neon"]["rates"],
+    "gemini-pro-orchestrator-neon": MODEL_REGISTRY["gemini-4-neon"]["rates"],
+    "orchestrator-neon": MODEL_REGISTRY["gemini-4-neon"]["rates"],
+    "neco": MODEL_REGISTRY["gemini-4-neon"]["rates"],
+    "gemini-neco": MODEL_REGISTRY["gemini-4-neon"]["rates"],
+    "gemini-4-neco": MODEL_REGISTRY["gemini-4-neon"]["rates"],
+    "gemini-4-neco-preview": MODEL_REGISTRY["gemini-4-neon"]["rates"],
     "argon": MODEL_REGISTRY["gemini-4-argon"]["rates"],
     "pro": MODEL_REGISTRY["gemini-4-argon"]["rates"],
     "gemini-4-argon": MODEL_REGISTRY["gemini-4-argon"]["rates"],
     "gemini-1.5-pro": MODEL_REGISTRY["gemini-4-argon"]["rates"],
+    "gemini-pro-orchestrator-argon": MODEL_REGISTRY["gemini-4-argon"]["rates"],
+    "orchestrator-argon": MODEL_REGISTRY["gemini-4-argon"]["rates"],
     "hydrogen": MODEL_REGISTRY["gemini-4-hydrogen"]["rates"],
     "gemini-4-hydrogen": MODEL_REGISTRY["gemini-4-hydrogen"]["rates"],
     "gemini-hydrogen": MODEL_REGISTRY["gemini-4-hydrogen"]["rates"],
@@ -191,6 +278,9 @@ PRICING_TABLE: dict[str, dict] = {
     "gemini-flash": MODEL_REGISTRY["gemini-3.8-flash"]["rates"],
     "gemini-2.0-flash": MODEL_REGISTRY["gemini-3.8-flash"]["rates"],
     "gemini-3.8-flash": MODEL_REGISTRY["gemini-3.8-flash"]["rates"],
+    "gemini-3.8-flash-low": MODEL_REGISTRY["gemini-3.8-flash"]["rates"],
+    "gemini-3.8-flash-medium": MODEL_REGISTRY["gemini-3.8-flash"]["rates"],
+    "gemini-3.8-flash-high": MODEL_REGISTRY["gemini-3.8-flash"]["rates"],
     "flash_lite": MODEL_REGISTRY["gemini-3.8-flash-lite"]["rates"],
     "flash-lite": MODEL_REGISTRY["gemini-3.8-flash-lite"]["rates"],
     "gemini-flash-lite": MODEL_REGISTRY["gemini-3.8-flash-lite"]["rates"],
@@ -204,7 +294,7 @@ PRICING_TABLE: dict[str, dict] = {
     "desktop-worker": EXTERNAL_WORKERS["gemini-desktop-app"]["rates"],
     "gemini-macos-app": EXTERNAL_WORKERS["gemini-desktop-app"]["rates"],
     "gemini-windows-app": EXTERNAL_WORKERS["gemini-desktop-app"]["rates"],
-    "default": MODEL_REGISTRY["gemini-4-argon"]["rates"],
+    "default": MODEL_REGISTRY["gemini-4-neon"]["rates"],
 }
 
 
@@ -216,7 +306,7 @@ def get_all_models_catalog() -> dict[str, dict]:
 def normalize_model_name(name: str | None) -> str:
     """Resolve aliases or raw model strings to canonical model or external worker name."""
     if not name:
-        return "gemini-4-argon"
+        return "gemini-4-neon"
     raw = str(name).strip().lower()
     catalog = get_all_models_catalog()
 
@@ -225,7 +315,7 @@ def normalize_model_name(name: str | None) -> str:
         if raw == canon or raw in [a.lower() for a in data.get("aliases", [])]:
             return canon
 
-    # 2. Substring match, sorting longest patterns first to prevent 'flash' matching 'flash-lite'
+    # 2. Substring match, sorting longest patterns first to prevent 'pro' matching 'gemini-pro-orchestrator-neon'
     patterns: list[tuple[str, str]] = []
     for canon, data in catalog.items():
         patterns.append((canon, canon))
@@ -237,7 +327,7 @@ def normalize_model_name(name: str | None) -> str:
         if pattern in raw:
             return canon
 
-    return "gemini-4-argon"
+    return "gemini-4-neon"
 
 
 # Alias per contract specification
@@ -254,10 +344,10 @@ def is_external_worker(name: str | None) -> bool:
 def extract_model_and_effort(name: str | None, effort: str | None = None) -> tuple[str, str | None]:
     """
     Extract canonical model name and implied reasoning effort.
-    E.g. 'gemini-4-hydrogen-xhigh' with effort=None -> ('gemini-4-hydrogen', 'xhigh').
+    E.g. 'gemini-4-neon-xhigh' with effort=None -> ('gemini-4-neon', 'xhigh').
     """
     if not name:
-        return "gemini-4-argon", effort
+        return "gemini-4-neon", effort
 
     raw = str(name).strip().lower()
     inferred_effort = effort
@@ -338,7 +428,7 @@ def get_model_metadata(model: str | None) -> dict:
 def validate_reasoning_effort(model: str | None, effort: str | None, clamp: bool = False) -> tuple[bool, str | None]:
     """
     Validate reasoning effort for a model.
-    'xhigh' is strictly allowed on gemini-4-hydrogen.
+    'xhigh' is natively allowed on gemini-4-neon and gemini-4-hydrogen.
     For Carbon and Argon:
       - If clamp=True: clamps 'xhigh' -> 'high'.
       - If clamp=False: returns (False, None) for 'xhigh' on models not supporting it.

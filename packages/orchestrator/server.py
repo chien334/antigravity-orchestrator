@@ -870,7 +870,7 @@ class StateStore:
                     if reasoning_effort is None:
                         reasoning_effort = extracted_effort
                 else:
-                    final_model = existing.get("model", "gemini-4-argon")
+                    final_model = existing.get("model") or "gemini-4-neon"
 
                 final_complexity = (complexity if complexity is not None else existing.get("complexity", "medium")).lower()
                 final_status = status or existing.get("status", "pending")
@@ -2492,7 +2492,10 @@ _FALLBACK_DASHBOARD_HTML = """<!DOCTYPE html>
             <span class="text-slate-400">Model:</span>
             <select id="hist-filter-model" onchange="renderHistoryTable()" class="bg-slate-800/80 border border-slate-700/80 rounded-xl px-2.5 py-1.5 text-slate-200 text-xs focus:outline-none focus:border-indigo-500">
               <option value="all">All Models</option>
-              <option value="argon">Gemini 4 Argon (Pro)</option>
+              <option value="neon">Gemini 4 Neon</option>
+              <option value="carbon">Gemini 4 Carbon</option>
+              <option value="hydrogen">Gemini 4 Hydrogen</option>
+              <option value="argon">Gemini 4 Argon (Legacy)</option>
               <option value="flash">Gemini 3.8 Flash</option>
             </select>
           </div>
@@ -2809,8 +2812,17 @@ _FALLBACK_DASHBOARD_HTML = """<!DOCTYPE html>
 
     function getModelBadge(model) {
       const m = (model || '').toLowerCase();
-      if (m.includes('argon') || m.includes('pro') || m.includes('gemini-4')) {
-        return `<span class="px-2 py-0.5 rounded text-[11px] font-mono border bg-purple-500/15 text-purple-300 border-purple-500/30 flex items-center gap-1 inline-flex"><span class="text-[9px]">✦</span>Argon (Pro)</span>`;
+      if (m.includes('neon') || m.includes('neco')) {
+        return `<span class="px-2 py-0.5 rounded text-[11px] font-mono border bg-rose-500/15 text-rose-300 border-rose-500/30 flex items-center gap-1 inline-flex"><span class="text-[9px]">⚡✦</span>Gemini 4 Neon</span>`;
+      }
+      if (m.includes('carbon') || m === 'gemini-pro-orchestrator') {
+        return `<span class="px-2 py-0.5 rounded text-[11px] font-mono border bg-emerald-500/15 text-emerald-300 border-emerald-500/30 flex items-center gap-1 inline-flex"><span class="text-[9px]">✦</span>Gemini 4 Carbon</span>`;
+      }
+      if (m.includes('hydrogen')) {
+        return `<span class="px-2 py-0.5 rounded text-[11px] font-mono border bg-cyan-500/15 text-cyan-300 border-cyan-500/30 flex items-center gap-1 inline-flex"><span class="text-[9px]">⚡</span>Gemini 4 Hydrogen</span>`;
+      }
+      if (m.includes('argon') || m.includes('pro')) {
+        return `<span class="px-2 py-0.5 rounded text-[11px] font-mono border bg-indigo-500/15 text-indigo-300 border-indigo-500/30 flex items-center gap-1 inline-flex"><span class="text-[9px]">✦</span>Argon (Legacy)</span>`;
       }
       if (m.includes('flash_lite') || m.includes('lite')) {
         return `<span class="px-2 py-0.5 rounded text-[11px] font-mono border bg-teal-500/15 text-teal-300 border-teal-500/30 flex items-center gap-1 inline-flex"><span class="text-[9px]">⚡</span>Flash-Lite</span>`;
@@ -3006,7 +3018,10 @@ _FALLBACK_DASHBOARD_HTML = """<!DOCTYPE html>
         if (statusFilter !== 'all' && t.status !== statusFilter) return false;
         if (modelFilter !== 'all') {
           const m = (t.model || '').toLowerCase();
-          if (modelFilter === 'argon' && !m.includes('argon') && !m.includes('pro')) return false;
+          if (modelFilter === 'neon' && !m.includes('neon') && !m.includes('neco')) return false;
+          if (modelFilter === 'carbon' && !m.includes('carbon') && m !== 'gemini-pro-orchestrator') return false;
+          if (modelFilter === 'hydrogen' && !m.includes('hydrogen')) return false;
+          if (modelFilter === 'argon' && !m.includes('argon') && !(m.includes('pro') && !m.includes('neon') && m !== 'gemini-pro-orchestrator')) return false;
           if (modelFilter === 'flash' && !m.includes('flash')) return false;
         }
         if (search) {
@@ -3331,7 +3346,7 @@ _FALLBACK_DASHBOARD_HTML = """<!DOCTYPE html>
       if (elAgentBadge) elAgentBadge.innerHTML = getAgentBadge(t.agent_type || 'builder');
       
       const elModelBadge = document.getElementById('modal-model-badge');
-      if (elModelBadge) elModelBadge.innerHTML = getModelBadge(t.model || 'argon');
+      if (elModelBadge) elModelBadge.innerHTML = getModelBadge(t.model || 'neon');
       
       const elStatusBadge = document.getElementById('modal-status-badge');
       if (elStatusBadge) elStatusBadge.innerHTML = getStatusBadge(t.status || 'running');
@@ -3779,8 +3794,34 @@ class OrchestratorHandler(BaseHTTPRequestHandler):
         if path == "/api/models":
             data = {
                 "status": "ok",
+                "default_model": "gemini-4-neon",
                 "models": MODEL_REGISTRY,
                 "external_workers": EXTERNAL_WORKERS,
+                "circuit_breaker_stages": [
+                    {
+                        "stage": 1,
+                        "retry_count": 1,
+                        "model": "gemini-4-hydrogen",
+                        "reasoning_effort": "xhigh",
+                        "status": "retrying",
+                    },
+                    {
+                        "stage": 2,
+                        "retry_count": 2,
+                        "model": "gemini-4-neon",
+                        "reasoning_effort": "high",
+                        "status": "tripped",
+                        "escalated_to": "gemini-4-neon",
+                    },
+                    {
+                        "stage": 3,
+                        "retry_count": 3,
+                        "model": "gemini-4-carbon",
+                        "reasoning_effort": "high",
+                        "status": "tripped",
+                        "escalated_to": "gemini-4-carbon",
+                    },
+                ],
             }
             self._send_json(HTTPStatus.OK, data)
             return

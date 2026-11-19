@@ -2,7 +2,8 @@
 """
 Multi-Agent Orchestrator Client
 Python library and CLI utility for sending telemetry, task updates, and logs to the Orchestrator Server.
-Features Gemini 4 Carbon and Gemini 4 Hydrogen evolution: 5-tier smart model routing, Circuit Breaker escalation, DAG ready-queue querying, model analytics, and audit exporting.
+Features Gemini 4 Carbon, Gemini 4 Neon (#1 SWE Coding Agent), and Gemini 4 Hydrogen evolution:
+smart SWE model routing, 3-Stage Circuit Breaker escalation, DAG ready-queue querying, model analytics, and audit exporting.
 """
 
 import argparse
@@ -15,6 +16,18 @@ import urllib.parse
 import urllib.request
 
 DEFAULT_BASE_URL = os.environ.get("ORCHESTRATOR_URL", "http://localhost:8484").rstrip("/")
+
+
+def _fmt_rate(val: Any) -> str:
+    """Format per-1M token USD rate cleanly (e.g. $3.00, $15.00, $0.15, $0.075)."""
+    try:
+        num = float(val or 0.0)
+    except (TypeError, ValueError):
+        return "$0.00"
+    trimmed = f"{num:.6f}".rstrip("0").rstrip(".")
+    if "." not in trimmed or len(trimmed.split(".")[1]) < 2:
+        return f"${num:.2f}"
+    return f"${trimmed}"
 
 
 def _normalize_desktop_driver(driver: Optional[str]) -> str:
@@ -465,7 +478,11 @@ def main():
         "--model",
         type=str,
         default=None,
-        help="Assigned Model (e.g. gemini-4-carbon, carbon, gemini-4-argon, pro, gemini-4-hydrogen, hydrogen, gemini-3.8-flash, flash, flash_lite)",
+        help=(
+            "Assigned Model (e.g. gemini-4-neon, neon, gemini-pro-orchestrator-neon, "
+            "gemini-4-carbon, carbon, gemini-4-hydrogen, hydrogen, "
+            "gemini-4-argon, pro, gemini-3.8-flash, flash, flash_lite)"
+        ),
     )
     update_parser.add_argument(
         "--reasoning-effort",
@@ -545,7 +562,11 @@ def main():
         "recommend",
         help="Recommend optimal model and reasoning effort via Smart Router",
     )
-    recommend_parser.add_argument("--agent", required=True, help="Agent persona name (e.g. security-auditor, builder, spec-engineer)")
+    recommend_parser.add_argument(
+        "--agent",
+        required=True,
+        help="Agent persona name (e.g. security-auditor, spec-engineer, task-planner, code-reviewer, builder, test-engineer)",
+    )
     recommend_parser.add_argument(
         "--complexity",
         type=str,
@@ -584,7 +605,7 @@ def main():
         dest="retry_count",
         type=int,
         default=0,
-        help="Prior failure retry count for Circuit Breaker escalation (default: 0)",
+        help="Prior failure retry count for 3-Stage Circuit Breaker (0=Hydrogen, 1=Hydrogen xhigh, 2=Neon high, 3+=Carbon high, default: 0)",
     )
     recommend_parser.add_argument(
         "--desktop-available",
@@ -883,19 +904,27 @@ def main():
             sys.exit(1)
         if args.format == "text" and not args.json:
             models = res.get("models", {})
-            print(f"{'Model':<24} {'Tier':<18} {'Rates ($ in/out/cache per 1M)':<32} {'Reasoning Efforts':<26}")
-            print("-" * 102)
+            print(f"{'Model':<24} {'Tier':<18} {'Rates ($ in/out/cache per 1M)':<32} {'Reasoning Efforts':<28} {'Notes'}")
+            print("-" * 130)
             for m_id, m_data in models.items():
                 rates = m_data.get("rates", {})
-                rate_str = f"${rates.get('in', 0):.3f} / ${rates.get('out', 0):.2f} / ${rates.get('cache', 0):.4f}"
-                efforts = ", ".join(m_data.get("supported_reasoning_efforts", [])) or "None"
-                print(f"{m_id:<24} {m_data.get('tier', ''):<18} {rate_str:<32} {efforts:<26}")
+                rate_str = f"{_fmt_rate(rates.get('in', 0))} / {_fmt_rate(rates.get('out', 0))} / {_fmt_rate(rates.get('cache', 0))}"
+                efforts = "|".join(m_data.get("supported_reasoning_efforts", [])) or "None"
+                note = ""
+                if "neon" in m_id.lower():
+                    note = "* #1 SWE Coding Agent | 95% cache savings"
+                elif "hydrogen" in m_id.lower():
+                    note = "198 tok/s fast workers | 95% cache savings"
+                elif "carbon" in m_id.lower():
+                    note = "Frontier security & CB Stage 3"
+                print(f"{m_id:<24} {m_data.get('tier', ''):<18} {rate_str:<32} {efforts:<28} {note}")
+            print("\n3-Stage Circuit Breaker: Retry 0=Hydrogen -> Retry 1=Hydrogen(xhigh) -> Retry 2=Gemini 4 Neon(high) -> Retry 3+=Gemini 4 Carbon(high)")
             external_workers = res.get("external_workers", {})
             if external_workers:
                 print("\n=== External Workers ===")
                 for w_id, w_data in external_workers.items():
                     rates = w_data.get("rates", {})
-                    rate_str = f"${rates.get('in', 0):.2f} / ${rates.get('out', 0):.2f} / ${rates.get('cache', 0):.2f}"
+                    rate_str = f"{_fmt_rate(rates.get('in', 0))} / {_fmt_rate(rates.get('out', 0))} / {_fmt_rate(rates.get('cache', 0))}"
                     mode = w_data.get("execution_mode", "desktop_bridge")
                     print(f"{w_id:<24} {w_data.get('tier', 'external_desktop'):<18} {rate_str:<32} mode={mode}")
         else:
@@ -929,13 +958,25 @@ def main():
             print(f"Fallback Model:    {rec.get('fallback_model', '-')}")
             if rec.get("circuit_breaker"):
                 cb = rec["circuit_breaker"]
-                cb_status = str(cb.get("status", "unknown")).upper()
-                if cb.get("status") == "tripped":
-                    print(f"Circuit Breaker:   TRIPPED (retries: {cb.get('retries', 0)}, escalated from: {cb.get('escalated_from', 'gemini-4-hydrogen')})")
-                elif cb.get("status") == "retrying":
-                    print(f"Circuit Breaker:   RETRYING (retry #{cb.get('retry_count', 1)}, escalating to: {cb.get('escalate_to', 'gemini-4-carbon')})")
+                cb_status = str(cb.get("status", "unknown")).lower()
+                retries = cb.get("retries", cb.get("retry_count", 0))
+                stage = cb.get("stage")
+                if cb_status == "tripped":
+                    s_lbl = f"Stage {stage if stage is not None else 3}/3 | "
+                    print(f"Circuit Breaker:   TRIPPED ({s_lbl}retries: {retries}, escalated from: {cb.get('escalated_from', 'gemini-4-neon')})")
+                elif cb_status == "escalated_neon":
+                    s_lbl = f"Stage {stage if stage is not None else 2}/3 | "
+                    print(
+                        f"Circuit Breaker:   ESCALATED_NEON ({s_lbl}retry #{retries}, "
+                        f"escalated from: {cb.get('escalated_from', 'gemini-4-hydrogen')}, "
+                        f"next trip: {cb.get('escalate_to', 'gemini-4-carbon')})"
+                    )
+                elif cb_status == "retrying":
+                    s_lbl = f"Stage {stage if stage is not None else 1}/3 | "
+                    print(f"Circuit Breaker:   RETRYING ({s_lbl}retry #{retries}, escalating to: {cb.get('escalate_to', 'gemini-4-neon')})")
                 else:
-                    print(f"Circuit Breaker:   {cb_status} (retries: {cb.get('retry_count', 0)})")
+                    s_lbl = f"Stage {stage if stage is not None else 0}/3 | "
+                    print(f"Circuit Breaker:   {cb_status.upper()} ({s_lbl}retries: {retries}, escalate_to: {cb.get('escalate_to', 'gemini-4-neon')})")
             print(f"Rationale:         {rec.get('rationale', '')}")
         else:
             print(json.dumps(res, indent=2))

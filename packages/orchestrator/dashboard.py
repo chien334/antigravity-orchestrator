@@ -38,6 +38,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
               900: '#064e3b',
               950: '#022c22',
             },
+            neon: {
+              300: '#fda4af',
+              400: '#fb7185',
+              500: '#f43f5e',
+              900: '#881337',
+              950: '#4c0519',
+            },
             hydrogen: {
               300: '#67e8f9',
               400: '#22d3ee',
@@ -72,6 +79,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     .glow-hydrogen, .glow-cyan {
       animation: glow-cyan 3s ease-in-out infinite;
     }
+    @keyframes glow-rose {
+      0%, 100% { box-shadow: 0 0 14px rgba(244, 63, 94, 0.28), inset 0 0 8px rgba(244, 63, 94, 0.12); }
+      50% { box-shadow: 0 0 24px rgba(244, 63, 94, 0.6), inset 0 0 12px rgba(244, 63, 94, 0.22); }
+    }
+    .glow-neon, .glow-rose {
+      animation: glow-rose 2.8s ease-in-out infinite;
+    }
     ::-webkit-scrollbar {
       width: 6px;
       height: 6px;
@@ -103,6 +117,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           <div class="flex items-center space-x-2 flex-wrap">
             <h1 class="text-base font-bold tracking-tight text-white whitespace-nowrap">Hospital Suite - Multi-Agent Orchestrator</h1>
             <span class="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 font-semibold border border-emerald-500/30">Gemini 4 Carbon</span>
+            <span class="text-[10px] px-2 py-0.5 rounded-full bg-rose-500/15 text-rose-300 font-semibold border border-rose-500/50 flex items-center gap-1 shadow-sm shadow-rose-500/20" style="border-color: rgba(244, 63, 94, 0.5); box-shadow: 0 0 10px rgba(244, 63, 94, 0.22);"><span class="w-1.5 h-1.5 rounded-full bg-rose-400 animate-pulse" style="background-color: #f43f5e;"></span>✦ Gemini 4 Neon</span>
             <span class="text-[10px] px-2 py-0.5 rounded-full bg-cyan-500/15 text-cyan-300 font-semibold border border-cyan-500/40 flex items-center gap-1 shadow-sm shadow-cyan-500/10"><span class="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" style="background-color: #06b6d4;"></span>⚡ Gemini 4 Hydrogen</span>
             <span class="text-[10px] px-2 py-0.5 rounded-full bg-indigo-500/10 text-indigo-400 font-medium border border-indigo-500/20">5-Tier Fleet</span>
           </div>
@@ -496,7 +511,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             <span class="text-xs text-slate-400">1 USD = 25,400 VND Baseline</span>
           </div>
           <h2 class="text-lg font-bold text-white mt-1">Multi-Model Token Consumption &amp; Cache Savings Analytics</h2>
-          <p class="text-xs text-slate-300 mt-0.5">Granular telemetry tracking frontier Gemini 4 Carbon, Argon deep reasoning, high-throughput Gemini 4 Hydrogen, Flash, and Flash-Lite tiers.</p>
+          <p class="text-xs text-slate-300 mt-0.5">Granular telemetry tracking frontier Gemini 4 Carbon, #1 SWE Gemini 4 Neon (95% cache), Argon, high-throughput Gemini 4 Hydrogen, Flash, and Flash-Lite tiers.</p>
         </div>
         <div class="flex items-center space-x-2">
           <button onclick="refreshModelAnalytics()" class="px-3 py-1.5 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/40 text-xs font-semibold flex items-center space-x-1.5 transition">
@@ -506,9 +521,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         </div>
       </div>
 
-      <!-- 5-Model Comparative Cards Grid -->
-      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4" id="model-analytics-cards">
-        <!-- Rendered dynamically: Carbon, Argon, Hydrogen, Flash, Flash-Lite -->
+      <!-- 6-Model Comparative Cards Grid -->
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4" id="model-analytics-cards">
+        <!-- Rendered dynamically: Carbon, Neon, Argon, Hydrogen, Flash, Flash-Lite -->
       </div>
 
       <!-- Total Spend Distribution Visual Progress Bar -->
@@ -519,6 +534,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         </div>
         <div class="w-full bg-slate-950 rounded-full h-3 overflow-hidden flex" id="spend-distribution-bar">
           <div id="bar-carbon" class="bg-emerald-500 h-full transition-all duration-300" style="width: 0%;" title="Carbon: $0.00"></div>
+          <div id="bar-neon" class="bg-rose-500 h-full transition-all duration-300" style="width: 0%; background-color: #f43f5e;" title="Neon: $0.00"></div>
           <div id="bar-argon" class="bg-indigo-500 h-full transition-all duration-300" style="width: 0%;" title="Argon: $0.00"></div>
           <div id="bar-hydrogen" class="bg-cyan-500 h-full transition-all duration-300" style="width: 0%; background-color: #06b6d4;" title="Hydrogen: $0.00"></div>
           <div id="bar-flash" class="bg-amber-500 h-full transition-all duration-300" style="width: 0%;" title="Flash: $0.00"></div>
@@ -526,6 +542,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         </div>
         <div class="flex flex-wrap items-center justify-between gap-2 text-xs pt-1">
           <div class="flex items-center space-x-1.5"><span class="w-3 h-3 rounded bg-emerald-500"></span><span class="text-emerald-300 font-mono text-[11px]" id="legend-carbon">Carbon: $0.00 (0%)</span></div>
+          <div class="flex items-center space-x-1.5"><span class="w-3 h-3 rounded bg-rose-500" style="background-color: #f43f5e;"></span><span class="text-rose-300 font-mono text-[11px]" id="legend-neon">Neon: $0.00 (0%)</span></div>
           <div class="flex items-center space-x-1.5"><span class="w-3 h-3 rounded bg-indigo-500"></span><span class="text-indigo-300 font-mono text-[11px]" id="legend-argon">Argon: $0.00 (0%)</span></div>
           <div class="flex items-center space-x-1.5"><span class="w-3 h-3 rounded bg-cyan-500" style="background-color: #06b6d4;"></span><span class="text-cyan-300 font-mono text-[11px]" id="legend-hydrogen">Hydrogen: $0.00 (0%)</span></div>
           <div class="flex items-center space-x-1.5"><span class="w-3 h-3 rounded bg-amber-500"></span><span class="text-amber-300 font-mono text-[11px]" id="legend-flash">Flash: $0.00 (0%)</span></div>
@@ -673,6 +690,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             <select id="hist-filter-model" onchange="renderHistoryTable()" class="bg-slate-800/80 border border-slate-700/80 rounded-xl px-2.5 py-1.5 text-slate-200 text-xs focus:outline-none focus:border-emerald-500">
               <option value="all">All Models</option>
               <option value="carbon">Gemini 4 Carbon (Frontier)</option>
+              <option value="neon">Gemini 4 Neon (#1 SWE)</option>
               <option value="argon">Gemini 4 Argon (Pro)</option>
               <option value="hydrogen">Gemini 4 Hydrogen (Ultra-Fast)</option>
               <option value="flash">Gemini 3.8 Flash</option>
@@ -915,6 +933,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
               <option value="spec-engineer">spec-engineer (Product &amp; Spec Specialist)</option>
               <option value="task-planner">task-planner (Architecture &amp; DAG Planner)</option>
               <option value="code-reviewer">code-reviewer (Code Quality &amp; Multi-Axis)</option>
+              <option value="orchestrator">orchestrator (Tech Lead &amp; Coordinator)</option>
+              <option value="performance-auditor">performance-auditor (Query &amp; Perf Optimization)</option>
               <option value="builder" selected>builder (Software Implementation)</option>
               <option value="ui-builder">ui-builder (Rapid UI &amp; Dashboard Iteration)</option>
               <option value="frontend-engineer">frontend-engineer (Frontend &amp; UI Specialist)</option>
@@ -966,14 +986,14 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             </select>
           </div>
 
-          <!-- Retry Count (Circuit Breaker Simulation) -->
+          <!-- Retry Count (3-Stage Circuit Breaker Simulation) -->
           <div>
-            <label class="block text-slate-300 font-semibold mb-1" title="Simulates Fast-Retry Circuit Breaker failure threshold">Retry Count</label>
+            <label class="block text-slate-300 font-semibold mb-1" title="Simulates 3-Stage SWE Fast-Retry Circuit Breaker escalation">Retry Count</label>
             <select id="router-retries" class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-slate-200 focus:outline-none focus:border-cyan-500 font-mono">
-              <option value="0" selected>0 (First Turn)</option>
-              <option value="1">1 (Self-Heal Retry)</option>
-              <option value="2">2 (CB Tripped &rarr; Carbon)</option>
-              <option value="3">3+ (Escalated High)</option>
+              <option value="0" selected>0 (First Turn &rarr; Hydrogen)</option>
+              <option value="1">1 (Self-Heal &rarr; Hydrogen XHigh)</option>
+              <option value="2">2 (Stage 2 &rarr; Gemini 4 Neon High)</option>
+              <option value="3">3+ (CB Tripped &rarr; Carbon High)</option>
             </select>
           </div>
 
@@ -1034,7 +1054,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           <p id="router-rationale" class="text-xs text-slate-300 leading-relaxed font-sans bg-slate-900/60 p-3 rounded-lg border border-slate-800/80"></p>
 
           <div class="flex items-center justify-between text-[11px] text-slate-400 pt-1">
-            <span>Fallback Tier: <strong id="router-fallback" class="text-slate-200 font-mono">gemini-4-argon</strong></span>
+            <span>Fallback Tier: <strong id="router-fallback" class="text-slate-200 font-mono">gemini-4-neon</strong></span>
             <button onclick="copyRouterCliCommand()" class="text-emerald-400 hover:text-emerald-300 font-mono flex items-center space-x-1">
               <span>📋 Copy CLI dispatch args</span>
             </button>
@@ -1230,6 +1250,15 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         color: 'emerald',
         efforts: ['low', 'medium', 'high'],
         desc: 'Frontier deep reasoning model for vulnerability audits, architectural synthesis, and complex DAG execution.'
+      },
+      'gemini-4-neon': {
+        name: 'Gemini 4 Neon',
+        tier: 'mid_frontier',
+        tag: '#1 Coding Agent & SWE Workhorse',
+        rates: { in: 3.00, out: 15.00, cache: 0.15 },
+        color: 'rose',
+        efforts: ['low', 'medium', 'high', 'xhigh'],
+        desc: '#1 Coding Agent (58.6 AA, 65.2% Terminal-Bench, 95% cache savings) for orchestration, specs, planning, 5-axis reviews, and multi-file builds.'
       },
       'gemini-4-argon': {
         name: 'Gemini 4 Argon',
@@ -1538,11 +1567,18 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const m = (model || '').toLowerCase();
       let badge = '';
 
-      if (m.includes('carbon')) {
+      if (m.includes('carbon') || m === 'gemini-pro-orchestrator' || m === 'orchestrator-carbon') {
         badge = `
           <span class="px-2 py-0.5 rounded text-[11px] font-mono border bg-emerald-950/60 text-emerald-300 border-emerald-500/40 flex items-center gap-1.5 inline-flex shadow-sm shadow-emerald-500/10">
             <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
             <span class="font-bold">Gemini 4 Carbon</span>
+          </span>
+        `;
+      } else if (m.includes('neon') || m.includes('neco')) {
+        badge = `
+          <span class="px-2 py-0.5 rounded text-[11px] font-mono border bg-rose-950/60 text-rose-300 border-rose-500/50 flex items-center gap-1.5 inline-flex shadow-sm shadow-rose-500/25 glow-neon" style="border-color: rgba(244, 63, 94, 0.55); box-shadow: 0 0 12px rgba(244, 63, 94, 0.28);">
+            <span class="w-1.5 h-1.5 rounded-full bg-rose-400 animate-pulse" style="background-color: #f43f5e;"></span>
+            <span class="font-bold">✦ Gemini 4 Neon</span>
           </span>
         `;
       } else if (m.includes('argon') || m.includes('pro')) {
@@ -2040,9 +2076,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
       Object.values(state.tasks).forEach(t => {
         const rawM = (t.model || '').toLowerCase();
-        let canon = 'gemini-4-argon';
+        let canon = 'gemini-4-neon';
         if (rawM.includes('desktop')) canon = 'gemini-desktop-app';
-        else if (rawM.includes('carbon')) canon = 'gemini-4-carbon';
+        else if (rawM.includes('carbon') || rawM === 'gemini-pro-orchestrator' || rawM === 'orchestrator-carbon') canon = 'gemini-4-carbon';
+        else if (rawM.includes('neon') || rawM.includes('neco')) canon = 'gemini-4-neon';
         else if (rawM.includes('argon') || rawM.includes('pro')) canon = 'gemini-4-argon';
         else if (rawM.includes('hydrogen')) canon = 'gemini-4-hydrogen';
         else if (rawM.includes('flash-lite') || rawM.includes('lite')) canon = 'gemini-3.8-flash-lite';
@@ -2098,7 +2135,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const tbody = document.getElementById('analytics-tbody');
       if (!container || !tbody) return;
 
-      // 1. Render 5 model cards
+      // 1. Render model comparative cards
       container.innerHTML = Object.keys(MODEL_SPECS).map(key => {
         const spec = MODEL_SPECS[key];
         const stat = models[key] || { task_count: 0, input_tokens: 0, output_tokens: 0, cache_tokens: 0, total_tokens: 0, cost_usd: 0.0, cost_vnd: 0, saved_usd: 0.0, cache_hit_rate: 0.0 };
@@ -2110,6 +2147,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           cardBorder = 'border-emerald-500/40 bg-gradient-to-br from-emerald-950/40 to-slate-900 shadow-lg shadow-emerald-500/10';
           titleColor = 'text-emerald-300';
           accentGlow = 'glow-carbon';
+        } else if (key === 'gemini-4-neon') {
+          cardBorder = 'border-rose-500/50 bg-gradient-to-br from-rose-950/40 to-slate-900 shadow-lg shadow-rose-500/15';
+          titleColor = 'text-rose-300';
+          accentGlow = 'glow-neon';
         } else if (key === 'gemini-4-argon') {
           cardBorder = 'border-indigo-500/30 bg-gradient-to-br from-indigo-950/30 to-slate-900';
           titleColor = 'text-indigo-300';
@@ -2181,12 +2222,14 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       if (elDeskVnd) elDeskVnd.textContent = `~ ${formatMoneyVND(deskSavedVnd)}`;
 
       const cSpend = (models['gemini-4-carbon']?.cost_usd || 0);
+      const nSpend = (models['gemini-4-neon']?.cost_usd || 0);
       const aSpend = (models['gemini-4-argon']?.cost_usd || 0);
       const hSpend = (models['gemini-4-hydrogen']?.cost_usd || 0);
       const fSpend = (models['gemini-3.8-flash']?.cost_usd || 0);
       const lSpend = (models['gemini-3.8-flash-lite']?.cost_usd || 0);
 
       const cPct = totalSpend > 0 ? (cSpend / totalSpend * 100) : 0;
+      const nPct = totalSpend > 0 ? (nSpend / totalSpend * 100) : 0;
       const aPct = totalSpend > 0 ? (aSpend / totalSpend * 100) : 0;
       const hPct = totalSpend > 0 ? (hSpend / totalSpend * 100) : 0;
       const fPct = totalSpend > 0 ? (fSpend / totalSpend * 100) : 0;
@@ -2194,6 +2237,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
       const barCarbon = document.getElementById('bar-carbon');
       if (barCarbon) barCarbon.style.width = `${cPct}%`;
+      const barNeon = document.getElementById('bar-neon');
+      if (barNeon) barNeon.style.width = `${nPct}%`;
       const barArgon = document.getElementById('bar-argon');
       if (barArgon) barArgon.style.width = `${aPct}%`;
       const barHydrogen = document.getElementById('bar-hydrogen');
@@ -2205,6 +2250,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
       const legCarbon = document.getElementById('legend-carbon');
       if (legCarbon) legCarbon.textContent = `Carbon: ${formatMoneyUSD(cSpend)} (${cPct.toFixed(1)}%)`;
+      const legNeon = document.getElementById('legend-neon');
+      if (legNeon) legNeon.textContent = `Neon: ${formatMoneyUSD(nSpend)} (${nPct.toFixed(1)}%)`;
       const legArgon = document.getElementById('legend-argon');
       if (legArgon) legArgon.textContent = `Argon: ${formatMoneyUSD(aSpend)} (${aPct.toFixed(1)}%)`;
       const legHydrogen = document.getElementById('legend-hydrogen');
@@ -2251,8 +2298,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         if (statusFilter !== 'all' && t.status !== statusFilter) return false;
         if (modelFilter !== 'all') {
           const m = (t.model || '').toLowerCase();
-          if (modelFilter === 'carbon' && !m.includes('carbon')) return false;
-          if (modelFilter === 'argon' && !m.includes('argon') && !m.includes('pro')) return false;
+          if (modelFilter === 'carbon' && !m.includes('carbon') && m !== 'gemini-pro-orchestrator' && m !== 'orchestrator-carbon') return false;
+          if (modelFilter === 'neon' && !m.includes('neon') && !m.includes('neco')) return false;
+          if (modelFilter === 'argon' && !m.includes('argon') && !(m.includes('pro') && !m.includes('neon') && m !== 'gemini-pro-orchestrator')) return false;
           if (modelFilter === 'hydrogen' && !m.includes('hydrogen')) return false;
           if (modelFilter === 'flash' && (!m.includes('flash') || m.includes('lite'))) return false;
           if (modelFilter === 'lite' && !m.includes('lite')) return false;
@@ -2431,7 +2479,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       });
       md.push("");
       md.push("## 2. Compliance & Verification Signatures");
-      md.push("- **Model Taxonomy**: Verified Gemini 4 Carbon, Argon, Hydrogen, Flash, Flash-Lite pricing.");
+      md.push("- **Model Taxonomy**: Verified Gemini 4 Carbon, Neon ($3.00/$15.00/$0.15, 95% cache savings), Argon, Hydrogen, Flash, Flash-Lite pricing.");
       md.push("- **Disjoint Scope Verification**: Verified non-overlapping parallel builder workspaces.");
       md.push("- **Mission Status**: PASS (Automated Audit Signoff)");
       md.push("");
@@ -2544,7 +2592,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const isSecurityTask = (
         p.has_security_impact
         || comp === 'critical'
-        || ((agent === 'security-auditor' || agent === 'debugger') && (comp === 'high' || comp === 'critical'))
+        || agent === 'security-auditor'
+        || (agent === 'debugger' && comp === 'critical')
         || ['vulnerability', 'cve', 'penetration', 'auth', 'crypto', 'owasp', 'rbac', 'jwt', 'migration'].some(k => scopeLower.includes(k))
       );
 
@@ -2559,19 +2608,29 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         tier = 'frontier';
         rationale = 'Critical-tier security audit, vulnerability modeling, or deep root-cause debugging requires Gemini 4 Carbon frontier reasoning.';
         costTier = '$$$$';
-        fallback = 'gemini-4-argon';
+        fallback = 'gemini-4-neon';
       }
       // =========================================================================
-      // RULE 2: CIRCUIT BREAKER ESCALATION (Fast-Retry Topology)
+      // RULE 2: 3-STAGE SWE CIRCUIT BREAKER ESCALATION
+      // (Retry 0: Hydrogen -> Retry 1: Hydrogen xhigh -> Retry 2: Neon high -> Retry 3+: Carbon high)
       // =========================================================================
-      else if (retries >= 2) {
+      else if (retries >= 3) {
         model = 'gemini-4-carbon';
         effort = 'high';
         tier = 'frontier';
-        rationale = `Circuit breaker tripped after ${retries} failed attempts on Gemini 4 Hydrogen. Auto-escalated to Gemini 4 Carbon (high effort) for deep root-cause diagnosis.`;
+        rationale = `3-Stage Circuit Breaker tripped after ${retries} failed attempts (Stage 3). Auto-escalated from Gemini 4 Neon to Gemini 4 Carbon (high effort) for frontier root-cause diagnosis.`;
         costTier = '$$$$';
-        fallback = 'gemini-4-argon';
-        cbMeta = { status: 'tripped', retries: retries, escalated_from: 'gemini-4-hydrogen' };
+        fallback = 'gemini-4-neon';
+        cbMeta = { status: 'tripped', stage: 3, retries: retries, retry_count: retries, escalated_from: 'gemini-4-neon' };
+      }
+      else if (retries === 2) {
+        model = 'gemini-4-neon';
+        effort = comp === 'high' ? 'xhigh' : 'high';
+        tier = 'mid_frontier';
+        rationale = `3-Stage Circuit Breaker Stage 2 (2 retries): escalated from Gemini 4 Hydrogen to Gemini 4 Neon (${effort} effort, #1 Coding Agent) with 32% lower cost & 2x speed vs Carbon.`;
+        costTier = '$$$';
+        fallback = 'gemini-4-carbon';
+        cbMeta = { status: 'escalated_neon', stage: 2, retries: retries, retry_count: retries, escalated_from: 'gemini-4-hydrogen', escalate_to: 'gemini-4-carbon' };
       }
       // =========================================================================
       // RULE 1.5: DESKTOP OFFLOAD GATE (Zero-API-Cost Heavy Read-Only Synthesis)
@@ -2588,37 +2647,55 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         tier = 'external_desktop';
         rationale = 'Heavy non-mutating synthesis offloaded to local Gemini Desktop App ($0.00 AGY API token spend).';
         costTier = '$0';
-        fallback = 'gemini-4-argon';
+        fallback = 'gemini-4-neon';
       }
       // =========================================================================
-      // RULE 3: ARCHITECTURE, SPECIFICATION & 5-AXIS CODE REVIEW
+      // RULE 3: ORCHESTRATION, SPEC, ARCHITECTURE, REVIEW, DEBUG & MULTI-FILE (>= 4)
       // =========================================================================
-      else if (['spec-engineer', 'task-planner', 'code-reviewer'].includes(agent) || comp === 'high') {
-        if (budget === 'quality_first') {
+      else if (
+        ['orchestrator', 'spec-engineer', 'task-planner', 'code-reviewer', 'debugger', 'performance-auditor'].includes(agent)
+        || comp === 'high'
+        || (['builder', 'ui-builder', 'frontend-engineer'].includes(agent) && fileCount >= 4)
+      ) {
+        if (budget === 'quality_first' && (agent === 'spec-engineer' || comp === 'high')) {
           model = 'gemini-4-carbon';
           effort = 'medium';
           tier = 'frontier';
           rationale = 'High-complexity specification/architecture in quality-first mode requires Gemini 4 Carbon frontier reasoning.';
           costTier = '$$$$';
-          fallback = 'gemini-4-argon';
+          fallback = 'gemini-4-neon';
+        } else if (budget === 'quality_first') {
+          model = 'gemini-4-neon';
+          effort = 'xhigh';
+          tier = 'mid_frontier';
+          rationale = 'High-precision architecture, review, or debugging in quality-first mode dispatched to Gemini 4 Neon (xhigh effort).';
+          costTier = '$$$';
+          fallback = 'gemini-4-carbon';
         } else if (['speed_first', 'latency_sensitive'].includes(budget) && agent === 'code-reviewer' && comp !== 'high') {
           model = 'gemini-4-hydrogen';
           effort = 'xhigh';
           tier = 'high_throughput';
           rationale = 'Rapid code review in speed-first mode dispatched to Gemini 4 Hydrogen with maximum reasoning depth (xhigh).';
           costTier = '$$$';
-          fallback = 'gemini-4-argon';
+          fallback = 'gemini-4-neon';
+        } else if (['cost_saving', 'cost_first'].includes(budget) && agent !== 'orchestrator') {
+          model = 'gemini-4-hydrogen';
+          effort = 'xhigh';
+          tier = 'high_throughput';
+          rationale = 'Cost-saving planning/review dispatched to Gemini 4 Hydrogen (xhigh effort, 50% lower token rate).';
+          costTier = '$$';
+          fallback = 'gemini-4-neon';
         } else {
-          model = 'gemini-4-argon';
-          effort = 'medium';
-          tier = 'deep_reasoning';
-          rationale = 'High-complexity planning or review dispatched to Gemini 4 Argon for balanced deep reasoning and throughput.';
+          model = 'gemini-4-neon';
+          effort = ['spec-engineer', 'code-reviewer', 'debugger'].includes(agent) ? 'high' : 'medium';
+          tier = 'mid_frontier';
+          rationale = 'Orchestration, specification, planning, 5-axis review, debugging, or multi-file refactor (>=4 files) dispatched to Gemini 4 Neon (#1 Coding Agent, 65.2% Terminal-Bench, 95% cache savings).';
           costTier = '$$$';
           fallback = 'gemini-4-hydrogen';
         }
       }
       // =========================================================================
-      // RULE 4: PARALLEL BUILDERS, TESTERS, SCOUTS & UI WORKERS
+      // RULE 4: PARALLEL BUILDERS (<=3 FILES), TESTERS, SCOUTS & UI WORKERS
       // =========================================================================
       else if (
         ['builder', 'test-engineer', 'scout', 'codebase-researcher', 'ui-builder', 'frontend-engineer'].includes(agent)
@@ -2627,43 +2704,43 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       ) {
         if (budget === 'cost_saving' || budget === 'cost_first') {
           model = 'gemini-3.8-flash';
-          effort = null;
+          effort = 'low';
           tier = 'cost_efficient';
-          rationale = 'Parallel code implementation in cost-saving mode dispatched to Gemini 3.8 Flash.';
+          rationale = 'Parallel code implementation in cost-saving mode dispatched to Gemini 3.8 Flash (low effort).';
           costTier = '$$';
-          fallback = 'gemini-3.8-flash-lite';
+          fallback = 'gemini-4-hydrogen';
         } else if (budget === 'quality_first' && comp === 'medium') {
-          model = 'gemini-4-argon';
-          effort = 'medium';
-          tier = 'deep_reasoning';
-          rationale = 'Parallel code implementation in quality-first mode dispatched to Gemini 4 Argon for maximum precision.';
+          model = 'gemini-4-neon';
+          effort = 'high';
+          tier = 'mid_frontier';
+          rationale = 'Parallel code implementation in quality-first mode dispatched to Gemini 4 Neon (high effort) for maximum SWE accuracy.';
           costTier = '$$$';
           fallback = 'gemini-4-hydrogen';
         } else {
           model = 'gemini-4-hydrogen';
           if (retries === 1) {
-            effort = (comp === 'medium' || budget === 'speed_first' || budget === 'latency_sensitive') ? 'xhigh' : 'high';
-            cbMeta = { status: 'retrying', retry_count: retries, max_self_retries: 1 };
+            effort = 'xhigh';
+            cbMeta = { status: 'retrying', stage: 1, retry_count: retries, max_self_retries: 2, escalate_to: 'gemini-4-neon' };
           } else {
             effort = comp === 'medium' ? 'high' : 'medium';
-            cbMeta = { status: 'active', retry_count: retries, max_self_retries: 1 };
+            cbMeta = { status: 'active', stage: 0, retry_count: retries, max_self_retries: 2, escalate_to: 'gemini-4-neon' };
           }
           tier = 'high_throughput';
-          rationale = 'Parallel code implementation, testing, or reconnaissance dispatched to Gemini 4 Hydrogen for 2.5x speed and 198 tok/s throughput.';
+          rationale = 'Bounded parallel code implementation, testing, or reconnaissance dispatched to Gemini 4 Hydrogen for 2.5x speed and 198 tok/s throughput.';
           costTier = '$$$';
           fallback = 'gemini-3.8-flash';
         }
       }
       // =========================================================================
-      // RULE 5: MICRO-TIER / TELEMETRY / FORMATTING
+      // RULE 5: MICRO-TIER / TELEMETRY / DOCS / FORMATTING
       // =========================================================================
       else {
-        model = 'gemini-3.8-flash-lite';
-        effort = null;
-        tier = 'ultra_fast';
-        rationale = 'Low-complexity telemetry, doc formatting, or dead code simplification dispatched to Gemini 3.8 Flash-Lite.';
+        model = 'gemini-3.8-flash';
+        effort = 'low';
+        tier = 'cost_efficient';
+        rationale = 'Low-complexity telemetry, doc formatting, or micro-task dispatched to Gemini 3.8 Flash (low effort).';
         costTier = '$';
-        fallback = 'gemini-3.8-flash';
+        fallback = 'gemini-4-hydrogen';
       }
 
       const rec = {
@@ -2686,8 +2763,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       card.classList.remove('hidden');
 
       const retries = (input && input.retry_count !== undefined) ? Number(input.retry_count) : (rec.circuit_breaker ? Number(rec.circuit_breaker.retry_count || rec.circuit_breaker.retries || 0) : 0);
-      const isTripped = (rec.circuit_breaker && rec.circuit_breaker.status === 'tripped') || retries >= 2;
-      const isRetrying = (rec.circuit_breaker && rec.circuit_breaker.status === 'retrying') || retries === 1;
+      const cbStatus = (rec.circuit_breaker && rec.circuit_breaker.status) ? String(rec.circuit_breaker.status).toLowerCase() : '';
+      const isTripped = cbStatus === 'tripped' || retries >= 3;
+      const isEscalatedNeon = cbStatus === 'escalated_neon' || retries === 2;
+      const isRetrying = cbStatus === 'retrying' || retries === 1;
 
       const cbBanner = document.getElementById('router-circuit-breaker-banner');
       const cbTitle = document.getElementById('router-cb-title');
@@ -2697,16 +2776,31 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       if (cbBanner) {
         if (isTripped) {
           cbBanner.classList.remove('hidden');
-          cbBanner.className = 'p-3 rounded-lg border border-rose-500/50 bg-rose-950/40 text-xs font-mono flex items-start space-x-2.5 shadow-md shadow-rose-500/10';
+          cbBanner.className = 'p-3 rounded-lg border border-emerald-500/50 bg-emerald-950/40 text-xs font-mono flex items-start space-x-2.5 shadow-md shadow-emerald-500/10';
           if (cbIcon) cbIcon.textContent = '🚨';
-          if (cbTitle) cbTitle.textContent = `⚡ FAST-RETRY CIRCUIT BREAKER TRIPPED (${retries} Failures)`;
-          if (cbDesc) cbDesc.textContent = 'Threshold exceeded on Gemini 4 Hydrogen. Automatically escalated to Frontier Tier 1 Gemini 4 Carbon (HIGH reasoning effort) for deep root-cause diagnosis!';
+          if (cbTitle) {
+            cbTitle.className = 'font-bold text-emerald-300';
+            cbTitle.textContent = `⚡ 3-STAGE CIRCUIT BREAKER TRIPPED (Stage 3 · ${retries} Failures)`;
+          }
+          if (cbDesc) cbDesc.textContent = 'Stage 2 Neon threshold exceeded. Auto-escalated to Frontier Tier 1 Gemini 4 Carbon (HIGH reasoning effort) for deep root-cause diagnosis!';
+        } else if (isEscalatedNeon) {
+          cbBanner.classList.remove('hidden');
+          cbBanner.className = 'p-3 rounded-lg border border-rose-500/60 bg-rose-950/40 text-xs font-mono flex items-start space-x-2.5 shadow-md shadow-rose-500/20 glow-neon';
+          if (cbIcon) cbIcon.textContent = '✦';
+          if (cbTitle) {
+            cbTitle.className = 'font-bold text-rose-300';
+            cbTitle.textContent = '✦ 3-STAGE CIRCUIT BREAKER ESCALATED → GEMINI 4 NEON (Stage 2 · 2 Failures)';
+          }
+          if (cbDesc) cbDesc.textContent = `Escalated from Gemini 4 Hydrogen to Gemini 4 Neon (${(rec.reasoning_effort || 'HIGH').toUpperCase()} effort, #1 Coding Agent) — 32% lower cost & 2x speed before Carbon frontier trip.`;
         } else if (isRetrying) {
           cbBanner.classList.remove('hidden');
           cbBanner.className = 'p-3 rounded-lg border border-amber-500/50 bg-amber-950/40 text-xs font-mono flex items-start space-x-2.5 shadow-md shadow-amber-500/10';
           if (cbIcon) cbIcon.textContent = '⚡';
-          if (cbTitle) cbTitle.textContent = '⚡ FAST SELF-HEALING RETRY (Turn 1)';
-          if (cbDesc) cbDesc.textContent = `Attempting rapid self-healing on Gemini 4 Hydrogen with elevated reasoning effort [${(rec.reasoning_effort || 'HIGH').toUpperCase()}].`;
+          if (cbTitle) {
+            cbTitle.className = 'font-bold text-amber-300';
+            cbTitle.textContent = '⚡ FAST SELF-HEALING RETRY (Stage 1 · Retry #1)';
+          }
+          if (cbDesc) cbDesc.textContent = `Attempting rapid self-healing on Gemini 4 Hydrogen with elevated reasoning effort [${(rec.reasoning_effort || 'XHIGH').toUpperCase()}]. Next failure escalates to Gemini 4 Neon.`;
         } else {
           cbBanner.classList.add('hidden');
         }
@@ -2738,9 +2832,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         elEffort.innerHTML = `<span class="px-2 py-0.5 rounded text-[10px] font-mono bg-slate-800 text-slate-400 border border-slate-700">Standard (None)</span>`;
       }
 
-      document.getElementById('router-tier-badge').textContent = `tier: ${rec.tier || 'frontier'}`;
+      document.getElementById('router-tier-badge').textContent = `tier: ${rec.tier || 'mid_frontier'}`;
       document.getElementById('router-rationale').textContent = rec.rationale || 'Optimal tier determined based on task scope and blast radius.';
-      document.getElementById('router-fallback').textContent = rec.fallback_model || 'gemini-4-argon';
+      document.getElementById('router-fallback').textContent = rec.fallback_model || 'gemini-4-neon';
     }
 
     function copyRouterCliCommand() {
@@ -3005,7 +3099,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       if (elAgentBadge) elAgentBadge.innerHTML = getAgentBadge(t.agent_type || 'builder');
       
       const elModelBadge = document.getElementById('modal-model-badge');
-      if (elModelBadge) elModelBadge.innerHTML = getModelBadge(t.model || 'argon', t.reasoning_effort);
+      if (elModelBadge) elModelBadge.innerHTML = getModelBadge(t.model || 'neon', t.reasoning_effort);
       
       const elStatusBadge = document.getElementById('modal-status-badge');
       if (elStatusBadge) elStatusBadge.innerHTML = getStatusBadge(t.status || 'running');
