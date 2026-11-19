@@ -1,6 +1,6 @@
 ---
 name: orchestrator
-description: Multi-Agent Orchestrator - coordinate subagents, plan, 5-Tier Periodic Table parallel execution, Fast-Retry Circuit Breaker, and real-time dashboard
+description: Multi-Agent Orchestrator - coordinate subagents, plan, Gemini 4 Neon SWE Fleet & Periodic Table parallel execution, 3-Stage Fast-Retry Circuit Breaker, and real-time dashboard
 ---
 
 # Multi-Agent Orchestrator
@@ -15,19 +15,20 @@ Start full-session Multi-Agent Orchestrator mode:
    - **Zero Direct Heavy Implementation**: The Orchestrator NEVER writes code, runs diagnostic shell scripts directly, or queries databases in the parent session.
    - **Fire & Delegate**: Break work into 1-Agent = 1-Skill tasks, dispatch subagents immediately via `invoke_subagent`, and end turn.
    - **Context Minimization**: Subagents run in isolated sandboxes and only report concise findings back. Zero context pollution.
-   - **"Fast Hands, Deep Brain"**: Hydrogen scouts & parallel builders operate at 198 tok/s, while Argon architects and Carbon secures.
+   - **"Fast Hands, Deep Brain"**: Hydrogen scouts & bounded parallel builders (`<= 3` files) operate at 198 tok/s, while **Gemini 4 Neon** (`gemini-pro-orchestrator-neon`, Coding Agent Index #1 `58.64`, ~105 tok/s) orchestrates, plans, specs, reviews, and handles complex multi-file builds (`>= 4` files), and **Gemini 4 Carbon** locks down Stage 6 security & critical invariants.
 
-3. **5-Tier Periodic Table Intelligent Model Routing**:
-   - ✦ **Tier 1: Frontier Reasoning (`gemini-4-carbon`, `reasoning_effort: high | medium`)**: Mission-critical security audits, deep vulnerability modeling, formal architectural specifications, and complex root-cause debugging. Rates: $2.00 / 1M in, $10.00 / 1M out, $0.50 / 1M cache.
-   - ✦ **Tier 2: Deep Reasoning (`gemini-4-argon`, `reasoning_effort: medium | high`)**: High-velocity deep reasoning for architecture design, task DAG scheduling, 5-axis code reviews, and cross-module contracts. Rates: $1.25 / 1M in, $5.00 / 1M out, $0.3125 / 1M cache.
-   - ✦ **Tier 3: High-Throughput Workhorse (`gemini-4-hydrogen`, `reasoning_effort: low | medium | high | xhigh`)**: Ultra-fast workhorse for parallel code builders, automated test suites, codebase scouting, and UI iteration (198 tok/s, 2.5x speed). Rates: $1.50 / 1M in, $7.50 / 1M out, $0.075 / 1M cache (95% cache savings).
-   - ⚡ **Tier 4: Cost-Efficient Builder / Bulk (`gemini-3.8-flash`)**: Cost-first parallel implementations, scaffolding, and doc formatting. Rates: $0.075 / 1M in, $0.30 / 1M out, $0.01875 / 1M cache.
-   - ⚡ **Tier 5: Ultra-Fast Micro-Tier (`gemini-3.8-flash-lite`)**: Low-latency micro-tier for telemetry heartbeats, quick formatting, and linting. Rates: $0.0375 / 1M in, $0.15 / 1M out, $0.01 / 1M cache.
-   - 🖥️ **External Heavy-Analysis Offload Tier (`gemini-desktop-app` via `gemini-desktop-worker`)**: Local cross-platform Gemini Desktop App bridge (`macos_ax` / `windows_uia` / `linux_pwa` / `mock`) for `$0.00` AGY API spend on heavy **read-only** synthesis (`spec-engineer`, `task-planner`, `code-reviewer`, read-only `debugger`/`scout`) under `--budget-mode hybrid_desktop` or `offload_heavy_to_desktop`. Pre-flight `SecretRedactor` scrubs credentials, Clipboard Save/Restore protects user clipboard (`<= 300ms`), and outputs write to `docs/reports/desktop_worker/{job_id}.md` pointers. *(Rule 1 Security Guardrail & Stage 3 `gemini-4-hydrogen` file-editing builders NEVER offload to Desktop).*
+3. **Periodic Table Intelligent Model Routing (Neon SWE Fleet)**:
+   - ✦ **Tier 1: Frontier Security & Escalation (`gemini-4-carbon`, `reasoning_effort: high | medium`)**: Rule 1 security audits (OWASP/auth/crypto/CVE/migration), `critical` complexity specs, and Circuit Breaker Stage 3 (`retry_count >= 3`). Rates: $2.00 / 1M in, $10.00 / 1M out, $0.50 / 1M cache *(doubles to $4/$20 on Dec 1, 2026)*.
+   - ⚡✦ **Tier 1.5 / 2: SWE Frontier & Orchestrator Brain (`gemini-4-neon`, `gemini-pro-orchestrator-neon`, `reasoning_effort: low | medium | high | xhigh`)**: Element #10 — Coding Agent Index #1 (`58.64`), Intelligence `61` (`xhigh`), `~105 tok/s` (2x Carbon/Argon speed), ~32% lower cost/task vs Carbon. Replaces `gemini-4-argon` across `orchestrator`, `task-planner`, and `code-reviewer`, and takes over non-security `spec-engineer`, `debugger`, `performance-auditor`, multi-file `builder` (`>= 4` files), and Circuit Breaker Stage 2 (`retry_count == 2`). Rates: $3.00 / 1M in, $15.00 / 1M out, $0.15 / 1M cache (95% cache savings).
+   - ✦ **Tier 2b: Legacy Deep Reasoning (`gemini-4-argon`, `reasoning_effort: medium | high`)**: Superseded by `gemini-4-neon` in default SWE routing; retained for historical ledger compatibility & legacy fallback. Rates: $1.25 / 1M in, $5.00 / 1M out, $0.3125 / 1M cache *($2/$10 → $4/$20 Dec 1, 2026)*.
+   - ⚡ **Tier 3: High-Throughput Workhorse (`gemini-4-hydrogen`, `reasoning_effort: low | medium | high | xhigh`)**: Ultra-fast workhorse (198 tok/s, ~2x faster than Neon without ~40s deep-thinking TTFT) for bounded parallel `builder` slices (`<= 3` files), `test-engineer`, `scout`, and UI iteration (~24% quota saved when paired with `Orchestrator (Neon)`). Rates: $1.50 / 1M in, $7.50 / 1M out, $0.075 / 1M cache (95% cache savings).
+   - ⚡ **Tier 4: Cost-Efficient & Active Micro-Tier (`gemini-3.8-flash`, `reasoning_effort: low | medium | high`)**: Cost-first parallel scaffolding, `code-simplifier` (`low`), `doc-generator`, and active telemetry/linting default (replaces absent `gemini-3.8-flash-lite` default). Live rates: $0.75 / 1M in, $3.75 / 1M out, $0.075 / 1M cache. *(Legacy `gemini-3.8-flash-lite` is deprecated/DB-alias only).*
+   - 🖥️ **External Heavy-Analysis Offload Tier (`gemini-desktop-app` via `gemini-desktop-worker`)**: Local cross-platform Gemini Desktop App bridge (`macos_ax` / `windows_uia` / `linux_pwa` / `mock`) for `$0.00` AGY API spend on heavy **read-only** synthesis (`spec-engineer`, `task-planner`, `code-reviewer`, read-only `debugger`/`scout`) under `--budget-mode hybrid_desktop` or `offload_heavy_to_desktop`. Pre-flight `SecretRedactor` scrubs credentials, Clipboard Save/Restore protects user clipboard (`<= 300ms`), and outputs write to `docs/reports/desktop_worker/{job_id}.md` pointers. *(Rule 1 Security Guardrail & Stage 3 file-editing builders NEVER offload to Desktop).*
 
-4. **Fast-Retry & Escalation Circuit Breaker**:
-   - Hydrogen builders & testers perform 1 fast self-healing turn on failure (`effort: xhigh`).
-   - If `retry_count >= 2` or security impact is present, auto-escalate directly to **Gemini 4 Carbon** (`high` effort) for deep root cause diagnosis.
+4. **3-Stage Fast-Retry & Escalation Circuit Breaker**:
+   - **Stage 1 (`retry_count == 1`)**: Hydrogen builders & testers perform 1 fast self-healing turn (`effort: xhigh`).
+   - **Stage 2 (`retry_count == 2`)**: Auto-escalate to **Gemini 4 Neon** (`high`, or `xhigh` if `complexity == "high"`).
+   - **Stage 3 (`retry_count >= 3`)** or security impact: Trip hard directly to **Gemini 4 Carbon** (`high` effort) for final frontier root-cause diagnosis.
 
 5. **Condition-Based DAG Scheduling & Parallel Fan-Out**:
    - Group independent tasks using `parallel_group` (e.g., `BUILD-PARALLEL`) and specify prerequisites with `depends_on`.
