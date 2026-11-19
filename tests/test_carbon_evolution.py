@@ -166,9 +166,18 @@ class TestModelCatalogAndPricing(unittest.TestCase):
             self.assertFalse(valid)
             self.assertIsNone(norm)
 
-        # Gemini 3.8 Flash does not support reasoning efforts
+        # Gemini 3.8 Flash supports low, medium, high (and rejects xhigh)
         for effort in ["low", "medium", "high"]:
             valid, norm = validate_reasoning_effort("gemini-3.8-flash", effort)
+            self.assertTrue(valid)
+            self.assertEqual(norm, effort)
+        valid_x, norm_x = validate_reasoning_effort("gemini-3.8-flash", "xhigh")
+        self.assertFalse(valid_x)
+        self.assertIsNone(norm_x)
+
+        # Deprecated Gemini 3.8 Flash-Lite does not support reasoning efforts
+        for effort in ["low", "medium", "high"]:
+            valid, norm = validate_reasoning_effort("gemini-3.8-flash-lite", effort)
             self.assertFalse(valid)
             self.assertIsNone(norm)
 
@@ -506,7 +515,7 @@ class TestCarbonRESTEndpoints(unittest.TestCase):
         self.assertEqual(rec2_qf["model"], "gemini-4-carbon")
         self.assertEqual(rec2_qf["reasoning_effort"], "medium")
 
-        # 2b. High complexity - balanced mode -> Argon medium
+        # 2b. High complexity - balanced mode -> Neon medium (SWE Frontier)
         status, _, d2_bal = self._post("/api/router/recommend", {
             "agent_type": "task-planner",
             "complexity": "high",
@@ -514,9 +523,9 @@ class TestCarbonRESTEndpoints(unittest.TestCase):
         })
         self.assertEqual(status, 200)
         rec2_bal = d2_bal["recommendation"]
-        self.assertEqual(rec2_bal["model"], "gemini-4-argon")
+        self.assertEqual(rec2_bal["model"], "gemini-4-neon")
         self.assertEqual(rec2_bal["reasoning_effort"], "medium")
-        self.assertEqual(rec2_bal["tier"], "deep_reasoning")
+        self.assertEqual(rec2_bal["tier"], "swe_frontier")
 
         # 3. Medium complexity / Builder in balanced mode -> Hydrogen high (high_throughput)
         status, _, d3 = self._post("/api/router/recommend", {
@@ -541,16 +550,16 @@ class TestCarbonRESTEndpoints(unittest.TestCase):
         self.assertIsNone(rec3_cost["reasoning_effort"])
         self.assertEqual(rec3_cost["tier"], "cost_efficient")
 
-        # 4. Low complexity / Simplifier -> Flash-Lite None
+        # 4. Low complexity / Simplifier -> Gemini 3.8 Flash (cost_efficient)
         status, _, d4 = self._post("/api/router/recommend", {
             "agent_type": "code-simplifier",
             "complexity": "low",
         })
         self.assertEqual(status, 200)
         rec4 = d4["recommendation"]
-        self.assertEqual(rec4["model"], "gemini-3.8-flash-lite")
+        self.assertEqual(rec4["model"], "gemini-3.8-flash")
         self.assertIsNone(rec4["reasoning_effort"])
-        self.assertEqual(rec4["tier"], "ultra_fast")
+        self.assertEqual(rec4["tier"], "cost_efficient")
 
     def test_dag_ready_queue_and_fan_out(self):
         """GET /api/dag/ready correctly computes ready queue, blocked tasks, and parallel Fan-Out groups."""

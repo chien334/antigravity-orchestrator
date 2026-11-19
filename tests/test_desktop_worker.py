@@ -2649,8 +2649,8 @@ class TestExternalWorkerCostAndHybridRouter(unittest.TestCase):
     """4. External Worker Catalog, $0.00 Cost, Quota Saved Math & Hybrid Router Rule 1.5."""
 
     def test_external_workers_catalog_and_zero_api_cost(self):
-        """MODEL_REGISTRY preserves 5 API tiers; gemini-desktop-app lives in EXTERNAL_WORKERS with $0.00 cost."""
-        self.assertEqual(len(MODEL_REGISTRY), 5)
+        """MODEL_REGISTRY preserves 6 API tiers (including Neon); gemini-desktop-app lives in EXTERNAL_WORKERS with $0.00 cost."""
+        self.assertEqual(len(MODEL_REGISTRY), 6)
         self.assertIn("gemini-desktop-app", EXTERNAL_WORKERS)
         self.assertNotIn("gemini-desktop-app", MODEL_REGISTRY)
 
@@ -2697,7 +2697,7 @@ class TestExternalWorkerCostAndHybridRouter(unittest.TestCase):
         self.assertEqual(r1["model"], "gemini-desktop-app")
         self.assertEqual(r1["execution_mode"], "desktop_bridge")
         self.assertEqual(r1["estimated_cost_tier"], "$0")
-        self.assertEqual(r1["fallback_model"], "gemini-4-argon")
+        self.assertEqual(r1["fallback_model"], "gemini-4-neon")
 
         # 2. task-planner (medium) in offload_heavy_to_desktop -> gemini-desktop-app
         r2 = recommend_model(
@@ -2729,14 +2729,14 @@ class TestExternalWorkerCostAndHybridRouter(unittest.TestCase):
         )["recommendation"]
         self.assertEqual(r4["model"], "gemini-4-hydrogen")
 
-        # 5. desktop_available=False falls back cleanly to API fleet (Argon)
+        # 5. desktop_available=False falls back cleanly to API fleet (Neon)
         r5 = recommend_model(
             agent_type="spec-engineer",
             complexity="high",
             budget_mode="hybrid_desktop",
             desktop_available=False,
         )["recommendation"]
-        self.assertEqual(r5["model"], "gemini-4-argon")
+        self.assertEqual(r5["model"], "gemini-4-neon")
 
         # 6. Rule 1 Security Guardrail NEVER bypassed by desktop modes
         r_sec = recommend_model(
@@ -2752,15 +2752,27 @@ class TestExternalWorkerCostAndHybridRouter(unittest.TestCase):
         self.assertEqual(r_sec["reasoning_effort"], "high")
 
         # 7. Rule 2 Circuit Breaker (retry_count >= 2) NEVER bypassed by desktop modes
-        r_cb = recommend_model(
+        r_cb2 = recommend_model(
             agent_type="spec-engineer",
             complexity="high",
             budget_mode="offload_heavy_to_desktop",
             desktop_available=True,
             retry_count=2,
         )["recommendation"]
-        self.assertEqual(r_cb["model"], "gemini-4-carbon")
-        self.assertEqual(r_cb["circuit_breaker"]["status"], "tripped")
+        self.assertEqual(r_cb2["model"], "gemini-4-neon")
+        self.assertEqual(r_cb2["circuit_breaker"]["status"], "tripped")
+        self.assertEqual(r_cb2["circuit_breaker"]["stage"], 2)
+
+        r_cb3 = recommend_model(
+            agent_type="spec-engineer",
+            complexity="high",
+            budget_mode="offload_heavy_to_desktop",
+            desktop_available=True,
+            retry_count=3,
+        )["recommendation"]
+        self.assertEqual(r_cb3["model"], "gemini-4-carbon")
+        self.assertEqual(r_cb3["circuit_breaker"]["status"], "tripped")
+        self.assertEqual(r_cb3["circuit_breaker"]["stage"], 3)
 
     def test_analytics_and_audit_report_include_desktop_jobs(self):
         """compute_model_analytics & generate_audit_report aggregate desktop_jobs metrics cleanly."""
@@ -2862,7 +2874,7 @@ class TestDesktopServerRESTSSEAndDashboard(unittest.TestCase):
         st_m, _, models_data = self._request("GET", "/api/models")
         self.assertEqual(st_m, 200)
         self.assertIn("gemini-desktop-app", models_data["external_workers"])
-        self.assertEqual(len(models_data["models"]), 5)
+        self.assertEqual(len(models_data["models"]), 6)
 
         st_d, _, doc_data = self._request("GET", "/api/desktop/status?driver=mock")
         self.assertEqual(st_d, 200)
