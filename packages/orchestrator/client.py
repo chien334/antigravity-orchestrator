@@ -9,7 +9,10 @@ smart SWE model routing, 3-Stage Circuit Breaker escalation, DAG ready-queue que
 import argparse
 import json
 import os
+import shlex
+import subprocess
 import sys
+import time
 from typing import Any, Dict, List, Optional, Union
 import urllib.error
 import urllib.parse
@@ -47,6 +50,186 @@ def _to_pct(val: Any, default_ratio: float = 0.0) -> int:
     if 0.0 <= num <= 1.0:
         return int(round(num * 100))
     return int(round(num))
+
+
+def _is_local_orchestrator_url(base_url: str) -> tuple[bool, int]:
+    """Return (is_local, port) for an orchestrator server URL."""
+    parsed = urllib.parse.urlparse(base_url)
+    host = (parsed.hostname or "").lower()
+    is_local = host in ("127.0.0.1", "localhost", "::1")
+    port = parsed.port or (443 if parsed.scheme == "https" else 8484)
+    return is_local, port
+
+
+def _find_server_script(explicit_path: Optional[str] = None) -> Optional[str]:
+    """Locate the local Orchestrator server.py script for optional auto-start."""
+    candidates: List[str] = []
+    if explicit_path:
+        candidates.append(os.path.expanduser(explicit_path))
+    here_dir = os.path.dirname(os.path.abspath(__file__))
+    candidates.append(os.path.join(here_dir, "server.py"))
+    candidates.append(os.path.expanduser("~/.gemini/tools/orchestrator/server.py"))
+    candidates.append(os.path.join(os.getcwd(), "tools", "orchestrator", "server.py"))
+    candidates.append(os.path.join(os.getcwd(), "packages", "orchestrator", "server.py"))
+    candidates.append(os.path.expanduser("~/SourceCodes/hospital-suite/tools/orchestrator/server.py"))
+    for cand in candidates:
+        if cand and os.path.isfile(cand):
+            return os.path.abspath(cand)
+    return None
+
+
+def _resolve_client_command_path() -> str:
+    """Return canonical client.py path usable across any workspace."""
+    global_client = os.path.expanduser("~/.gemini/tools/orchestrator/client.py")
+    if os.path.isfile(global_client):
+        return "~/.gemini/tools/orchestrator/client.py"
+    return os.path.abspath(__file__)
+
+
+def _map_api_model_to_invoke_subagent(model_name: str) -> str:
+    """Map Periodic Table API model IDs to Antigravity invoke_subagent Model choices."""
+    lower = (model_name or "").strip().lower()
+    if any(k in lower for k in ("carbon", "neon", "argon", "pro")):
+        return "pro"
+    if "flash_lite" in lower or "flash-lite" in lower:
+        return "flash_lite"
+    return "flash"
+
+
+def _format_desktop_ask_command(
+    client_cmd: str,
+    task_id: str,
+    agent_type: str,
+    workspace: str,
+    allow_edits: bool,
+    prompt_placeholder: str = "<BOUNDED_PROMPT>",
+) -> str:
+    """Build a copy-ready `client.py desktop-ask` command line."""
+    ws = workspace or "."
+    ws_arg = ws if (ws == "." or " " not in ws) else shlex.quote(ws)
+    edits_flag = " --allow-edits" if allow_edits else ""
+    return (
+        f'python3 {client_cmd} desktop-ask --task {task_id} --agent {agent_type} '
+        f'--workspace {ws_arg}{edits_flag} --prompt "{prompt_placeholder}"'
+    )
+
+
+def format_preflight_text(res: dict) -> str:
+    """Render Turn-1 /orchestrator preflight result as an unambiguous LLM/human directive block."""
+    lines: List[str] = []
+    mode = res.get("execution_mode", "API_ONLY_100")
+    banner = res.get("execution_banner") or f"EXECUTION_MODE: {mode}"
+    lines.append("=" * 76)
+    lines.append(banner)
+    lines.append("=" * 76)
+
+    srv_url = res.get("server_url", DEFAULT_BASE_URL)
+    reachable = res.get("server_reachable", False)
+    auto_started = res.get("server_auto_started", False)
+    lines.append(f"Server:        {srv_url} (reachable={reachable}, auto_started={auto_started})")
+
+    desk_ready = bool(res.get("desktop_ready", False))
+    desk_status = res.get("desktop_status") or {}
+    desk_info = desk_status.get("desktop") or {}
+    perms = desk_info.get("permissions") or {}
+    if desk_ready:
+        lines.append(
+            f"Desktop Ready: True (driver={desk_info.get('driver_name', 'auto')}, "
+            f"app={desk_info.get('app_name') or 'Gemini'}, "
+            f"accessibility={perms.get('accessibility', 'granted')}, "
+            f"screen_lock={perms.get('screen_lock', 'unlocked')})"
+        )
+    else:
+        lines.append(f"Desktop Ready: False")
+    lines.append(f"Reason:        {res.get('reason', '-')}")
+    lines.append(f"Workspace:     {res.get('workspace', '.')}")
+
+    share_info = res.get("desktop_share") or desk_status.get("desktop_share") or {}
+    if share_info:
+        cur_pct = _to_pct(share_info.get("current_share", 0.0))
+        tgt_pct = _to_pct(share_info.get("target_share", res.get("target_desktop_share", 0.60)))
+        lines.append(
+            f"Share Target:  {tgt_pct}% Desktop / {100 - tgt_pct}% AGY API "
+            f"(live DB share: {cur_pct}% across {share_info.get('eligible_tasks', 0)} eligible tasks)"
+        )
+
+    client_cmd = res.get("client_script") or _resolve_client_command_path()
+    ws = res.get("workspace", ".")
+    ws_arg = ws if (ws == "." or " " not in ws) else shlex.quote(ws)
+    ch_a = res.get("channel_a_tasks") or []
+    ch_b = res.get("channel_b_tasks") or []
+
+    lines.append("")
+    if desk_ready:
+        lines.append("HARD INVARIANT (HYBRID_60_DESKTOP):")
+        lines.append(
+            "  - Do NOT route spec-engineer, task-planner, code-reviewer, doc-generator,\n"
+            "    non-critical debugger, performance-auditor, OR the primary heavy builder\n"
+            "    of a wave to AGY `pro`/`inherit` `invoke_subagent`!"
+        )
+        lines.append("  - Dispatch Channel A (~60%) via `run_command` (WaitMsBeforeAsync=500 async background).")
+        lines.append("  - Dispatch Channel B (~40%) concurrently in the SAME turn via `invoke_subagent`.")
+        lines.append("")
+        lines.append("--- CHANNEL A: Gemini Desktop App (~60% tasks, $0.00 AGY API spend, 0 focus switches) ---")
+        lines.append("  Execution Tool: `run_command` with `WaitMsBeforeAsync: 500` (async background)")
+        lines.append("  Owned Roles:    spec-engineer, task-planner, code-reviewer, doc-generator,")
+        lines.append("                  performance-auditor, non-critical debugger, + max 1 heavy builder/parallel_group")
+        lines.append("  Read-Only Cmd (omit --allow-edits):")
+        lines.append(
+            f'    python3 {client_cmd} desktop-ask --task <TASK_ID> --agent <ROLE> '
+            f'--workspace {ws_arg} --prompt "<BOUNDED_PROMPT>"'
+        )
+        lines.append("  Mutating Cmd (builder/debugger — max 1 per parallel_group):")
+        lines.append(
+            f'    python3 {client_cmd} desktop-ask --task <TASK_ID> --agent builder '
+            f'--workspace {ws_arg} --allow-edits --prompt "<BOUNDED_PROMPT>"'
+        )
+        lines.append(
+            '  Wrapper Option: Only if delegating dispatch, use a thin `invoke_subagent(Model="flash_lite")` '
+            'that ONLY calls `client.py desktop-ask` and NEVER solves the task itself.'
+        )
+        lines.append("")
+        lines.append("--- CHANNEL B: AGY Subagents (~40% tasks — Concurrent Fan-Out & Rule 1 Security) ---")
+        lines.append("  Execution Tool: `invoke_subagent` (launched concurrently in the same turn)")
+        lines.append('  - Sibling parallel builders (<=3 files), test-engineer, scout: `invoke_subagent(Model="flash", ...)`')
+        lines.append(
+            '  - Rule 1 critical security audits (`security-auditor`, `has_security_impact`, `critical` complexity)\n'
+            '    & Circuit Breaker Stage 2/3 escalations: `invoke_subagent(Model="pro", ...)` (or `"inherit"`)'
+        )
+    else:
+        lines.append("DIRECTIVE (API_ONLY_100):")
+        lines.append("  - Desktop App is unavailable or locked. Dispatch 100% of tasks via `invoke_subagent`:")
+        lines.append(
+            '    * `Model="pro"` (or `"inherit"`) [Gemini 4 Carbon / Neon]: '
+            'security-auditor, spec-engineer, task-planner, code-reviewer, debugger, multi-file builder (>=4 files)'
+        )
+        lines.append(
+            '    * `Model="flash"` [Gemini 4 Hydrogen / 3.8 Flash]: '
+            'bounded builder (<=3 files), test-engineer, scout, code-simplifier, doc-generator'
+        )
+
+    if ch_a or ch_b:
+        lines.append("")
+        lines.append(f"--- ALLOCATED DAG TASKS ({len(ch_a)} Channel A / {len(ch_b)} Channel B) ---")
+        if ch_a:
+            lines.append("  Channel A (`gemini-desktop-app` via `run_command` WaitMsBeforeAsync=500):")
+            for item in ch_a:
+                grp = f" group={item['parallel_group']}" if item.get("parallel_group") else ""
+                lines.append(
+                    f"    * [{item['task_id']}] agent={item['agent_type']} "
+                    f"allow_edits={bool(item.get('allow_edits'))}{grp}"
+                )
+                lines.append(f"      {item['suggested_command']}")
+        if ch_b:
+            lines.append("  Channel B (`AGY Subagents` via `invoke_subagent`):")
+            for item in ch_b:
+                grp = f" group={item['parallel_group']}" if item.get("parallel_group") else ""
+                lines.append(
+                    f"    * [{item['task_id']}] agent={item['agent_type']} "
+                    f"model={item.get('model')} -> invoke_subagent(Model=\"{item.get('invoke_subagent_model', 'flash')}\"){grp}"
+                )
+
+    return "\n".join(lines)
 
 
 class OrchestratorClient:
@@ -463,6 +646,258 @@ class OrchestratorClient:
     def desktop_cancel(self, job_id: str) -> dict:
         """Cancel a queued or running desktop worker job (POST /api/desktop/cancel)."""
         return self._post("/api/desktop/cancel", {"job_id": job_id})
+
+    def preflight(
+        self,
+        auto_start: bool = True,
+        tasks: Optional[List[Dict[str, Any]]] = None,
+        target_desktop_share: float = 0.60,
+        apply: bool = False,
+        driver: str = "auto",
+        target_os: str = "auto",
+        wait_timeout: float = 2.0,
+        server_script: Optional[str] = None,
+        db_path: Optional[str] = None,
+        workspace: str = ".",
+        no_desktop: bool = False,
+    ) -> dict:
+        """Run Turn-1 /orchestrator pre-flight: ensure server health, probe Gemini Desktop readiness, and emit 60/40 Dual-Channel plan."""
+        client_cmd = _resolve_client_command_path()
+        ws_display = workspace or "."
+        eff_driver = _normalize_desktop_driver(driver)
+
+        status_res = self.desktop_status(driver=eff_driver, target_os=target_os)
+        is_conn_err = (
+            isinstance(status_res, dict)
+            and "error" in status_res
+            and "Failed to connect" in str(status_res.get("error", ""))
+        )
+        server_reachable = not is_conn_err
+        auto_started = False
+
+        if not server_reachable and auto_start:
+            is_local, port = _is_local_orchestrator_url(self.base_url)
+            srv_path = _find_server_script(server_script)
+            if is_local and srv_path:
+                cmd = [sys.executable, srv_path, "--port", str(port)]
+                resolved_db = db_path or os.environ.get("ORCHESTRATOR_DB") or os.path.join(
+                    os.path.dirname(srv_path), "orchestrator.db"
+                )
+                if resolved_db:
+                    cmd.extend(["--db", resolved_db])
+                try:
+                    subprocess.Popen(
+                        cmd,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        stdin=subprocess.DEVNULL,
+                        start_new_session=True,
+                    )
+                    deadline = time.monotonic() + max(0.2, float(wait_timeout))
+                    while time.monotonic() < deadline:
+                        probe = self._get("/api/state", timeout=1)
+                        if isinstance(probe, dict) and "error" not in probe:
+                            server_reachable = True
+                            auto_started = True
+                            break
+                        time.sleep(0.15)
+                except OSError:
+                    pass
+                if server_reachable:
+                    status_res = self.desktop_status(driver=eff_driver, target_os=target_os)
+
+        desk_info = status_res.get("desktop") or {} if isinstance(status_res, dict) else {}
+        desk_share = status_res.get("desktop_share") or {} if isinstance(status_res, dict) else {}
+        perms = desk_info.get("permissions") or {}
+        screen_lock = perms.get("screen_lock")
+
+        if no_desktop:
+            desktop_ready = False
+            reason = "Pure API mode explicitly forced (--no-desktop / --api-only)"
+        elif not server_reachable or (isinstance(status_res, dict) and "error" in status_res and "desktop" not in status_res):
+            desktop_ready = False
+            reason = (
+                str(status_res.get("error"))
+                if isinstance(status_res, dict) and status_res.get("error")
+                else f"Orchestrator server at {self.base_url} is unreachable"
+            )
+        else:
+            if "desktop_ready" in desk_share:
+                desktop_ready = bool(desk_share["desktop_ready"]) and screen_lock != "locked"
+            else:
+                desktop_ready = bool(desk_info.get("ready", False)) and screen_lock != "locked"
+
+            if desktop_ready:
+                reason = (
+                    f"Gemini Desktop App ready via driver={desk_info.get('driver_name', 'auto')} "
+                    f"(accessibility={perms.get('accessibility', 'granted')}, "
+                    f"screen_lock={screen_lock or 'unlocked'})"
+                )
+            else:
+                reasons: List[str] = []
+                if screen_lock == "locked":
+                    reasons.append("screen_lock=locked")
+                if not desk_info.get("app_detected", True):
+                    reasons.append("Gemini Desktop App not detected")
+                if perms.get("accessibility") and perms.get("accessibility") != "granted":
+                    reasons.append(f"accessibility={perms.get('accessibility')}")
+                for warn in (desk_info.get("warnings") or []):
+                    if warn and warn not in reasons:
+                        reasons.append(str(warn))
+                reason = "; ".join(reasons) or "Gemini Desktop App unavailable or not ready"
+
+        allocation: Optional[dict] = None
+        channel_a_tasks: List[Dict[str, Any]] = []
+        channel_b_tasks: List[Dict[str, Any]] = []
+        pending_count = 0
+
+        if server_reachable:
+            task_list: Optional[List[Dict[str, Any]]] = None
+            if tasks is not None:
+                task_list = list(tasks)
+                pending_count = len(task_list)
+            else:
+                state_res = self.get_state()
+                if isinstance(state_res, dict) and "error" not in state_res:
+                    raw_tasks = state_res.get("tasks", [])
+                    if isinstance(raw_tasks, dict):
+                        raw_tasks = list(raw_tasks.values())
+                    pending_tasks = [
+                        t for t in raw_tasks
+                        if isinstance(t, dict) and str(t.get("status", "")).lower() == "pending"
+                    ]
+                    pending_count = len(pending_tasks)
+                    if pending_tasks:
+                        task_list = pending_tasks
+
+            if task_list:
+                allocation = self.allocate_dag(
+                    tasks=task_list,
+                    desktop_available=desktop_ready,
+                    desktop_target_share=target_desktop_share,
+                    apply=apply,
+                )
+
+        if isinstance(allocation, dict) and allocation.get("allocations"):
+            for item in allocation["allocations"]:
+                assigned_model = str(item.get("assigned_model") or item.get("model") or "")
+                tid = str(item.get("task_id") or "")
+                agent = str(item.get("agent_type") or "builder")
+                entry = dict(item)
+                if assigned_model.lower() == "gemini-desktop-app":
+                    allow_edits = bool(item.get("allow_edits", False))
+                    entry["channel"] = "A"
+                    entry["dispatch_via"] = "run_command"
+                    entry["wait_ms_before_async"] = 500
+                    entry["suggested_command"] = _format_desktop_ask_command(
+                        client_cmd=client_cmd,
+                        task_id=tid,
+                        agent_type=agent,
+                        workspace=ws_display,
+                        allow_edits=allow_edits,
+                    )
+                    channel_a_tasks.append(entry)
+                else:
+                    entry["channel"] = "B"
+                    entry["dispatch_via"] = "invoke_subagent"
+                    entry["invoke_subagent_model"] = _map_api_model_to_invoke_subagent(assigned_model)
+                    channel_b_tasks.append(entry)
+
+        if desktop_ready:
+            execution_mode = "HYBRID_60_DESKTOP"
+            execution_banner = (
+                "EXECUTION_MODE: HYBRID_60_DESKTOP "
+                "(Gemini Desktop App Ready — Target 60% Desktop / 40% AGY)"
+            )
+            directives = {
+                "channel_a": {
+                    "engine": "gemini-desktop-app",
+                    "target_share": round(float(target_desktop_share), 4),
+                    "tool": "run_command",
+                    "wait_ms_before_async": 500,
+                    "roles": [
+                        "spec-engineer",
+                        "task-planner",
+                        "code-reviewer",
+                        "doc-generator",
+                        "performance-auditor",
+                        "debugger",
+                        "primary_heavy_builder_max_1_per_parallel_group",
+                    ],
+                    "command_template": _format_desktop_ask_command(
+                        client_cmd=client_cmd,
+                        task_id="<TASK_ID>",
+                        agent_type="<ROLE>",
+                        workspace=ws_display,
+                        allow_edits=False,
+                    ),
+                    "command_template_mutating": _format_desktop_ask_command(
+                        client_cmd=client_cmd,
+                        task_id="<TASK_ID>",
+                        agent_type="builder",
+                        workspace=ws_display,
+                        allow_edits=True,
+                    ),
+                    "wrapper_subagent_model": "flash_lite",
+                },
+                "channel_b": {
+                    "engine": "agy_subagents",
+                    "target_share": round(max(0.0, 1.0 - float(target_desktop_share)), 4),
+                    "tool": "invoke_subagent",
+                    "flash_roles": ["builder (<=3 files sibling)", "test-engineer", "scout"],
+                    "pro_roles": ["security-auditor (Rule 1)", "critical complexity", "CB Stage 2/3"],
+                },
+            }
+        else:
+            execution_mode = "API_ONLY_100"
+            execution_banner = (
+                "EXECUTION_MODE: API_ONLY_100 "
+                "(Desktop App Unavailable/Locked — 100% AGY Subagents)"
+            )
+            directives = {
+                "channel_a": None,
+                "channel_b": {
+                    "engine": "agy_subagents",
+                    "target_share": 1.0,
+                    "tool": "invoke_subagent",
+                    "pro_roles": [
+                        "security-auditor",
+                        "spec-engineer",
+                        "task-planner",
+                        "code-reviewer",
+                        "debugger",
+                        "builder (>=4 files)",
+                    ],
+                    "flash_roles": [
+                        "builder (<=3 files)",
+                        "test-engineer",
+                        "scout",
+                        "code-simplifier",
+                        "doc-generator",
+                    ],
+                },
+            }
+
+        return {
+            "status": "ok",
+            "server_url": self.base_url,
+            "server_reachable": server_reachable,
+            "server_auto_started": auto_started,
+            "desktop_ready": desktop_ready,
+            "execution_mode": execution_mode,
+            "execution_banner": execution_banner,
+            "target_desktop_share": float(target_desktop_share),
+            "reason": reason,
+            "workspace": ws_display,
+            "client_script": client_cmd,
+            "pending_task_count": pending_count,
+            "desktop_status": status_res if isinstance(status_res, dict) else {},
+            "desktop_share": desk_share,
+            "channel_a_tasks": channel_a_tasks,
+            "channel_b_tasks": channel_b_tasks,
+            "allocation": allocation,
+            "directives": directives,
+        }
 
 
 def auto_detect_tokens_and_conv(conv_id=None, in_tok=None, out_tok=None, cache_tok=None):
@@ -969,6 +1404,106 @@ def main():
         help="Output format (json, text, default: json)",
     )
 
+    # preflight
+    try:
+        default_share_env = float(os.environ.get("ORCHESTRATOR_DESKTOP_SHARE", "0.60"))
+    except ValueError:
+        default_share_env = 0.60
+    preflight_parser = subparsers.add_parser(
+        "preflight",
+        help="Turn-1 /orchestrator pre-flight: auto-start server if needed, probe Gemini Desktop readiness, and print 60/40 Dual-Channel dispatch directives",
+    )
+    preflight_auto_group = preflight_parser.add_mutually_exclusive_group()
+    preflight_auto_group.add_argument(
+        "--auto-start",
+        dest="auto_start",
+        action="store_true",
+        default=True,
+        help="Auto-start local server.py daemon if unreachable (default: True)",
+    )
+    preflight_auto_group.add_argument(
+        "--no-auto-start",
+        dest="auto_start",
+        action="store_false",
+        help="Do not attempt to auto-start server.py if unreachable",
+    )
+    preflight_parser.add_argument(
+        "--wait-timeout",
+        type=float,
+        default=2.0,
+        help="Seconds to wait for auto-started server health (default: 2.0)",
+    )
+    preflight_parser.add_argument(
+        "--server-script",
+        type=str,
+        default=None,
+        help="Optional path to server.py for auto-start",
+    )
+    preflight_parser.add_argument(
+        "--db",
+        dest="db_path",
+        type=str,
+        default=None,
+        help="Optional SQLite DB path when auto-starting server.py",
+    )
+    preflight_parser.add_argument(
+        "--tasks-json",
+        type=str,
+        default=None,
+        help="Optional JSON array/object string or file path of tasks to split 60/40 via allocate-dag",
+    )
+    preflight_parser.add_argument(
+        "--target-desktop-share",
+        dest="target_desktop_share",
+        type=float,
+        default=default_share_env,
+        help="Target Gemini Desktop App peer share ratio 0.0-1.0 (default: 0.60)",
+    )
+    preflight_parser.add_argument(
+        "--apply",
+        action="store_true",
+        default=False,
+        help="Persist allocated models to pending tasks on the Orchestrator server",
+    )
+    preflight_parser.add_argument(
+        "-w",
+        "--workspace",
+        type=str,
+        default=".",
+        help="Workspace directory for Channel A desktop-ask command templates (default: .)",
+    )
+    preflight_parser.add_argument(
+        "--driver",
+        type=str,
+        default="auto",
+        choices=["auto", "macos_ax", "orca", "windows_uia", "linux_pwa", "linux_x11", "mock"],
+        help="Desktop automation driver to probe (default: auto)",
+    )
+    preflight_parser.add_argument(
+        "--target-os",
+        "--os",
+        dest="target_os",
+        type=str,
+        default="auto",
+        choices=["auto", "darwin", "win32", "linux"],
+        help="Target OS override for probe (default: auto)",
+    )
+    preflight_parser.add_argument(
+        "--no-desktop",
+        "--api-only",
+        dest="no_desktop",
+        action="store_true",
+        default=False,
+        help="Force 100%% AGY API execution mode even if Desktop App is ready",
+    )
+    preflight_parser.add_argument("--json", action="store_true", help="Output raw JSON response")
+    preflight_parser.add_argument(
+        "--format",
+        choices=["text", "json"],
+        default="text",
+        help="Output format (text, json, default: text)",
+    )
+
     args = parser.parse_args()
     client = OrchestratorClient(base_url=args.url)
 
@@ -1414,6 +1949,45 @@ def main():
             print(f"Cancelled desktop job {job.get('job_id', target_job_id)}: status={job.get('status', 'cancelled')}")
         else:
             print(json.dumps(res, indent=2))
+
+    elif args.command == "preflight":
+        parsed_tasks = None
+        if args.tasks_json:
+            raw_spec = args.tasks_json
+            try:
+                if os.path.isfile(raw_spec):
+                    with open(raw_spec, "r", encoding="utf-8") as f:
+                        loaded = json.load(f)
+                else:
+                    loaded = json.loads(raw_spec)
+                if isinstance(loaded, dict) and isinstance(loaded.get("tasks"), list):
+                    parsed_tasks = loaded["tasks"]
+                elif isinstance(loaded, list):
+                    parsed_tasks = loaded
+                else:
+                    print(json.dumps({"error": "--tasks-json must decode to a JSON array or {\"tasks\": [...]}"}, indent=2))
+                    sys.exit(2)
+            except Exception as exc:
+                print(json.dumps({"error": f"Invalid --tasks-json input: {exc}"}, indent=2))
+                sys.exit(2)
+
+        res = client.preflight(
+            auto_start=args.auto_start,
+            tasks=parsed_tasks,
+            target_desktop_share=args.target_desktop_share,
+            apply=args.apply,
+            driver=args.driver,
+            target_os=args.target_os,
+            wait_timeout=args.wait_timeout,
+            server_script=args.server_script,
+            db_path=args.db_path,
+            workspace=args.workspace,
+            no_desktop=args.no_desktop,
+        )
+        if args.json or args.format == "json":
+            print(json.dumps(res, indent=2))
+        else:
+            print(format_preflight_text(res))
 
 
 if __name__ == "__main__":

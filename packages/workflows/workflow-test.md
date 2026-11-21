@@ -7,10 +7,10 @@ description: Stage 4 Testing Workflow - Implement tests matching acceptance crit
 
 ## 1. Objective & Persona
 - **Persona**: `test-engineer`
-- **Model Engine**: ⚡ **Gemini 4 Hydrogen** (`model: gemini-4-hydrogen`, `reasoning_effort: medium | high`)  
+- **Channel & Model Engine**: ⚡ **Channel B — Gemini 4 Hydrogen** (`invoke_subagent(Model="flash")`, `--model gemini-4-hydrogen`, `reasoning_effort: medium | high`)  
   *High-throughput test authoring and sandbox test execution (198 tok/s, ~2x faster than Neon) with 95% cache savings ($0.075 / 1M cache tokens).*  
-  *(Fallback to ⚡ **Gemini 3.8 Flash** (`low`) in `cost_saving` mode; **Gemini 4 Neon** (`medium`) in `quality_first` mode).*  
-  *(**3-Stage Fast-Retry Circuit Breaker**: If unexpected test failures occur, allow 1 fast self-healing turn on Hydrogen with `effort: xhigh` (`retry_count == 1`). At `retry_count == 2`, escalate to ⚡✦ **Gemini 4 Neon** (`high`, or `xhigh` if `complexity == "high"`). If regressions persist at `retry_count >= 3` or implicate security boundaries, trip the circuit breaker hard to `debugger` with ✦ **Gemini 4 Carbon** and `reasoning_effort: high`).*
+  *(Fallback to ⚡ **Gemini 3.8 Flash** (`Model="flash"`, `low`) in `cost_saving` mode; **Gemini 4 Neon** (`Model="pro"`, `medium`) in `quality_first` mode).*  
+  *(**3-Stage Fast-Retry Circuit Breaker**: Retries never offload to Desktop. At `retry_count == 1`, allow 1 fast self-healing turn on Hydrogen (`Model="flash"`, `effort: xhigh`). At `retry_count == 2`, escalate to ⚡✦ **Gemini 4 Neon** (`Model="pro"`, `high` or `xhigh`). If regressions persist at `retry_count >= 3` or implicate security boundaries, trip hard to `debugger` on ✦ **Gemini 4 Carbon** (`Model="pro"`, `effort: high`).)*
 - **Primary Skill**: `test-driven-development`
 
 ---
@@ -27,7 +27,7 @@ description: Stage 4 Testing Workflow - Implement tests matching acceptance crit
 ## 3. Execution Steps
 1. **Emit Start Telemetry**:
    ```bash
-   python3 packages/orchestrator/client.py update \
+   python3 ~/.gemini/tools/orchestrator/client.py update \
      --task "TEST-{FEATURE}" \
      --agent "test-engineer" \
      --model "gemini-4-hydrogen" \
@@ -51,7 +51,7 @@ description: Stage 4 Testing Workflow - Implement tests matching acceptance crit
 4. **Artifact Generation**: Produce `docs/reports/test_report.json`.
 5. **Emit Completion Telemetry**:
    ```bash
-   python3 packages/orchestrator/client.py update \
+   python3 ~/.gemini/tools/orchestrator/client.py update \
      --task "TEST-{FEATURE}" \
      --agent "test-engineer" \
      --model "gemini-4-hydrogen" \

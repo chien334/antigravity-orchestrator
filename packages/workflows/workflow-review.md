@@ -1,18 +1,30 @@
 ---
 name: workflow-review
-description: Stage 5 Code Review Workflow - Conduct multi-axis review of git diff against plan and test report using Gemini 4 Neon, producing docs/reviews/review_signoff.md
+description: Stage 5 Code Review Workflow - Conduct 5-axis review of git diff against plan and test report via Channel A Gemini.app Desktop (when HYBRID_60_DESKTOP, $0.00 API spend) or Channel B Gemini 4 Neon fallback, producing docs/reviews/review_signoff.md
 ---
 
 # Stage 5: Multi-Axis Code Review Workflow
 
 ## 1. Objective & Persona
 - **Persona**: `code-reviewer`
-- **Model Engine**: ⚡✦ **Gemini 4 Neon** (`model: gemini-4-neon`, `reasoning_effort: high`)  
-  *SWE Frontier engine (Coding Agent Index #1 `58.64`, Intelligence `61`, FrontierCode `46.2%`, `~105 tok/s` — 2x faster than Argon) superseding `gemini-4-argon` for 5-axis code quality inspection and architectural compliance.*  
-  *(In `quality_first` mode, use ⚡✦ **Gemini 4 Neon** with `reasoning_effort: xhigh`, or escalate to ✦ **Gemini 4 Carbon** when reviewing security-sensitive core subsystems).*  
-  *(In `speed_first` / `latency_sensitive` mode, rapid code reviews of non-critical medium PRs are dispatched to ⚡ **Gemini 4 Hydrogen** with `reasoning_effort: xhigh` thinking depth).*  
-  *(Optional `hybrid_desktop` Offload: Non-mutating 5-axis design critiques of bounded diff/plan summaries without security impact may be offloaded to `gemini-desktop-app` via `client.py desktop-ask --driver auto` after `SecretRedactor` scrubbing, returning `docs/reports/desktop_worker/{job_id}.md` to `code-reviewer` for final sign-off. Security-sensitive diffs MUST remain on `gemini-4-carbon` / `gemini-4-neon`.)*
-- **Primary Skill**: `code-review-and-quality`
+- **Dual-Channel Model & Dispatch Routing** (governed by Turn-1 `python3 ~/.gemini/tools/orchestrator/client.py preflight --workspace .`):
+  - **Non-Security 5-Axis Reviews when `EXECUTION_MODE: HYBRID_60_DESKTOP` (`desktop_ready == true`, Default)**:
+    🖥️ **Channel A — `gemini-desktop-app`** (`$0.00` AGY API spend, `0` focus switches, `mode="task"`, `allow_edits=False` — omit `--allow-edits`).
+    **HARD INVARIANT**: Do **NOT** dispatch non-security `code-reviewer` to an AGY `pro`/`inherit` `invoke_subagent` when `desktop_ready == true`! Dispatch via `run_command` (`WaitMsBeforeAsync: 500`):
+    ```bash
+    python3 ~/.gemini/tools/orchestrator/client.py desktop-ask \
+      --task "REVIEW-{FEATURE}" \
+      --agent code-reviewer \
+      --workspace . \
+      --output "docs/reports/desktop_worker/REVIEW-{FEATURE}.md" \
+      --prompt "Conduct a 5-axis review (Correctness, Architecture, Maintainability, Performance, Error Handling) of changes for {FEATURE} against docs/plans/{feature_id}.plan.md and docs/reports/test_report.json. Return APPROVED or REQUEST_CHANGES with exact file/line findings. Read-only inspection only."
+    ```
+  - **Non-Security Reviews when `EXECUTION_MODE: API_ONLY_100` (`desktop_ready == false`)**:
+    ⚡✦ **Channel B — Gemini 4 Neon** (`invoke_subagent(Model="pro")` or `"inherit"`, `--model gemini-4-neon`, `reasoning_effort: high` or `xhigh` in `quality_first`).  
+    *(In `speed_first` mode for medium PRs, dispatch to ⚡ **Gemini 4 Hydrogen** via `invoke_subagent(Model="flash")` with `effort: xhigh`.)*
+  - **Security-Sensitive Subsystems**:
+    ✦ **Channel B — Gemini 4 Carbon** (`invoke_subagent(Model="pro")`, `--model gemini-4-carbon`, `reasoning_effort: high`). Security-critical diffs NEVER offload to Desktop.
+- **Primary Skill**: `code-review-and-quality` *(+ `gemini-desktop-worker` when Channel A Desktop is active)*
 
 ---
 
@@ -28,16 +40,16 @@ description: Stage 5 Code Review Workflow - Conduct multi-axis review of git dif
 ## 3. Execution Steps
 1. **Emit Start Telemetry**:
    ```bash
-   python3 packages/orchestrator/client.py update \
+   # Use --model gemini-desktop-app in HYBRID_60_DESKTOP mode, or --model gemini-4-neon in API_ONLY_100 mode
+   python3 ~/.gemini/tools/orchestrator/client.py update \
      --task "REVIEW-{FEATURE}" \
      --agent "code-reviewer" \
-     --model "gemini-4-neon" \
-     --effort "high" \
+     --model "gemini-desktop-app" \
      --complexity "high" \
      --status "running" \
      --progress 20 \
      --scope "Git Diff & Quality Inspection" \
-     --notes "Analyzing diff against 5 review axes with Gemini 4 Neon"
+     --notes "Analyzing diff against 5 review axes"
    ```
 2. **5-Axis Review Inspection**:
    - **Correctness**: Does the code implement all requirements without regressions?
@@ -51,16 +63,12 @@ description: Stage 5 Code Review Workflow - Conduct multi-axis review of git dif
 4. **Artifact Generation**: Produce `docs/reviews/review_signoff.md`.
 5. **Emit Completion Telemetry**:
    ```bash
-   python3 packages/orchestrator/client.py update \
+   python3 ~/.gemini/tools/orchestrator/client.py update \
      --task "REVIEW-{FEATURE}" \
      --agent "code-reviewer" \
-     --model "gemini-4-neon" \
-     --effort "high" \
+     --model "gemini-desktop-app" \
      --status "completed" \
      --progress 100 \
-     --input-tokens {IN_TOK} \
-     --output-tokens {OUT_TOK} \
-     --cache-tokens {CACHE_TOK} \
      --scope "docs/reviews/review_signoff.md" \
      --notes "Review completed with sign-off status: APPROVED"
    ```
@@ -74,7 +82,7 @@ Save to: `docs/reviews/review_signoff.md`
 # Code Review Sign-Off: {Feature Name}
 
 - **Reviewer**: `code-reviewer`
-- **Model Engine**: `gemini-4-neon` (effort: high)
+- **Model Engine**: `gemini-desktop-app` (or `gemini-4-neon` in `API_ONLY_100`)
 - **Verdict**: `APPROVED` | `REQUEST_CHANGES`
 
 ## 5-Axis Assessment
@@ -89,4 +97,4 @@ Save to: `docs/reviews/review_signoff.md`
 - **Ready for Security Audit**: `YES`
 ```
 
-> **Handoff**: The approved sign-off `docs/reviews/review_signoff.md` is passed as input to **Stage 6 (`workflow-security`)**.
+> **Handoff**: The approved sign-off `docs/reviews/review_signoff.md` is passed as input to **Stage 6 (`workflow-security`)** on Channel B **Gemini 4 Carbon** (`invoke_subagent(Model="pro")`).
