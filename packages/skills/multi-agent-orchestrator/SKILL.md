@@ -12,9 +12,16 @@ The **Multi-Agent Orchestrator** coordinates autonomous subagents to deliver com
 Rooted in the **1-Agent = 1-Skill** paradigm popularized by Addy Osmani's agent design patterns, every agent in the fleet operates under a bounded scope, specialized persona, and strict context minimization protocol.
 
 ### Core Objectives
-1. **Divide and Conquer**: Deconstruct monolithic tasks into discrete, verifiable slices with clear boundary contracts.
-2. **Context Minimization**: Prevent token bloat by using pointer-based file references (`file:///...`) and scoped briefings.
-3. **Periodic Table Intelligent Model Routing (Neon SWE Fleet)**: Dynamically match task complexity to the optimal model tier:
+1. **MANDATORY Turn-1 Pre-Flight & Dual-Channel Dispatch (~60% Desktop / ~40% AGY)**:
+   On Turn 1 of every `/orchestrator` invocation, run `python3 ~/.gemini/tools/orchestrator/client.py preflight --workspace .` (auto-starts `:8484` if needed and checks `desktop_share.desktop_ready`):
+   - **When `EXECUTION_MODE: HYBRID_60_DESKTOP` (`desktop_ready == true`)**:
+     - **Hard Invariant**: Never route `spec-engineer`, `task-planner`, `code-reviewer`, `doc-generator`, non-critical `debugger`, `performance-auditor`, or a wave's primary heavy `builder` to AGY `pro`/`inherit` `invoke_subagent`.
+     - **Channel A (`gemini-desktop-app`, ~60% tasks, `$0.00` AGY API spend, `0` focus switches)**: Dispatch directly via `run_command(..., WaitMsBeforeAsync=500)` calling `python3 ~/.gemini/tools/orchestrator/client.py desktop-ask --task <ID> --agent <ROLE> --workspace . [--allow-edits] --prompt "..."` (max 1 task per `parallel_group`). *(Alternative: thin `invoke_subagent(Model="flash_lite")` wrapper that only calls `client.py desktop-ask`.)*
+     - **Channel B (`AGY Subagents`, ~40% tasks, concurrent in same turn)**: Dispatch sibling parallel builders/testers/scouts via `invoke_subagent(Model="flash")` (`gemini-4-hydrogen` / `3.8-flash`), and Rule 1 security audits + CB Stage 2/3 via `invoke_subagent(Model="pro")` (`gemini-4-carbon` / `4-neon`).
+   - **When `EXECUTION_MODE: API_ONLY_100` (`desktop_ready == false`)**: Automatically fall back 100% to `invoke_subagent` across the Periodic Table fleet (`pro`/`inherit` + `flash`).
+2. **Divide and Conquer**: Deconstruct monolithic tasks into discrete, verifiable slices with clear boundary contracts.
+3. **Context Minimization**: Prevent token bloat by using pointer-based file references (`file:///...`) and scoped briefings.
+4. **Periodic Table Intelligent Model Routing (Neon SWE Fleet)**: Dynamically match task complexity to the optimal model tier:
    - ✦ **Tier 1 (Frontier Security & Escalation)**: `gemini-4-carbon` ($2.00 / $10.00 / $0.50; $4/$20 Dec 1, 2026) — Stage 6 security audits, auth/crypto/OWASP/CVE/migration invariants (`has_security_impact`, `critical`), and Circuit Breaker Stage 3 (`retry >= 3`).
    - ⚡✦ **Tier 1.5 / 2 (SWE Frontier & Orchestrator Brain)**: `gemini-4-neon` (Element #10, $3.00 / $15.00 / $0.15, 95% cache savings, ~105 tok/s, `xhigh` effort, Coding Agent Index #1 `58.64`, Intelligence `61`, `gemini-pro-orchestrator-neon`) — Primary SWE Brain replacing `gemini-4-argon` and taking over non-security `spec-engineer`, `task-planner`, `code-reviewer`, `debugger`, `performance-auditor`, multi-file `builder` (`>= 4` files), and Circuit Breaker Stage 2 (`retry == 2`) at ~32% lower cost/task than Carbon.
    - ✦ **Tier 2b (Legacy Deep Reasoning)**: `gemini-4-argon` ($1.25 / $5.00 / $0.3125 legacy; $2/$10 → $4/$20 Dec 1, 2026) — Superseded by `gemini-4-neon` across SWE routing; retained as legacy/fallback entry.
@@ -173,26 +180,31 @@ To maximize fleet velocity while preserving mathematical correctness and securit
 - **`speed_first` / `latency_sensitive`**: Bounded Builders, Testers, Docs, and medium-complexity Reviews (`xhigh`) on `gemini-4-hydrogen`; Orchestrator/Specs/Plans/Debugging on `gemini-4-neon` (`low`/`medium`); Security strictly on Carbon.
 - **`quality_first`**: Medium Builders & Reviews (`xhigh`) on `gemini-4-neon`; `spec-engineer`, high-complexity planning, and Security on `gemini-4-carbon`.
 - **`cost_saving` / `cost_first`**: Bounded Builders & Micro-tier on `gemini-3.8-flash` (`low`); heavy non-orchestrator roles on `gemini-4-hydrogen` (`xhigh`); Orchestrator on `gemini-4-neon` (`low`); Security strictly on Carbon.
-- **`hybrid_desktop` / `offload_heavy_to_desktop`**: Evaluates **Rule 1.5 (Desktop Offload Gate)** after Rule 1 (Security Guardrail) & Rule 2 (Circuit Breaker), using the **Conditional 60% `gemini-desktop-app` Peer Allocation Policy**:
-  1. **Pre-Flight Detection Gate (`desktop-doctor` / `GET /api/desktop/status`)**:
-     - **When Gemini Desktop App IS installed & ready (`ready == true` on macOS or Windows)**: `gemini-desktop-app` operates as a **first-class peer model** (`mode="task"`, `background=True`, `allow_edits=True/False`, `0` focus switches, `$0.00` AGY API token spend) prioritized for **~60% of total SWE workload** (`ORCHESTRATOR_DESKTOP_SHARE=0.60`):
-       - Sequential heavy stages (`spec-engineer`, `task-planner`, `code-reviewer`, `debugger`, `performance-auditor`, `doc-generator`) + **at most 1 heavy builder per parallel `parallel_group`** (so `Gemini.app`'s single-window FIFO lock NEVER blocks concurrent Fan-Out!).
-       - Remaining **~40%** runs concurrently on AGY API (`gemini-4-hydrogen` `198 tok/s` for sibling parallel builders/testers/scouts, `gemini-4-neon` spillover when the Desktop queue is busy, and `gemini-4-carbon` `high` strictly locked on Rule 1 Security Audits).
-     - **When Gemini Desktop App is NOT installed or NOT ready (`ready == false`, e.g., missing app or locked screen)** — or when `--no-desktop` / `--api-only` is passed: Automatically and seamlessly falls back **100% to the pure API fleet (`Gemini 4 Neon` + `Gemini 4 Hydrogen` + `Gemini 4 Carbon` + `Gemini 3.8 Flash`)**.
-  2. **DAG Peer Allocation (`allocate-dag` / `POST /api/router/allocate-dag`)**: Automatically partitions DAG tasks across `gemini-desktop-app` (~60% target share) and the AGY API fleet (~40% concurrent share) while preserving the single-window FIFO lock and Rule 1 Security Guardrail.
+- **`hybrid_desktop` / `offload_heavy_to_desktop`**: Evaluates **Rule 1.5 (Desktop Offload Gate)** after Rule 1 (Security Guardrail) & Rule 2 (Circuit Breaker), using the **Turnkey Dual-Channel 60% `gemini-desktop-app` Peer Allocation Policy**:
+  1. **Mandatory Turn-1 Pre-Flight Gate (`client.py preflight` / `desktop-doctor` / `GET /api/desktop/status`)**:
+     - **When Gemini Desktop App IS installed & ready (`EXECUTION_MODE: HYBRID_60_DESKTOP`, `desktop_ready == true`)**: `gemini-desktop-app` operates as a **first-class peer model** (`mode="task"`, `background=True`, `allow_edits=True/False`, `0` focus switches, `$0.00` AGY API token spend) prioritized for **~60% of total SWE workload** (`ORCHESTRATOR_DESKTOP_SHARE=0.60`):
+       - **Channel A Dispatch (`run_command`, `WaitMsBeforeAsync=500`)**: Because `invoke_subagent` only accepts AGY API models (`inherit`/`pro`/`flash`/`flash_lite`) and has NO desktop model option, Channel A tasks (`spec-engineer`, `task-planner`, `code-reviewer`, `debugger`, `performance-auditor`, `doc-generator` + **at most 1 heavy builder per `parallel_group`** with `--allow-edits`) MUST execute via `run_command(WaitMsBeforeAsync=500)` calling `python3 ~/.gemini/tools/orchestrator/client.py desktop-ask ...` (or via a thin `Model="flash_lite"` wrapper that solely runs `client.py desktop-ask`).
+       - **Channel B Dispatch (`invoke_subagent`, concurrent ~40% share)**: Sibling parallel builders (`<=3` files), `test-engineer`, `scout` on `Model="flash"` (`gemini-4-hydrogen` `198 tok/s`); Neon spillover and **Rule 1 Security Audits** (`security-auditor`, `has_security_impact`, `critical` complexity) on `Model="pro"` (`gemini-4-carbon` / `gemini-4-neon`).
+     - **When Gemini Desktop App is NOT installed or NOT ready (`EXECUTION_MODE: API_ONLY_100`, `desktop_ready == false`)** — or `--no-desktop` / `--api-only` is passed: Automatically and seamlessly falls back **100% to `invoke_subagent` across the pure API fleet (`Gemini 4 Neon` + `Gemini 4 Hydrogen` + `Gemini 4 Carbon` + `Gemini 3.8 Flash`)**.
+  2. **DAG Peer Allocation (`preflight --tasks-json ...` / `allocate-dag` / `POST /api/router/allocate-dag`)**: Automatically partitions DAG tasks across Channel A `gemini-desktop-app` (~60% target share) and Channel B AGY subagents (~40% concurrent share) while preserving the single-window FIFO lock and Rule 1 Security Guardrail.
 
 ### Smart Router API & CLI
-Query the smart router before assigning subagents:
+Run Turn-1 preflight first, and query the smart router before assigning workers:
 ```bash
+# 0. Mandatory Turn-1 Pre-Flight Gate (auto-starts :8484 if needed, probes desktop_ready, outputs Dual-Channel directives)
+python3 ~/.gemini/tools/orchestrator/client.py preflight --workspace .
+python3 ~/.gemini/tools/orchestrator/client.py preflight --tasks-json tasks.json --apply --workspace .
+python3 ~/.gemini/tools/orchestrator/client.py preflight --no-desktop --workspace .
+
 # Query CLI with budget mode and retry count
-python3 packages/orchestrator/client.py recommend \
+python3 ~/.gemini/tools/orchestrator/client.py recommend \
   --agent builder \
   --complexity medium \
   --budget-mode speed_first \
   --retry-count 1
 
 # Hybrid Desktop offload check for heavy read-only synthesis
-python3 packages/orchestrator/client.py recommend \
+python3 ~/.gemini/tools/orchestrator/client.py recommend \
   --agent spec-engineer \
   --complexity high \
   --budget-mode hybrid_desktop \
@@ -200,21 +212,31 @@ python3 packages/orchestrator/client.py recommend \
   --read-only
 
 # Pre-flight & Conditional 60% Peer DAG Allocation (ORCHESTRATOR_DESKTOP_SHARE=0.60)
-python3 packages/orchestrator/client.py desktop-doctor --format text
-python3 packages/orchestrator/client.py allocate-dag --target-desktop-share 0.60 --apply
+python3 ~/.gemini/tools/orchestrator/client.py desktop-doctor --format text
+ORCHESTRATOR_DESKTOP_SHARE=0.60 python3 ~/.gemini/tools/orchestrator/client.py allocate-dag --target-desktop-share 0.60 --apply
 
 # Force 100% pure API fleet fallback (disables Desktop allocation)
-python3 packages/orchestrator/client.py allocate-dag --no-desktop --apply
-python3 packages/orchestrator/client.py allocate-dag --api-only --apply
+python3 ~/.gemini/tools/orchestrator/client.py allocate-dag --no-desktop --apply
+python3 ~/.gemini/tools/orchestrator/client.py allocate-dag --api-only --apply
 
-# Dispatch to local Gemini Desktop App ($0.00 AGY API spend, 0 focus switches)
+# Channel A Dispatch to local Gemini Desktop App ($0.00 AGY API spend, 0 focus switches)
 # Task mode (default) mounts workspace via Folders (ConnectedFolderNSMenu) — reference relative paths concisely
-python3 packages/orchestrator/client.py desktop-ask \
+python3 ~/.gemini/tools/orchestrator/client.py desktop-ask \
   --task SPEC-01 \
+  --agent spec-engineer \
   --mode task \
   --workspace . \
   --prompt "Inspect docs/specs/draft_brief.md and packages/orchestrator/router.py. Return a read-only critique without editing any files." \
   --driver auto
+
+# Mutating heavy builder slice on Channel A (max 1 per parallel_group): include --allow-edits
+python3 ~/.gemini/tools/orchestrator/client.py desktop-ask \
+  --task BUILD-01 \
+  --agent builder \
+  --mode task \
+  --workspace . \
+  --allow-edits \
+  --prompt "Implement BUILD-01 on packages/orchestrator/router.py cleanly and report changed files."
 
 # Or standalone Chat mode without mounting a workspace folder
 python3 packages/orchestrator/client.py desktop-dispatch \

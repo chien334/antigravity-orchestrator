@@ -107,9 +107,13 @@ for wf in "$SCRIPT_DIR/packages/workflows/"*.md; do
 done
 echo -e "    -> Installed Workflows: $GLOBAL_CONFIG_DIR/workflows/ (*.md)"
 
-# Copy Commands TOML
+# Copy Commands TOML (Turn-1 preflight + Dual-Channel 60% Desktop / 40% AGY prompt)
 cp "$SCRIPT_DIR/packages/commands/orchestrator.toml" "$GLOBAL_COMMANDS_DIR/orchestrator.toml"
 echo -e "    -> Installed Command: $GLOBAL_COMMANDS_DIR/orchestrator.toml"
+python3 -c "import tomllib, sys; data = tomllib.load(open(sys.argv[1], 'rb')); assert 'preflight' in data['prompt'] and 'desktop-ask' in data['prompt']" "$GLOBAL_COMMANDS_DIR/orchestrator.toml" 2>/dev/null || {
+    echo -e "${RED}[X] Failed to validate Dual-Channel preflight/desktop-ask template in $GLOBAL_COMMANDS_DIR/orchestrator.toml.${NC}"
+    exit 1
+}
 
 # Copy Global Orchestrator Python Modules & Assets
 echo -e "    -> Installing Global Orchestrator Modules into: $GLOBAL_TOOLS_DIR..."
@@ -190,15 +194,16 @@ echo -e "${GREEN}${BOLD}  INSTALLATION COMPLETED SUCCESSFULLY!                  
 echo -e "${GREEN}${BOLD}================================================================${NC}"
 echo ""
 echo -e "Quick Start Guide:"
-echo -e "  1. Start Dashboard Server:"
-echo -e "     ${BOLD}python3 packages/orchestrator/server.py --port 8484${NC}"
+echo -e "  1. Start Dashboard Server (or let 'client.py preflight' auto-start it):"
+echo -e "     ${BOLD}python3 ~/.gemini/tools/orchestrator/server.py --port 8484${NC}"
 echo -e "     Dashboard UI:  ${BLUE}http://localhost:8484${NC}"
 echo -e "     SSE Stream:    ${BLUE}http://localhost:8484/events${NC}"
 echo ""
-echo -e "  2. Launch Antigravity with Orchestrator:"
+echo -e "  2. Launch Antigravity with Dual-Channel Orchestrator (~60% Desktop / ~40% AGY):"
 echo -e "     Run ${BOLD}agy${NC} in your terminal, then type:"
 echo -e "     ${BOLD}/orchestrator${NC} or ${BOLD}/workflow-pipeline${NC}"
 echo ""
-echo -e "  3. Telemetry CLI:"
-echo -e "     ${BOLD}python3 packages/orchestrator/client.py state${NC}"
+echo -e "  3. Pre-Flight & Telemetry CLI:"
+echo -e "     ${BOLD}python3 ~/.gemini/tools/orchestrator/client.py preflight --workspace .${NC}"
+echo -e "     ${BOLD}python3 ~/.gemini/tools/orchestrator/client.py state${NC}"
 echo ""

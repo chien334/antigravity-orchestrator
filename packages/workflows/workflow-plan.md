@@ -1,17 +1,28 @@
 ---
 name: workflow-plan
-description: Stage 2 Planning Workflow - Ingest docs/specs/{feature_id}.spec.md, design architecture, schemas, and produce docs/plans/{feature_id}.plan.md with Gemini 4 Neon & Periodic Table Model DAG
+description: Stage 2 Planning Workflow - Ingest docs/specs/{feature_id}.spec.md, design architecture & Dual-Channel 60/40 DAG via Channel A Gemini.app Desktop (when HYBRID_60_DESKTOP) or Channel B Gemini 4 Neon fallback, producing docs/plans/{feature_id}.plan.md
 ---
 
 # Stage 2: Architecture & Task DAG Planning Workflow
 
 ## 1. Objective & Persona
 - **Persona**: `task-planner`
-- **Model Engine**: ⚡✦ **Gemini 4 Neon** (`model: gemini-4-neon`, `reasoning_effort: medium | high`)  
-  *Supersedes `gemini-4-argon` with Coding Agent Index #1 (`58.64`), Intelligence `61`, `~105 tok/s` (2x Argon speed), and 95% cache savings (`$0.15 / 1M` cache).*  
-  *(Escalate to ✦ **Gemini 4 Carbon** if modeling critical cryptographic/security architecture or executing high-stakes `quality_first` planning).*  
-  *(Optional `hybrid_desktop` Offload: Heavy read-only architecture synthesis or design trade-off second-opinions may be offloaded to `gemini-desktop-app` via `client.py desktop-ask` (`$0.00` AGY API spend) after `SecretRedactor` scrubbing, returning the `docs/reports/desktop_worker/{job_id}.md` pointer to `task-planner`.)*
-- **Primary Skill**: `planning-and-task-breakdown` & `api-and-interface-design`
+- **Dual-Channel Model & Dispatch Routing** (governed by Turn-1 `python3 ~/.gemini/tools/orchestrator/client.py preflight --workspace .`):
+  - **When `EXECUTION_MODE: HYBRID_60_DESKTOP` (`desktop_ready == true`, Default)**:
+    🖥️ **Channel A — `gemini-desktop-app`** (`$0.00` AGY API spend, `0` focus switches, `mode="task"`, `allow_edits=False` — omit `--allow-edits`).
+    **HARD INVARIANT**: Do **NOT** dispatch `task-planner` to an AGY `pro`/`inherit` `invoke_subagent` when `desktop_ready == true`! Dispatch via `run_command` (`WaitMsBeforeAsync: 500`):
+    ```bash
+    python3 ~/.gemini/tools/orchestrator/client.py desktop-ask \
+      --task "PLAN-{FEATURE}" \
+      --agent task-planner \
+      --workspace . \
+      --output "docs/reports/desktop_worker/PLAN-{FEATURE}.md" \
+      --prompt "Read docs/specs/{feature_id}.spec.md. Design system topology, schemas, interface signatures, and a Dual-Channel 60/40 Task DAG with disjoint file scopes (max 1 heavy builder per parallel_group on gemini-desktop-app) for docs/plans/{feature_id}.plan.md. Read-only synthesis only."
+    ```
+  - **When `EXECUTION_MODE: API_ONLY_100` (`desktop_ready == false`)**:
+    ⚡✦ **Channel B — Gemini 4 Neon** (`invoke_subagent(Model="pro")` or `"inherit"`, `--model gemini-4-neon`, `reasoning_effort: medium | high`).  
+    *(Escalate to ✦ **Gemini 4 Carbon** via `invoke_subagent(Model="pro")` if modeling critical cryptographic/security architecture or executing `quality_first` critical planning.)*
+- **Primary Skill**: `planning-and-task-breakdown` & `api-and-interface-design` *(+ `gemini-desktop-worker` when Channel A Desktop is active)*
 
 ---
 
@@ -19,7 +30,7 @@ description: Stage 2 Planning Workflow - Ingest docs/specs/{feature_id}.spec.md,
 - **Prerequisite**: Stage 1 must be completed.
 - **Input Artifact**: `docs/specs/{feature_id}.spec.md`
 - **Context Provided**:
-  * Pointers to existing code, database schemas, and configuration (gathered via fast `gemini-4-hydrogen` scouts under the Scout-Then-Architect topology).
+  * Pointers to existing code, database schemas, and configuration.
   * Acceptance criteria from the spec.
 
 ---
@@ -27,41 +38,40 @@ description: Stage 2 Planning Workflow - Ingest docs/specs/{feature_id}.spec.md,
 ## 3. Execution Steps
 1. **Emit Start Telemetry**:
    ```bash
-   python3 packages/orchestrator/client.py update \
+   # Use --model gemini-desktop-app in HYBRID_60_DESKTOP mode, or --model gemini-4-neon in API_ONLY_100 mode
+   python3 ~/.gemini/tools/orchestrator/client.py update \
      --task "PLAN-{FEATURE}" \
      --agent "task-planner" \
-     --model "gemini-4-neon" \
-     --effort "medium" \
+     --model "gemini-desktop-app" \
      --complexity "high" \
      --status "running" \
      --progress 20 \
      --scope "docs/specs/{feature_id}.spec.md" \
-     --notes "Designing system contracts and Periodic Table SWE task DAG with Gemini 4 Neon"
+     --notes "Designing system contracts and Dual-Channel 60/40 Task DAG"
    ```
 2. **Architecture & Contract Modeling**: Define database schema, API signatures, and data contracts between modules.
-3. **DAG Breakdown & Periodic Table Model Allocation**:
+3. **DAG Breakdown & Dual-Channel 60/40 Model Allocation**:
    - Split tasks into minimal blast-radius units.
    - Assign `parallel_group` to tasks that operate on disjoint files (Decoupled File Scope Invariant).
    - Tag prerequisite dependencies using `depends_on`.
-   - Allocate models according to the Periodic Table SWE Fleet taxonomy:
-     * **Tier 1 (`gemini-4-carbon`)**: Critical security, auth/authz, OWASP/CVE/migrations, and Circuit Breaker Stage 3 (`retry_count >= 3`, `effort: high`).
-     * **Tier 1.5 / 2 (`gemini-4-neon`)**: Orchestration (`gemini-pro-orchestrator-neon`), non-security specs, architecture design, schema contracts, 5-axis reviews, debugging, multi-file builders (`>= 4` files), and CB Stage 2 (`retry_count == 2`, `effort: medium`/`high`/`xhigh`). *(Replaces `gemini-4-argon`, which remains legacy/fallback only).*
-     * **Tier 3 (`gemini-4-hydrogen`)**: Bounded parallel code implementation (`<= 3` files), automated testing, and codebase scouting at 198 tok/sec (`effort: medium`/`high`/`xhigh`).
-     * **Tier 4 (`gemini-3.8-flash`, `low`)**: Cost-first bulk scaffolding, doc formatting, text simplification, and active telemetry/linting (replaces absent `gemini-3.8-flash-lite` default).
-     * **External Offload (`gemini-desktop-app`, `hybrid_desktop`)**: Heavy non-mutating synthesis/critique only (`read_only=True`, `file_count=0`, `has_security_impact=False`), drained sequentially via `desktop_jobs` while Stage 3 `gemini-4-hydrogen` builders execute file edits in parallel. Never assign file-writing or test-running tasks to `gemini-desktop-app`.
+   - Allocate models with `python3 ~/.gemini/tools/orchestrator/client.py allocate-dag --target-desktop-share 0.60 --apply`:
+     * 🖥️ **Channel A (`gemini-desktop-app`, ~60% share when `desktop_ready == true`)**: Sequential heavy stages (`spec-engineer`, `task-planner`, `code-reviewer`, `doc-generator`, non-critical `debugger`, `performance-auditor`) with `allow_edits=False`, PLUS **at most 1 primary heavy `builder` per `parallel_group`** with `allow_edits=True` (`--allow-edits`) on strictly disjoint files (ensuring `Gemini.app`'s single-window FIFO lock never blocks concurrent siblings).
+     * ✦ **Tier 1 (`gemini-4-carbon`, `Model="pro"`)**: Rule 1 security audits (`security-auditor`), auth/authz, OWASP/CVE/migrations, and Circuit Breaker Stage 3 (`retry_count >= 3`, `effort: high`). Never offloaded to Desktop.
+     * ⚡✦ **Tier 1.5 / 2 (`gemini-4-neon`, `Model="pro"`/`"inherit"`)**: `API_ONLY_100` fallback / Desktop spillover for specs, plans, 5-axis reviews, debugging, multi-file builders (`>= 4` files), and CB Stage 2 (`retry_count == 2`).
+     * ⚡ **Tier 3 (`gemini-4-hydrogen`, `Model="flash"`)**: Sibling bounded parallel builders (`<= 3` files), `test-engineer`, and `scout` at 198 tok/sec (`effort: medium`/`high`/`xhigh`).
+     * ⚡ **Tier 4 (`gemini-3.8-flash`, `Model="flash"`)**: Cost-first bulk scaffolding, simplification, and micro-telemetry (`API_ONLY_100` fallback).
    - Define 3-Stage Fast-Retry Circuit Breaker thresholds (`retry == 1` Hydrogen `xhigh` ➔ `retry == 2` Neon `high`/`xhigh` ➔ `retry >= 3` Carbon `high`).
 4. **Artifact Generation**: Produce `docs/plans/{feature_id}.plan.md`.
 5. **Emit Completion Telemetry**:
    ```bash
-   python3 packages/orchestrator/client.py update \
+   python3 ~/.gemini/tools/orchestrator/client.py update \
      --task "PLAN-{FEATURE}" \
      --agent "task-planner" \
-     --model "gemini-4-neon" \
-     --effort "medium" \
+     --model "gemini-desktop-app" \
      --status "completed" \
      --progress 100 \
      --scope "docs/plans/{feature_id}.plan.md" \
-     --notes "Plan DAG finalized with parallel worker slots, Neon/Hydrogen assignments, and 3-Stage Circuit Breaker"
+     --notes "Plan DAG finalized with Dual-Channel 60/40 allocation, disjoint worker slices, and 3-Stage Circuit Breaker"
    ```
 
 ---
@@ -77,18 +87,18 @@ Save to: `docs/plans/{feature_id}.plan.md`
 - **Database Schema Changes**: ...
 - **Interface Signatures**: ...
 
-## 2. Disjoint File Scope Allocation
-| Task ID | Persona | Assigned Model | Parallel Group | Depends On | Disjoint Target Files |
-|---|---|---|---|---|---|
-| `BUILD-01` | `builder` | `gemini-4-hydrogen` | `BUILD-PARALLEL` | `PLAN-{FEATURE}` | `src/frontend/ViewA.tsx` (`<=3` files) |
-| `BUILD-02` | `builder` | `gemini-4-hydrogen` | `BUILD-PARALLEL` | `PLAN-{FEATURE}` | `src/backend/ServiceB.py` (`<=3` files) |
-| `BUILD-03` | `builder` | `gemini-4-neon` | `BUILD-PARALLEL` | `PLAN-{FEATURE}` | `src/core/{a,b,c,d}.py` (`>=4` files) |
-| `TEST-01`  | `test-engineer` | `gemini-4-hydrogen` | - | `BUILD-01, BUILD-02, BUILD-03` | `tests/test_feature.py` |
+## 2. Disjoint File Scope Allocation (Dual-Channel 60/40)
+| Task ID | Persona | Channel & Model (`HYBRID_60_DESKTOP`) | `API_ONLY_100` Fallback | Parallel Group | Depends On | Disjoint Target Files |
+|---|---|---|---|---|---|---|
+| `BUILD-01` | `builder` | 🖥️ Ch-A: `gemini-desktop-app` (`--allow-edits`) | `gemini-4-neon` (`pro`) | `BUILD-PARALLEL` | `PLAN-{FEATURE}` | `src/core/{a,b,c,d}.py` (`>=4` files) |
+| `BUILD-02` | `builder` | ⚡ Ch-B: `gemini-4-hydrogen` (`flash`) | `gemini-4-hydrogen` (`flash`) | `BUILD-PARALLEL` | `PLAN-{FEATURE}` | `src/frontend/ViewA.tsx` (`<=3` files) |
+| `BUILD-03` | `builder` | ⚡ Ch-B: `gemini-4-hydrogen` (`flash`) | `gemini-4-hydrogen` (`flash`) | `BUILD-PARALLEL` | `PLAN-{FEATURE}` | `src/backend/ServiceB.py` (`<=3` files) |
+| `TEST-01`  | `test-engineer` | ⚡ Ch-B: `gemini-4-hydrogen` (`flash`) | `gemini-4-hydrogen` (`flash`) | - | `BUILD-01, BUILD-02, BUILD-03` | `tests/test_feature.py` |
 
 ## 3. 3-Stage Circuit Breaker Policy
-- **Stage 1 (`retry_count == 1`)**: `gemini-4-hydrogen` (`xhigh` effort)
-- **Stage 2 (`retry_count == 2`)**: `gemini-4-neon` (`high` / `xhigh` effort)
-- **Stage 3 (`retry_count >= 3`)**: `gemini-4-carbon` (`high` effort)
+- **Stage 1 (`retry_count == 1`)**: `gemini-4-hydrogen` (`flash`, `xhigh` effort)
+- **Stage 2 (`retry_count == 2`)**: `gemini-4-neon` (`pro`, `high` / `xhigh` effort)
+- **Stage 3 (`retry_count >= 3`)**: `gemini-4-carbon` (`pro`, `high` effort)
 ```
 
-> **Handoff**: The approved plan unblocks Stage 3 parallel builders evaluated via `GET /api/dag/ready`.
+> **Handoff**: The approved plan unblocks Stage 3 concurrent Dual-Channel builders evaluated via `python3 ~/.gemini/tools/orchestrator/client.py next-ready`.

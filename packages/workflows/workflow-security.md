@@ -7,9 +7,9 @@ description: Stage 6 Security Audit Workflow - Deep OWASP, authentication, data 
 
 ## 1. Objective & Persona
 - **Persona**: `security-auditor`
-- **Model Engine**: ✦ **Gemini 4 Carbon** (`model: gemini-4-carbon`, `reasoning_effort: high`)  
+- **Channel & Model Engine**: ✦ **Channel B (Rule 1 Locked) — Gemini 4 Carbon** (`invoke_subagent(Model="pro")`, `--model gemini-4-carbon`, `reasoning_effort: high`)  
   *Google Frontier Reasoning model strictly locked for deep vulnerability fuzzing, formal invariants, and cryptographic validation.*  
-  *(**Strict Security Guardrail Invariant — Rule 1**: Security audits, OWASP vulnerability scans, auth/crypto/CVE/migration logic NEVER downgrade to lower tiers under any budget mode, including `speed_first` and `cost_saving`. **Fallback & Optional Pre-Scan**: `gemini-4-neon` (`90.5%` SEC-bench Pro, `70.7%` CWE-bench v2) serves as the immediate primary fallback—replacing Argon—and optional Stage-1 pre-merge CWE pre-scanner before final `gemini-4-carbon` sign-off.)*
+  *(**Strict Security Guardrail Invariant — Rule 1**: Security audits, OWASP vulnerability scans, auth/crypto/CVE/migration logic NEVER offload to `gemini-desktop-app` and NEVER downgrade to lower tiers under any budget mode, including `speed_first` and `cost_saving`. **Fallback & Optional Pre-Scan**: `gemini-4-neon` (`90.5%` SEC-bench Pro, `70.7%` CWE-bench v2) serves as the immediate primary fallback and optional Stage-1 pre-merge CWE pre-scanner before final `gemini-4-carbon` sign-off.)*
 - **Primary Skill**: `security-and-hardening`
 
 ---
@@ -26,7 +26,7 @@ description: Stage 6 Security Audit Workflow - Deep OWASP, authentication, data 
 ## 3. Execution Steps
 1. **Emit Start Telemetry**:
    ```bash
-   python3 packages/orchestrator/client.py update \
+   python3 ~/.gemini/tools/orchestrator/client.py update \
      --task "SEC-{FEATURE}" \
      --agent "security-auditor" \
      --model "gemini-4-carbon" \
@@ -47,7 +47,7 @@ description: Stage 6 Security Audit Workflow - Deep OWASP, authentication, data 
 3. **Artifact Generation**: Produce `docs/security/security_audit.md`.
 4. **Emit Completion Telemetry**:
    ```bash
-   python3 packages/orchestrator/client.py update \
+   python3 ~/.gemini/tools/orchestrator/client.py update \
      --task "SEC-{FEATURE}" \
      --agent "security-auditor" \
      --model "gemini-4-carbon" \

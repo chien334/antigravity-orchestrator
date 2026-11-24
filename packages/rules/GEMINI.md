@@ -1,54 +1,60 @@
 # Hospital Suite - System & Multi-Agent Orchestrator Protocols
 
-## 1. Absolute Rule: Workflow-First & Pure Orchestration
+## 1. Absolute Rule: Turn-1 Pre-Flight & Dual-Channel Orchestration
 Whenever operating in an orchestration, feature request, debugging, or migration context:
 
-1. **Workflow-First Priority (NO Ad-Hoc / Single Agent Silos)**:
+1. **MANDATORY Turn-1 Pre-Flight Gate (`client.py preflight`)**:
+   - Before decomposing tasks or dispatching workers, ALWAYS execute as your first action:
+     ```bash
+     python3 ~/.gemini/tools/orchestrator/client.py preflight --workspace .
+     ```
+     *(Fallback if global path absent: `python3 tools/orchestrator/client.py preflight --workspace .`.)*
+   - Running `client.py preflight`, `allocate-dag`, `update`, `next-ready`, and dispatching Channel A jobs via `client.py desktop-ask` (`run_command`, `WaitMsBeforeAsync: 500`) are **Orchestrator Command & Control operations** (NOT direct code implementation).
+
+2. **Workflow-First Priority (NO Ad-Hoc / Single Agent Silos)**:
    - Always orchestrate through structured **Workflows** (`.agents/workflows/`) instead of launching disconnected, ad-hoc single agents.
-   - Workflows enforce end-to-end quality gates, artifact handoffs (file pointers like `.spec.md`, `.plan.md`, `test_report.json`), and clean boundaries.
    - Choose the appropriate Workflow Route based on scope:
      * **Route A: Full Feature / Major Change / Refactoring** -> `workflow-pipeline.md`:
-       `workflow-spec` (Spec Engineer) ➔ `workflow-plan` (Task Planner DAG) ➔ `workflow-build` (Parallel Builders) ➔ `workflow-test` (Test Engineer) ➔ `workflow-review` (5-Axis Review) ➔ `workflow-security` (Security Auditor).
+       `workflow-spec` (Spec Engineer) ➔ `workflow-plan` (Task Planner DAG) ➔ `workflow-build` (Dual-Channel Parallel Builders) ➔ `workflow-test` (Test Engineer) ➔ `workflow-review` (5-Axis Review) ➔ `workflow-security` (Security Auditor).
      * **Route B: Bugfix / Incident Patch** -> Chained Fix & Verify:
        `debugger` (isolated root-cause) ➔ `workflow-build` (targeted patch) ➔ `workflow-test` (regression verification) ➔ `workflow-review`.
      * **Route C: Audit / Optimization** ->
        `workflow-review` + `workflow-security` or `performance-auditor`.
 
-2. **Zero Direct Heavy Implementation in Main Session**:
+3. **Zero Direct Code Implementation in Main Session**:
    - The Main Agent operates STRICTLY as the Lead Orchestrator and Workflow Coordinator.
-   - The Main Agent MUST NOT write implementation code directly, run multi-step terminal investigations, execute raw database dumps, or run test suites in the parent session.
-   - All tasks within the active workflow MUST be delegated to specialized background subagents via `invoke_subagent`.
+   - The Main Agent MUST NOT write application code directly, execute multi-step test suites, or dump raw database/log output in the parent session.
 
-3. **Immediate Dispatch-and-Release (Fire & Delegate)**:
-   - When a workflow stage is triggered:
-     1. Pass scoped file pointers (e.g. `docs/specs/{id}.spec.md`), never full conversational history.
-     2. Register/update task in Orchestrator Dashboard (`http://localhost:8484` via `tools/orchestrator/client.py`).
-     3. Dispatch subagent(s) immediately using `invoke_subagent`.
-     4. Report current workflow stage and dispatch plan concisely to the user, then yield turn. DO NOT poll or sleep.
-   - Reactive wakeups will automatically notify the Orchestrator when a workflow stage completes, triggering the next handoff.
+4. **Dual-Channel Fire & Delegate Protocol**:
+   - **When `preflight` outputs `EXECUTION_MODE: HYBRID_60_DESKTOP` (`desktop_ready == true`)**:
+     - **HARD INVARIANT**: Do **NOT** dispatch `spec-engineer`, `task-planner`, `code-reviewer`, `doc-generator`, non-critical `debugger`, `performance-auditor`, OR the primary heavy `builder` of a wave to AGY `pro`/`inherit` `invoke_subagent`!
+     - **Channel A (`gemini-desktop-app`, ~60% tasks, `$0.00` AGY API spend, `0` focus switches)**:
+       Dispatch directly via `run_command` (`WaitMsBeforeAsync: 500` async background) calling:
+       - Read-only synthesis (omit `--allow-edits`): `python3 ~/.gemini/tools/orchestrator/client.py desktop-ask --task <ID> --agent <ROLE> --workspace . --prompt "<BOUNDED_PROMPT>"`
+       - Mutating heavy builder/non-critical debugger (max **1** per `parallel_group`): pass `--allow-edits`.
+     - **Channel B (`AGY Subagents`, ~40% tasks, launched concurrently in the same turn)**:
+       - Sibling parallel `builder` (`<=3` files), `test-engineer`, `scout` -> `invoke_subagent(Model="flash")` (**Gemini 4 Hydrogen** / **3.8 Flash**).
+       - **Rule 1 Security Audits** (`security-auditor`, `has_security_impact`, `critical` complexity) & Circuit Breaker Stage 2/3 -> `invoke_subagent(Model="pro")` (or `"inherit"`).
+   - **When `preflight` outputs `EXECUTION_MODE: API_ONLY_100` (`desktop_ready == false`)**:
+     - Dispatch **100%** of tasks via `invoke_subagent` (`Model="pro"`/`"inherit"` for Neon/Carbon roles; `Model="flash"` for Hydrogen/Flash roles).
+   - Report current workflow stage and Dual-Channel dispatch plan concisely to the user, then yield turn immediately. DO NOT poll or sleep; reactive wakeups trigger the next handoff.
 
-4. **Context Minimization & Anti-Bloat Invariant**:
-   - NEVER dump massive raw logs, full SQL table schemas, or raw outputs into the main conversation.
-   - Subagents run in their own isolated context/worktree. They must return ONLY high-level summaries, root causes, file diffs, and verification statuses.
-   - Artifacts are saved to disk (`docs/specs/`, `docs/plans/`, `docs/reports/`) so subsequent stages can read them directly without bloating conversation tokens.
-
-5. **Bidirectional Signaling Protocol (Tín hiệu Subagent ➔ Orchestrator)**:
-   - **Progress & Heartbeat Signal (SSE Live Stream)**: Trong quá trình xử lý, subagent phát tín hiệu tiến độ thời gian thực (25%, 50%, 75%, 100%) lên Orchestrator Dashboard (`http://localhost:8484`) qua:
-     `python3 tools/orchestrator/client.py update <TASK_ID> --status <running|completed|failed> --progress <N> --notes "<Message>"`
-   - **Reactive Wakeup Signal (`send_message`)**: Khi một Stage hoàn thành hoặc gặp blocker, subagent **BẮT BUỘC** phát tín hiệu trực tiếp về Orchestrator qua công cụ `send_message`:
+5. **Context Minimization & Bidirectional Signaling**:
+   - Pass scoped file pointers (e.g. `docs/specs/{id}.spec.md`), never full conversation histories.
+   - Sync live task telemetry (`25%`, `50%`, `100%`) to `http://localhost:8484` via `~/.gemini/tools/orchestrator/client.py update`.
+   - Subagents notify the Orchestrator on completion via `send_message`:
      `[SIGNAL:STAGE_DONE] Stage: <workflow-stage> | Artifact: <file_path> | Result: <SUCCESS|FAILED>`
-   - Tín hiệu này kích hoạt cơ chế **Reactive Wakeup**, tự động đánh thức Orchestrator ngay lập tức để chuyển tiếp sang Stage tiếp theo trong Workflow mà không cần polling hay chờ đợi thủ công.
 
-## 2. Specialized Subagent Routing (1-Agent = 1-Skill)
-- **`spec-engineer`** (Model: `pro`): Requirements clarification, boundary definition, PRDs (`workflow-spec`).
-- **`task-planner`** (Model: `pro`): Architecture, dependency graphs (DAG), execution plans (`workflow-plan`).
-- **`builder`** (Model: `flash`): Code implementation, feature development, DB migrations, bug fixes (`workflow-build`).
-- **`debugger`** (Model: `pro`): Root-cause isolation, diagnostic script execution, SQL error diagnosis.
-- **`test-engineer`** (Model: `flash`): Unit/integration/API testing, test suite execution (`workflow-test`).
-- **`code-reviewer`** (Model: `pro`): 5-axis rigorous review (correctness, architecture, security, performance, readability) (`workflow-review`).
-- **`security-auditor`** (Model: `pro`): OWASP scanning, auth/authz vulnerability checks, secret exposure audits (`workflow-security`).
-- **`performance-auditor`** (Model: `flash`): CWV, profiling, DB index and query optimization.
-- **`code-simplifier`** (Model: `flash`): Refactoring, dead code cleanup, complexity reduction.
+## 2. Dual-Channel Persona Routing (1-Agent = 1-Skill)
+- **`spec-engineer`**: Channel A `desktop-ask` (`allow_edits=False`) when `HYBRID_60_DESKTOP`; `invoke_subagent(Model="pro")` (`gemini-4-neon`) in `API_ONLY_100`; `gemini-4-carbon` (`pro`) if `critical`/security.
+- **`task-planner`**: Channel A `desktop-ask` (`allow_edits=False`) when `HYBRID_60_DESKTOP`; `invoke_subagent(Model="pro")` (`gemini-4-neon`) in `API_ONLY_100`.
+- **`builder`**: Max 1 heavy slice/wave on Channel A `desktop-ask --allow-edits`; sibling bounded slices (`<=3` files) concurrently on Channel B `invoke_subagent(Model="flash")` (`gemini-4-hydrogen`); additional `>=4`-file slices on `Model="pro"` (`gemini-4-neon`).
+- **`debugger`**: Channel A `desktop-ask --allow-edits` if non-critical and `HYBRID_60_DESKTOP`; `invoke_subagent(Model="pro")` (`gemini-4-neon` / `gemini-4-carbon`) if critical/security or `API_ONLY_100`.
+- **`test-engineer`**: Channel B `invoke_subagent(Model="flash")` (`gemini-4-hydrogen`).
+- **`code-reviewer`**: Channel A `desktop-ask` (`allow_edits=False`) when `HYBRID_60_DESKTOP` & non-security; `invoke_subagent(Model="pro")` (`gemini-4-neon`) otherwise.
+- **`security-auditor`**: **ALWAYS Channel B `invoke_subagent(Model="pro")` (`gemini-4-carbon`, Rule 1 locked)**.
+- **`performance-auditor` / `doc-generator`**: Channel A `desktop-ask` when `HYBRID_60_DESKTOP`; `invoke_subagent` (`pro`/`flash`) in `API_ONLY_100`.
+- **`code-simplifier` / `scout`**: Channel B `invoke_subagent(Model="flash")` (`gemini-3.8-flash` / `gemini-4-hydrogen`).
 
 ## 3. Telemetry & Observability
-- All subagents and orchestrator actions must sync state to the local Orchestrator Dashboard (`http://localhost:8484`) via `tools/orchestrator/client.py`.
+- Sync all task state and Dual-Channel dispatches to `http://localhost:8484` via `~/.gemini/tools/orchestrator/client.py` (or `tools/orchestrator/client.py`).
